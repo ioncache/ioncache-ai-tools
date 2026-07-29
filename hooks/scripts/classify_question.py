@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: flags a session as having a pending question.
 
-Reads the prompt piped in by Claude Code, checks whether it contains a
+Reads the prompt piped in on UserPromptSubmit, checks whether it contains a
 question, and writes a per-session marker file that the paired PreToolUse
 hook (block_pending_question.py) uses to deny tool calls until the question
 has been answered in text.
@@ -51,7 +51,7 @@ def main():
     session_id = data.get("session_id", "unknown")
     prompt = data.get("prompt", "") or ""
 
-    flag_path = pathlib.Path(f"/tmp/.claude-pending-question-{session_id}")
+    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
 
     if has_question(prompt):
         flag_path.write_text("1")

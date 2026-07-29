@@ -54,7 +54,7 @@ def main():
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
-    flag_path = pathlib.Path(f"/tmp/.claude-pending-question-{session_id}")
+    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
     if not flag_path.exists():
         return
 

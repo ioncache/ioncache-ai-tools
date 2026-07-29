@@ -1,0 +1,21 @@
+{
+  "name": "ioncache-ai-tools",
+  "interface": {
+    "displayName": "ioncache-ai-tools"
+  },
+  "plugins": [
+    {
+      "name": "ioncache-ai-tools",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/ioncache/ioncache-ai-tools.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "productivity"
+    }
+  ]
+}

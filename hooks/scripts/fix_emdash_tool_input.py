@@ -16,13 +16,6 @@ and fails schema validation, crashing the tool call outright instead of
 fixing it. Always start from a copy of the original tool_input and set the
 fixed field(s) on top of it.
 
-i18n content (anything under an "i18n" path segment) is exempt from the
-rewrite: locale strings can legitimately use an em-dash as real typography,
-and silently rewriting translated copy risks changing meaning without a
-human reviewing it. The ban stays absolute everywhere else, including
-comments and JSDoc in source files, where an em-dash is always just a stray
-style habit, never meaningful content.
-
 Uses \\s* (zero or more), not \\s+, around the dash: an em-dash with no
 surrounding whitespace, or one at the very start/end of a string, would not
 match \\s+ and would pass through unfixed.
@@ -41,15 +34,9 @@ EM_DASH = chr(0x2014)
 EM_DASH_PATTERN = re.compile(r"\s*" + EM_DASH + r"\s*")
 REPLACEMENT = ", "
 
-I18N_PATH_PATTERN = re.compile(r"(^|/)i18n(/|$)")
-
 
 def fix(text):
     return EM_DASH_PATTERN.sub(REPLACEMENT, text)
-
-
-def is_i18n_path(file_path):
-    return bool(file_path) and bool(I18N_PATH_PATTERN.search(file_path))
 
 
 def main():
@@ -69,31 +56,28 @@ def main():
             changed = True
 
     elif tool_name == "Write":
-        if not is_i18n_path(tool_input.get("file_path", "")):
-            content = tool_input.get("content", "")
-            if EM_DASH in content:
-                tool_input["content"] = fix(content)
-                changed = True
+        content = tool_input.get("content", "")
+        if EM_DASH in content:
+            tool_input["content"] = fix(content)
+            changed = True
 
     elif tool_name == "Edit":
-        if not is_i18n_path(tool_input.get("file_path", "")):
-            new_string = tool_input.get("new_string", "")
-            if EM_DASH in new_string:
-                tool_input["new_string"] = fix(new_string)
-                changed = True
+        new_string = tool_input.get("new_string", "")
+        if EM_DASH in new_string:
+            tool_input["new_string"] = fix(new_string)
+            changed = True
 
     elif tool_name == "MultiEdit":
-        if not is_i18n_path(tool_input.get("file_path", "")):
-            fixed_edits = []
-            for edit in tool_input.get("edits", []):
-                new_string = edit.get("new_string", "")
-                if EM_DASH in new_string:
-                    changed = True
-                    fixed_edits.append({**edit, "new_string": fix(new_string)})
-                else:
-                    fixed_edits.append(edit)
-            if changed:
-                tool_input["edits"] = fixed_edits
+        fixed_edits = []
+        for edit in tool_input.get("edits", []):
+            new_string = edit.get("new_string", "")
+            if EM_DASH in new_string:
+                changed = True
+                fixed_edits.append({**edit, "new_string": fix(new_string)})
+            else:
+                fixed_edits.append(edit)
+        if changed:
+            tool_input["edits"] = fixed_edits
 
     if not changed:
         sys.exit(0)
