@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "ioncache-ai-tools",
-  "description": "Mark Jubenville's personal Claude Code hooks, installable in any project.",
+  "description": "Mark Jubenville's personal AI tools.",
   "owner": {
     "name": "Mark Jubenville"
   },
   "plugins": [
     {
       "name": "ioncache-ai-tools",
-      "description": "Question-answering discipline and em-dash enforcement hooks.",
+      "description": "Personal AI tools.",
       "source": "./",
       "category": "productivity"
     }
