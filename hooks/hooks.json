@@ -7,12 +7,34 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" user-prompt-submit",
+            "timeout": 5,
+            "statusMessage": "Classifying prompt for docs-first guard"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/classify_question.py\""
           }
         ]
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" pre-tool-use",
+            "timeout": 5,
+            "statusMessage": "Enforcing docs-first guard"
+          }
+        ]
+      },
       {
         "matcher": "*",
         "hooks": [
