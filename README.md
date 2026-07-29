@@ -6,52 +6,33 @@ project's config.
 
 ## Hooks
 
-- **classify_question.py** (UserPromptSubmit) - flags a session when the
-  latest prompt contains a question. Blocks on any question, even one with
-  an instruction attached, since a reliable classifier for "question with a
-  real instruction attached" turned out to be more trouble than it's worth.
-- **block_pending_question.py** (PreToolUse) - while a question is pending,
-  denies state-changing tool calls (Edit/Write/git push/etc). Read-only
-  lookups stay allowed, since answering a question well often means looking
-  something up. Clears on the next prompt.
-- **fix_emdash_tool_input.py** (PreToolUse) - silently rewrites em-dashes in
-  Bash/Write/Edit/MultiEdit tool input before the tool runs.
-- **block_emdash_turn.py** (Stop) - blocks ending a turn if the assistant's
-  own reply contained an em-dash. Reads `last_assistant_message` from the
-  hook input rather than parsing the transcript file by hand, the
-  officially documented way to get the current turn's text on both tools.
+| Hook | Lifecycle event | What it does |
+| ---- | ---------------- | ------------- |
+| `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
+| `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
+| `fix_emdash_tool_input.py` | PreToolUse | Silently rewrites em-dashes in tool input |
+| `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
 ## Commands
 
-Explicit-invoke workflows (`/name`):
-
-- **verify-unresolved-pr-comments** - fetches unresolved review threads and
-  PR-level feedback on the active PR, returns a triage table. Read-only.
-- **review-code** - full-pass code review (necessity, contract cross-checks,
-  a pass per project coding standard if the repo has any, then correctness).
-- **investigate** - read-only trace of how a feature or system works, entry
-  point through data flow through side effects.
-- **triage-errors** - groups a batch of failures by root cause and fixes
-  upstream causes first, instead of patching symptoms one at a time.
+| Command | Description |
+| ------- | ------------ |
+| `/verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
+| `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
+| `/investigate` | Read-only trace of how a feature or system works |
+| `/triage-errors` | Fix a batch of failures by root cause, not one by one |
 
 ## Skills
 
-Auto-triggered by description match:
-
-- **answer-questions** - answer direct questions fully, with the reasoning,
-  before doing anything else. No deflection, no premature action.
-- **code-complexity** - parameter counts, nesting depth, function length,
-  single responsibility.
-- **comments** - default to no comment; when one is warranted, why not what.
-- **prompt-output** - when generating a prompt file, wrap the whole output in
-  one code fence, nothing outside it.
-- **unit-tests** (opinionated) - Vitest, BDD `describe`/`it`, AAAR comments.
-  Assumes Vitest.
-- **jsdoc** (opinionated) - required tags, typedef rules, no inline `Object`
-  types. Assumes JS/TS.
-- **security** (opinionated) - validate at the edge, sanitize input, secrets
-  in env, fail without leaking internals. Examples assume Fastify/MongoDB but
-  the principles are general.
+| Skill | Description |
+| ----- | ------------ |
+| `answer-questions` | Answer direct questions fully before doing anything else |
+| `code-complexity` | Parameter counts, nesting depth, function length, single responsibility |
+| `comments` | Default to no comment; when warranted, why not what |
+| `prompt-output` | Wrap generated prompt files in a single code fence |
+| `unit-tests` *(opinionated, Vitest)* | BDD `describe`/`it`, AAAR comments |
+| `jsdoc` *(opinionated, JS/TS)* | Required tags, typedef rules, no inline `Object` |
+| `security` *(opinionated, Fastify/MongoDB examples)* | Validate at the edge, sanitize input, secrets in env |
 
 ## Install
 
