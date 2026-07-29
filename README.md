@@ -42,7 +42,7 @@ project's config.
 ### Claude Code
 
 ```
-/plugin marketplace add <your-github-username>/ioncache-ai-tools
+/plugin marketplace add ioncache/ioncache-ai-tools
 /plugin install ioncache-ai-tools@ioncache-ai-tools
 ```
 
@@ -53,7 +53,7 @@ installed it from.
 ### Codex
 
 ```bash
-codex plugin marketplace add <your-github-username>/ioncache-ai-tools
+codex plugin marketplace add ioncache/ioncache-ai-tools
 codex
 ```
 
