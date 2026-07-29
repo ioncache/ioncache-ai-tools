@@ -1,0 +1,10 @@
+{
+  "name": "ioncache-ai-tools",
+  "version": "1.0.0",
+  "description": "Personal Claude Code hooks: question-answering discipline and em-dash enforcement.",
+  "author": {
+    "name": "Mark Jubenville"
+  },
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json"
+}
