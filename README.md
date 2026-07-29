@@ -31,6 +31,7 @@ project's config.
 | `answer-questions` | Answer direct questions fully before doing anything else |
 | `code-complexity` | Parameter counts, nesting depth, function length, single responsibility |
 | `comments` | Default to no comment; when warranted, why not what |
+| `documentation-writing` | No em dashes, no AI filler phrases, short active-voice sentences |
 | `prompt-output` | Wrap generated prompt files in a single code fence |
 | `unit-tests` *(opinionated, Vitest)* | BDD `describe`/`it`, AAAR comments |
 | `jsdoc` *(opinionated, JS/TS)* | Required tags, typedef rules, no inline `Object` |
