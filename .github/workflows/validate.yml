@@ -1,0 +1,53 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON manifests
+        run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
+                   .codex-plugin/plugin.json .agents/plugins/marketplace.json \
+                   hooks/hooks.json; do
+            python3 -c "import json; json.load(open('$f')); print('$f OK')"
+          done
+
+      - name: Check hook script syntax
+        run: |
+          for f in hooks/scripts/*.py; do
+            python3 -m py_compile "$f" && echo "$f OK"
+          done
+
+      - name: Check command/skill frontmatter
+        run: |
+          for f in commands/*.md skills/*/SKILL.md; do
+            head -1 "$f" | grep -q '^---$' || { echo "missing frontmatter: $f"; exit 1; }
+            grep -q '^name:' "$f" || { echo "missing name: $f"; exit 1; }
+            grep -q '^description:' "$f" || { echo "missing description: $f"; exit 1; }
+            echo "$f OK"
+          done
+
+      - name: Check for literal em-dash
+        run: |
+          python3 -c "
+          import pathlib, sys
+          em_dash = chr(0x2014)
+          hits = []
+          for pattern in ('**/*.py', '**/*.md', '**/*.json'):
+              for path in pathlib.Path('.').glob(pattern):
+                  if '.git' in path.parts:
+                      continue
+                  text = path.read_text(errors='ignore')
+                  if em_dash in text:
+                      hits.append(str(path))
+          if hits:
+              print('Literal em-dash found in:', *hits, sep='\n  ')
+              sys.exit(1)
+          print('No em-dash found')
+          "
