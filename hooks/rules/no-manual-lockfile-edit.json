@@ -1,0 +1,11 @@
+{
+  "event": "PreToolUse",
+  "toolNames": ["Edit", "Write", "MultiEdit"],
+  "matcher": {
+    "type": "regex",
+    "field": "tool_input.file_path",
+    "pattern": "(package-lock\\.json|yarn\\.lock|pnpm-lock\\.yaml)$"
+  },
+  "action": "deny",
+  "message": "Never hand-edit a lockfile. Resolve the conflict in package.json first, then regenerate the lockfile by running the package manager's install command."
+}

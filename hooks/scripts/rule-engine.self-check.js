@@ -127,6 +127,18 @@ async function main() {
   assert.strictEqual(hookError, null, 'runHook should not throw even with invalid rule files')
   fs.rmSync(badRulesDir, { recursive: true, force: true })
 
+  // Real pilot rules load correctly for PreToolUse
+  const rulesDir = path.join(__dirname, '..', 'rules')
+  const realPreToolUseRules = loadRulesForEvent(rulesDir, 'PreToolUse').map((r) => r.name)
+  assert.ok(
+    realPreToolUseRules.includes('never-kill-without-asking.json'),
+    'never-kill-without-asking.json should load for PreToolUse'
+  )
+  assert.ok(
+    realPreToolUseRules.includes('no-manual-lockfile-edit.json'),
+    'no-manual-lockfile-edit.json should load for PreToolUse'
+  )
+
   console.log('All rule-engine self-checks passed.')
 }
 
