@@ -104,19 +104,29 @@ function loadRulesForEvent(rulesDir, event) {
     .filter((rule) => rule.event === event)
 }
 
-function main() {
+async function runHook(overrideRulesDir) {
   const event = process.argv[2]
   let hookInput
   try {
     hookInput = JSON.parse(fs.readFileSync(0, 'utf8'))
   } catch (err) {
-    process.exit(0)
+    return
   }
 
-  const rulesDir = path.join(__dirname, '..', 'rules')
-  const rules = loadRulesForEvent(rulesDir, event)
+  const rulesDir = overrideRulesDir || path.join(__dirname, '..', 'rules')
+  let rules
+  try {
+    rules = loadRulesForEvent(rulesDir, event)
+  } catch (err) {
+    console.error(`rule-engine: failed to load rules from ${rulesDir}: ${err.message}`)
+    rules = []
+  }
 
-  runRules(rules, event, hookInput)
+  return await runRules(rules, event, hookInput)
+}
+
+function main() {
+  runHook()
     .then((output) => {
       if (output) console.log(JSON.stringify(output))
       process.exit(0)
@@ -130,7 +140,8 @@ module.exports = {
   mergePreToolUse,
   mergeUserPromptSubmit,
   runRules,
-  loadRulesForEvent
+  loadRulesForEvent,
+  runHook
 }
 
 if (require.main === module) main()

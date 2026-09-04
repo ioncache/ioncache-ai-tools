@@ -9,7 +9,8 @@ const {
   mergePreToolUse,
   mergeUserPromptSubmit,
   runRules,
-  loadRulesForEvent
+  loadRulesForEvent,
+  runHook
 } = require('./rule-engine.js')
 
 async function main() {
@@ -111,6 +112,20 @@ async function main() {
 
   // loadRulesForEvent: missing directory returns empty array, never throws
   assert.deepStrictEqual(loadRulesForEvent(path.join(tmpDir, 'does-not-exist'), 'PreToolUse'), [])
+
+  // runHook: gracefully handles invalid rule files (error path test)
+  const badRulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-bad-'))
+  fs.writeFileSync(path.join(badRulesDir, 'bad.json'), '{invalid json')
+  fs.writeFileSync(path.join(badRulesDir, 'throw.js'), 'throw new Error("rule load error")')
+  process.argv[2] = 'PreToolUse'
+  let hookError = null
+  try {
+    await runHook(badRulesDir)
+  } catch (err) {
+    hookError = err
+  }
+  assert.strictEqual(hookError, null, 'runHook should not throw even with invalid rule files')
+  fs.rmSync(badRulesDir, { recursive: true, force: true })
 
   console.log('All rule-engine self-checks passed.')
 }
