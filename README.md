@@ -13,7 +13,8 @@ project's config.
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
-| `fix_emdash_tool_input.py` | PreToolUse | Silently rewrites em-dashes in tool input |
+| `rule-engine.js PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
+| `rule-engine.js UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_raw_worktree_add.js` | PreToolUse | Denies raw `git worktree add`, points to `/create-worktree` instead |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
@@ -52,6 +53,21 @@ plain `git worktree add`.
   is replaced with the new worktree's absolute path.
 - `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
   main worktree into the new one.
+
+### `hooks/rules/`
+
+One file per rule, loaded by `rule-engine.js`. Adding a rule never touches
+engine code. Three shapes:
+
+- **Always-on** (`.json`, `matcher: {"type": "always"}`): injects a fixed
+  reminder into `additionalContext` on every `UserPromptSubmit`.
+- **Pattern** (`.json`, `matcher: {"type": "regex", "field": "...", "pattern": "..."}`):
+  denies a `PreToolUse` call when a field of the tool input matches.
+- **Scripted** (`.js`, exports `{event, toolNames, matches(input), async check(input)}`):
+  the escape hatch for anything a regex can't express, including rewriting
+  tool input in place (see `fix-emdash.js`).
+
+Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
 
 ## Skills
 
