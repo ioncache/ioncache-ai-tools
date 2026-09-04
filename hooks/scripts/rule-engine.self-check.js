@@ -12,6 +12,7 @@ const {
   loadRulesForEvent,
   runHook
 } = require('./rule-engine.js')
+const fixEmdash = require('../rules/fix-emdash.js')
 
 async function main() {
   // matchRule: always
@@ -138,6 +139,41 @@ async function main() {
     realPreToolUseRules.includes('no-manual-lockfile-edit.json'),
     'no-manual-lockfile-edit.json should load for PreToolUse'
   )
+
+  // fix-emdash: matches per tool type
+  const emDash = String.fromCharCode(0x2014)
+  assert.strictEqual(
+    fixEmdash.matches({ tool_name: 'Bash', tool_input: { command: `a${emDash}b` } }),
+    true,
+    'fix-emdash should match a Bash command containing an em-dash'
+  )
+  assert.strictEqual(
+    fixEmdash.matches({ tool_name: 'Bash', tool_input: { command: 'a-b' } }),
+    false,
+    'fix-emdash should not match a plain hyphen'
+  )
+
+  // fix-emdash: check rewrites Bash command, preserves other fields
+  const bashResult = await fixEmdash.check({
+    tool_name: 'Bash',
+    tool_input: { command: `one${emDash}two`, description: 'keep me' }
+  })
+  assert.strictEqual(bashResult.updatedInput.command, 'one, two')
+  assert.strictEqual(bashResult.updatedInput.description, 'keep me')
+
+  // fix-emdash: check rewrites MultiEdit edits array, leaves unaffected edits untouched
+  const multiEditResult = await fixEmdash.check({
+    tool_name: 'MultiEdit',
+    tool_input: {
+      file_path: 'f.js',
+      edits: [
+        { old_string: 'x', new_string: `a${emDash}b` },
+        { old_string: 'y', new_string: 'unchanged' }
+      ]
+    }
+  })
+  assert.strictEqual(multiEditResult.updatedInput.edits[0].new_string, 'a, b')
+  assert.strictEqual(multiEditResult.updatedInput.edits[1].new_string, 'unchanged')
 
   console.log('All rule-engine self-checks passed.')
 }
