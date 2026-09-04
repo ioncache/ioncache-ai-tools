@@ -140,6 +140,17 @@ async function main() {
     'no-manual-lockfile-edit.json should load for PreToolUse'
   )
 
+  // Real pilot rules load correctly for UserPromptSubmit
+  const realUserPromptRules = loadRulesForEvent(rulesDir, 'UserPromptSubmit').map((r) => r.name)
+  assert.ok(
+    realUserPromptRules.includes('scope-exactly-what-asked.json'),
+    'scope-exactly-what-asked.json should load for UserPromptSubmit'
+  )
+  assert.ok(
+    realUserPromptRules.includes('verify-state-before-claiming.json'),
+    'verify-state-before-claiming.json should load for UserPromptSubmit'
+  )
+
   // fix-emdash: matches per tool type
   const emDash = String.fromCharCode(0x2014)
   assert.strictEqual(

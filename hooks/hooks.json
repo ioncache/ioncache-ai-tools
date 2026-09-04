@@ -30,6 +30,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/classify_question.py\""
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule-engine.js\" UserPromptSubmit"
+          }
+        ]
       }
     ],
     "PreToolUse": [
