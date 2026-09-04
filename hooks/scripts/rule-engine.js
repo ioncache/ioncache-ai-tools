@@ -6,7 +6,9 @@ const fs = require('fs')
 const path = require('path')
 
 function getField(obj, dotPath) {
-  return dotPath.split('.').reduce((value, key) => (value == null ? undefined : value[key]), obj)
+  return dotPath
+    .split('.')
+    .reduce((value, key) => (value === null || value === undefined ? undefined : value[key]), obj)
 }
 
 function toolNameMatches(rule, hookInput) {
@@ -91,17 +93,24 @@ async function runRules(rules, event, hookInput) {
   return null
 }
 
+function loadRuleFile(rulesDir, name) {
+  try {
+    const fullPath = path.join(rulesDir, name)
+    const rule = name.endsWith('.json') ? JSON.parse(fs.readFileSync(fullPath, 'utf8')) : require(fullPath)
+    return { ...rule, name }
+  } catch (err) {
+    console.error(`rule-engine: skipping rule file "${name}": ${err.message}`)
+    return null
+  }
+}
+
 function loadRulesForEvent(rulesDir, event) {
   if (!fs.existsSync(rulesDir)) return []
   return fs
     .readdirSync(rulesDir)
     .filter((name) => name.endsWith('.json') || name.endsWith('.js'))
-    .map((name) => {
-      const fullPath = path.join(rulesDir, name)
-      const rule = name.endsWith('.json') ? JSON.parse(fs.readFileSync(fullPath, 'utf8')) : require(fullPath)
-      return { ...rule, name }
-    })
-    .filter((rule) => rule.event === event)
+    .map((name) => loadRuleFile(rulesDir, name))
+    .filter((rule) => rule !== null && rule.event === event)
 }
 
 async function runHook(overrideRulesDir) {

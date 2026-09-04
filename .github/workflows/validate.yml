@@ -24,6 +24,15 @@ jobs:
             python3 -m py_compile "$f" && echo "$f OK"
           done
 
+      - name: Check JS hook script syntax
+        run: |
+          for f in hooks/scripts/*.js hooks/rules/*.js; do
+            node --check "$f" && echo "$f OK"
+          done
+
+      - name: Run rule-engine self-check
+        run: node hooks/scripts/rule-engine.self-check.js < /dev/null
+
       - name: Check command/skill frontmatter
         run: |
           for f in commands/*.md skills/*/SKILL.md; do

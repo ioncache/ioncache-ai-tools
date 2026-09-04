@@ -9,8 +9,7 @@ const {
   mergePreToolUse,
   mergeUserPromptSubmit,
   runRules,
-  loadRulesForEvent,
-  runHook
+  loadRulesForEvent
 } = require('./rule-engine.js')
 const fixEmdash = require('../rules/fix-emdash.js')
 
@@ -38,6 +37,36 @@ async function main() {
     false,
     'toolNames restriction should exclude other tools'
   )
+
+  // matchRule: custom matches() function is invoked and its result respected
+  let customMatcherCalled = false
+  const customMatchRule = {
+    toolNames: ['Bash'],
+    matches(input) {
+      customMatcherCalled = true
+      return input.tool_input.command === 'trigger-me'
+    }
+  }
+  assert.strictEqual(
+    matchRule(customMatchRule, { tool_name: 'Bash', tool_input: { command: 'trigger-me' } }),
+    true,
+    'custom matches() should be invoked and its true result respected'
+  )
+  assert.strictEqual(customMatcherCalled, true, 'custom matches() should actually be called')
+  assert.strictEqual(
+    matchRule(customMatchRule, { tool_name: 'Bash', tool_input: { command: 'something-else' } }),
+    false,
+    'custom matches() false result should be respected'
+  )
+
+  // matchRule: custom matches() is still gated by toolNames
+  customMatcherCalled = false
+  assert.strictEqual(
+    matchRule(customMatchRule, { tool_name: 'Read', tool_input: { command: 'trigger-me' } }),
+    false,
+    'toolNames should exclude the tool before custom matches() runs'
+  )
+  assert.strictEqual(customMatcherCalled, false, 'custom matches() should not be called when toolNames excludes the tool')
 
   // resolveAction: declarative deny/inject
   assert.deepStrictEqual(await resolveAction({ action: 'deny', message: 'no' }, {}), { action: 'deny', message: 'no' })
@@ -114,18 +143,24 @@ async function main() {
   // loadRulesForEvent: missing directory returns empty array, never throws
   assert.deepStrictEqual(loadRulesForEvent(path.join(tmpDir, 'does-not-exist'), 'PreToolUse'), [])
 
-  // runHook: gracefully handles invalid rule files (error path test)
+  // loadRulesForEvent: a bad rule file is skipped, valid siblings still load
   const badRulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-bad-'))
+  fs.writeFileSync(
+    path.join(badRulesDir, 'good.json'),
+    JSON.stringify({ event: 'PreToolUse', matcher: { type: 'always' }, action: 'deny', message: 'good' })
+  )
   fs.writeFileSync(path.join(badRulesDir, 'bad.json'), '{invalid json')
   fs.writeFileSync(path.join(badRulesDir, 'throw.js'), 'throw new Error("rule load error")')
-  process.argv[2] = 'PreToolUse'
-  let hookError = null
+  let loadError = null
+  let badDirRules = []
   try {
-    await runHook(badRulesDir)
+    badDirRules = loadRulesForEvent(badRulesDir, 'PreToolUse')
   } catch (err) {
-    hookError = err
+    loadError = err
   }
-  assert.strictEqual(hookError, null, 'runHook should not throw even with invalid rule files')
+  assert.strictEqual(loadError, null, 'loadRulesForEvent should not throw on invalid rule files')
+  assert.strictEqual(badDirRules.length, 1, 'only the valid rule should load, the bad ones are skipped')
+  assert.strictEqual(badDirRules[0].name, 'good.json', 'the valid rule should still be the one that loads')
   fs.rmSync(badRulesDir, { recursive: true, force: true })
 
   // Real pilot rules load correctly for PreToolUse

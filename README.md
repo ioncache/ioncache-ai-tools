@@ -13,9 +13,9 @@ project's config.
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
+| `block_raw_worktree_add.js` | PreToolUse | Denies raw `git worktree add`, points to `/create-worktree` instead |
 | `rule-engine.js PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule-engine.js UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
-| `block_raw_worktree_add.js` | PreToolUse | Denies raw `git worktree add`, points to `/create-worktree` instead |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
 ## Commands
@@ -116,4 +116,5 @@ Before pushing, test against the working copy directly:
 ```
 
 Hooks load at session start, so restart the session after any change to
-`hooks/hooks.json` or the scripts under `hooks/scripts/`.
+`hooks/hooks.json`, the scripts under `hooks/scripts/`, or the rules under
+`hooks/rules/`.
