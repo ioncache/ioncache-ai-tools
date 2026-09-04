@@ -8,11 +8,13 @@ project's config.
 
 | Hook | Lifecycle event | What it does |
 | ---- | ---------------- | ------------- |
+| `graphify_context.js` | UserPromptSubmit | When the project has a graphify knowledge graph, tells the agent to use `graphify query` instead of grep/Read/find |
 | `docs_first_guard.py user-prompt-submit` | UserPromptSubmit | Flags prompts that require official/current docs |
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
 | `fix_emdash_tool_input.py` | PreToolUse | Silently rewrites em-dashes in tool input |
+| `block_raw_worktree_add.js` | PreToolUse | Denies raw `git worktree add`, points to `/create-worktree` instead |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
 ## Commands
@@ -23,6 +25,33 @@ project's config.
 | `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
 | `/investigate` | Read-only trace of how a feature or system works |
 | `/triage-errors` | Fix a batch of failures by root cause, not one by one |
+| `/create-worktree` | Wraps `git worktree add`, applying the repo's `.worktree-setup.json` (untracked local config, env files, generated caches) if it defines one |
+
+### `.worktree-setup.json`
+
+Optional, lives at a repo's root. `/create-worktree` reads it from the main
+worktree and applies it to every new worktree; repos without one just get a
+plain `git worktree add`.
+
+```json
+{
+  "copies": ["graphify-out"],
+  "afterCopy": [{ "path": "graphify-out/.graphify_root", "content": "${worktreePath}\n" }],
+  "symlinks": [
+    ".claude/settings.local.json",
+    ".claude/hooks",
+    "CLAUDE.local.md",
+    ".claude/hookify.*.local.md"
+  ]
+}
+```
+
+- `copies` - paths (relative to repo root) recursively copied into the new
+  worktree.
+- `afterCopy` - files written after copying; `${worktreePath}` in `content`
+  is replaced with the new worktree's absolute path.
+- `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
+  main worktree into the new one.
 
 ## Skills
 
