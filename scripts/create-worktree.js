@@ -76,6 +76,10 @@ function expandGlob(root, pattern) {
  * @param {string} mainRoot - Absolute path of the main worktree
  * @returns {WorktreeSetup} Parsed setup config
  * @throws {SyntaxError} When an existing setup file is not valid JSON
+ *
+ * @example
+ * const config = loadSetup('/Users/mark/projects/my-repo')
+ * // config.copies, config.afterCopy, config.symlinks, config.commands
  */
 function loadSetup(mainRoot) {
   const configPath = path.join(mainRoot, SETUP_FILE)
@@ -89,6 +93,42 @@ function loadSetup(mainRoot) {
   return DEFAULT_SETUP
 }
 
+/**
+ * Runs a repo's post-create setup commands in the new worktree, in order.
+ * The first failing command stops the run and exits the process; every item
+ * applied so far (including from earlier setup steps) is reported first, so
+ * a half-applied setup is visible rather than silently skipped.
+ *
+ * @typedef {Object} RunSetupCommandsOptions
+ * @property {WorktreeSetup} config - Parsed setup config
+ * @property {string} worktreePath - Absolute path of the new worktree
+ * @property {(text: string) => string} expand - Substitutes `${worktreePath}`/`${mainRoot}` placeholders
+ * @property {string[]} applied - Descriptions of setup already applied; mutated with one entry per command run
+ *
+ * @param {RunSetupCommandsOptions} options
+ * @returns {void}
+ */
+function runSetupCommands({ config, worktreePath, expand, applied }) {
+  for (const command of config.commands || []) {
+    const expanded = expand(command)
+    const result = spawnSync(expanded, { cwd: worktreePath, shell: true, stdio: 'inherit' })
+    if (result.status !== 0) {
+      report(applied, worktreePath)
+      console.error(`create-worktree: command failed (exit ${result.status}): ${expanded}`)
+      process.exit(result.status ?? 1)
+    }
+    applied.push(`ran ${expanded}`)
+  }
+}
+
+/**
+ * Applies a repo's .worktree-setup.json to a freshly created worktree:
+ * copies, generated files, symlinks, then post-create commands, in order.
+ *
+ * @param {string} mainRoot - Absolute path of the main worktree
+ * @param {string} worktreePath - Absolute path of the new worktree
+ * @returns {void}
+ */
 function applySetup(mainRoot, worktreePath) {
   const config = loadSetup(mainRoot)
   const expand = (text) =>
@@ -125,19 +165,7 @@ function applySetup(mainRoot, worktreePath) {
     }
   }
 
-  // The first failing command stops the run, and what was already applied is
-  // reported so a half-applied setup is visible rather than silently skipped.
-  for (const command of config.commands || []) {
-    const expanded = expand(command)
-    const result = spawnSync(expanded, { cwd: worktreePath, shell: true, stdio: 'inherit' })
-    if (result.status !== 0) {
-      report(applied, worktreePath)
-      console.error(`create-worktree: command failed (exit ${result.status}): ${expanded}`)
-      process.exit(result.status ?? 1)
-    }
-    applied.push(`ran ${expanded}`)
-  }
-
+  runSetupCommands({ config, worktreePath, expand, applied })
   report(applied, worktreePath)
 }
 
