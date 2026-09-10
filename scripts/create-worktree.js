@@ -1,16 +1,42 @@
 #!/usr/bin/env node
-// Wraps `git worktree add` and applies a repo's optional
+// Wraps the git worktree add command and applies the repo's
 // .worktree-setup.json, so a new worktree isn't missing untracked local
-// config, generated caches, or env files that the main worktree has.
+// config, generated caches, or per-repo setup steps that the main worktree has.
 //
-// Usage: node create-worktree.js <same args you'd pass to `git worktree add`>
+// Usage: node create-worktree.js <same args you'd pass to the git command>
 //
-// A repo with no .worktree-setup.json gets a plain `git worktree add` -
-// this is safe to use anywhere, not just repos that opt in.
+// A repo with no .worktree-setup.json gets one written with generic defaults
+// (Claude Code local config symlinks) on first use, so the file is always
+// there to extend with repo-specific copies, symlinks and commands.
 
 const { execFileSync, spawnSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+
+const SETUP_FILE = '.worktree-setup.json'
+
+/**
+ * @typedef {Object} AfterCopyEntry
+ * @property {string} path - Destination, relative to the worktree root
+ * @property {string} content - File body; `${worktreePath}` and `${mainRoot}` are expanded
+ * @typedef {Object} WorktreeSetup
+ * @property {string[]} [copies]
+ * @property {AfterCopyEntry[]} [afterCopy]
+ * @property {string[]} [symlinks]
+ * @property {string[]} [commands]
+ */
+
+const DEFAULT_SETUP = {
+  copies: [],
+  afterCopy: [],
+  symlinks: [
+    '.claude/settings.local.json',
+    '.claude/hooks',
+    'CLAUDE.local.md',
+    '.claude/hookify.*.local.md'
+  ],
+  commands: []
+}
 
 function listWorktrees(cwd) {
   const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
@@ -44,14 +70,29 @@ function expandGlob(root, pattern) {
     .map((name) => path.join(dir, name))
 }
 
-function applySetup(mainRoot, worktreePath) {
-  const configPath = path.join(mainRoot, '.worktree-setup.json')
-  if (!fs.existsSync(configPath)) {
-    console.log('create-worktree: no .worktree-setup.json in this repo, plain worktree created')
-    return
+/**
+ * Reads the repo's setup file, writing the generic default first if none exists.
+ *
+ * @param {string} mainRoot - Absolute path of the main worktree
+ * @returns {WorktreeSetup} Parsed setup config
+ * @throws {SyntaxError} When an existing setup file is not valid JSON
+ */
+function loadSetup(mainRoot) {
+  const configPath = path.join(mainRoot, SETUP_FILE)
+  if (fs.existsSync(configPath)) {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'))
   }
+  fs.writeFileSync(configPath, JSON.stringify(DEFAULT_SETUP, null, 2) + '\n')
+  console.log(
+    `create-worktree: wrote default ${SETUP_FILE} to ${mainRoot} - extend it with repo-specific copies, symlinks and commands`
+  )
+  return DEFAULT_SETUP
+}
 
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+function applySetup(mainRoot, worktreePath) {
+  const config = loadSetup(mainRoot)
+  const expand = (text) =>
+    text.replaceAll('${worktreePath}', worktreePath).replaceAll('${mainRoot}', mainRoot)
   const applied = []
 
   for (const rel of config.copies || []) {
@@ -64,7 +105,7 @@ function applySetup(mainRoot, worktreePath) {
   for (const { path: rel, content } of config.afterCopy || []) {
     const dest = path.join(worktreePath, rel)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.writeFileSync(dest, content.replaceAll('${worktreePath}', worktreePath))
+    fs.writeFileSync(dest, expand(content))
     applied.push(`wrote ${rel}`)
   }
 
@@ -84,13 +125,38 @@ function applySetup(mainRoot, worktreePath) {
     }
   }
 
-  console.log(`create-worktree: applied .worktree-setup.json (${applied.length} item(s)) into ${worktreePath}`)
+  // The first failing command stops the run, and what was already applied is
+  // reported so a half-applied setup is visible rather than silently skipped.
+  for (const command of config.commands || []) {
+    const expanded = expand(command)
+    const result = spawnSync(expanded, { cwd: worktreePath, shell: true, stdio: 'inherit' })
+    if (result.status !== 0) {
+      report(applied, worktreePath)
+      console.error(`create-worktree: command failed (exit ${result.status}): ${expanded}`)
+      process.exit(result.status ?? 1)
+    }
+    applied.push(`ran ${expanded}`)
+  }
+
+  report(applied, worktreePath)
+}
+
+/**
+ * Prints the list of setup items applied to a worktree.
+ *
+ * @param {string[]} applied - Human-readable descriptions of each applied item
+ * @param {string} worktreePath - Absolute path of the new worktree
+ * @returns {void}
+ */
+function report(applied, worktreePath) {
+  console.log(`create-worktree: applied ${SETUP_FILE} (${applied.length} item(s)) into ${worktreePath}`)
+  for (const item of applied) console.log(`  ${item}`)
 }
 
 function main() {
   const args = process.argv.slice(2)
   if (args.length === 0) {
-    console.error('usage: create-worktree.js <git worktree add args>')
+    console.error('usage: create-worktree.js <same args as the git command>')
     process.exit(1)
   }
 

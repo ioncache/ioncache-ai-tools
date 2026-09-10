@@ -1,6 +1,6 @@
 ---
 name: create-worktree
-description: Create a git worktree, applying the repo's .worktree-setup.json (untracked local config, env files, generated caches) if it defines one
+description: Create a git worktree and apply the repo's .worktree-setup.json (untracked local config, generated caches, post-create commands), writing the file with generic defaults on first use
 allowed-tools: Bash(node:*)
 ---
 

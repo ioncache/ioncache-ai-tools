@@ -26,7 +26,7 @@ jobs:
 
       - name: Check JS hook script syntax
         run: |
-          for f in hooks/scripts/*.js hooks/rules/*.js; do
+          for f in hooks/scripts/*.js hooks/rules/*.js scripts/*.js; do
             node --check "$f" && echo "$f OK"
           done
 

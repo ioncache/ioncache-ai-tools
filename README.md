@@ -13,7 +13,7 @@ project's config.
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
-| `block_raw_worktree_add.js` | PreToolUse | Denies raw `git worktree add`, points to `/create-worktree` instead |
+| `block_raw_worktree_add.js` | PreToolUse | Denies creating a worktree by raw git or oh-my-zsh's `gwta` alias; points to `/create-worktree` instead |
 | `rule-engine.js PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule-engine.js UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
@@ -26,33 +26,43 @@ project's config.
 | `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
 | `/investigate` | Read-only trace of how a feature or system works |
 | `/triage-errors` | Fix a batch of failures by root cause, not one by one |
-| `/create-worktree` | Wraps `git worktree add`, applying the repo's `.worktree-setup.json` (untracked local config, env files, generated caches) if it defines one |
+| `/create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
 
 ### `.worktree-setup.json`
 
-Optional, lives at a repo's root. `/create-worktree` reads it from the main
-worktree and applies it to every new worktree; repos without one just get a
-plain `git worktree add`.
+Lives at a repo's root. `/create-worktree` reads it from the main worktree and
+applies it to every new worktree. A repo without one gets the file written with
+generic defaults on the first run (the Claude Code local-config symlinks below,
+nothing else), so it is always there to extend.
 
 ```json
 {
-  "copies": ["graphify-out"],
-  "afterCopy": [{ "path": "graphify-out/.graphify_root", "content": "${worktreePath}\n" }],
+  "copies": ["generated-cache"],
+  "afterCopy": [{ "path": "generated-cache/.root", "content": "${worktreePath}\n" }],
   "symlinks": [
     ".claude/settings.local.json",
     ".claude/hooks",
     "CLAUDE.local.md",
     ".claude/hookify.*.local.md"
-  ]
+  ],
+  "commands": ["ln -s ~/envs/app.env \"${worktreePath}/apps/app/.env\"", "npm install"]
 }
 ```
 
 - `copies` - paths (relative to repo root) recursively copied into the new
   worktree.
-- `afterCopy` - files written after copying; `${worktreePath}` in `content`
-  is replaced with the new worktree's absolute path.
+- `afterCopy` - files written after copying; `${worktreePath}` and
+  `${mainRoot}` in `content` are replaced with the absolute paths.
 - `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
-  main worktree into the new one.
+  main worktree into the new one. Missing sources are skipped.
+- `commands` - shell commands run in the new worktree, in order, after copies
+  and symlinks, with the same `${worktreePath}` and `${mainRoot}` substitution.
+  The first failure stops the run and the command exits non-zero. This is where
+  repo-specific setup goes (env symlinks, installs); the plugin itself knows
+  nothing about any repo's layout. Quote the placeholders, paths can contain
+  spaces. The file is committed to the repo, so its commands run with the same
+  trust as an install script: review it before creating a worktree in a repo
+  you did not write.
 
 ### `hooks/rules/`
 
@@ -86,8 +96,8 @@ Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
 
 ### Claude Code
 
-```
-/plugin marketplace add ioncache/ioncache-ai-tools
+```text
+/plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
 /plugin install ioncache-ai-tools@ioncache-ai-tools
 ```
 
@@ -98,7 +108,7 @@ installed it from.
 ### Codex
 
 ```bash
-codex plugin marketplace add ioncache/ioncache-ai-tools
+codex plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
 codex
 ```
 
@@ -110,8 +120,8 @@ the hooks, then start a new thread.
 
 Before pushing, test against the working copy directly:
 
-```
-/plugin marketplace add ~/projects/personal/ioncache-ai-tools
+```text
+/plugin marketplace add <local path to repo>
 /plugin install ioncache-ai-tools@ioncache-ai-tools
 ```
 
