@@ -339,6 +339,26 @@ async function main() {
   )
   fs.rmSync(codexConfigDir, { recursive: true, force: true })
 
+  // getDisabledRuleIds: malformed Codex TOML degrades to empty and logs to
+  // stderr (via console.error) rather than failing silently
+  const malformedCodexConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-malformed-codex-'))
+  const malformedCodexConfigPath = path.join(malformedCodexConfigDir, 'config.toml')
+  fs.writeFileSync(malformedCodexConfigPath, 'not valid toml [[[')
+  const originalConsoleError = console.error
+  let loggedStderr = ''
+  console.error = (msg) => {
+    loggedStderr += msg
+  }
+  let malformedCodexDisabled
+  try {
+    malformedCodexDisabled = getDisabledRuleIds(codexProjectRoot, { codexConfigPath: malformedCodexConfigPath })
+  } finally {
+    console.error = originalConsoleError
+  }
+  assert.deepStrictEqual([...malformedCodexDisabled], [], 'malformed Codex TOML should degrade to no disabled rules')
+  assert.ok(loggedStderr.length > 0, 'a malformed Codex TOML parse failure should be logged, not silently swallowed')
+  fs.rmSync(malformedCodexConfigDir, { recursive: true, force: true })
+
   // getDisabledRuleIds: both sources present at once union together, not error
   const bothProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-both-config-'))
   fs.mkdirSync(path.join(bothProjectRoot, '.claude'))

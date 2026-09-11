@@ -15,7 +15,8 @@ def main():
         project = config.get("projects", {}).get(project_root, {})
         rules = project.get("ioncache-ai-tools", {}).get("disabled_rules", [])
         print(json.dumps(rules))
-    except Exception:
+    except Exception as exc:
+        print(f"read_codex_disabled_rules: {exc}", file=sys.stderr)
         print("[]")
 
 if __name__ == "__main__":
