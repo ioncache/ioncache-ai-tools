@@ -124,7 +124,8 @@ function getDisabledRuleIds(
   if (fs.existsSync(claudeConfigPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(claudeConfigPath, 'utf8'))
-      for (const id of config.disabledRules || []) disabled.add(id)
+      const disabledRules = Array.isArray(config.disabledRules) ? config.disabledRules : []
+      for (const id of disabledRules) disabled.add(id)
     } catch (err) {
       console.error(`rule-engine: failed to read ${claudeConfigPath}: ${err.message}`)
     }

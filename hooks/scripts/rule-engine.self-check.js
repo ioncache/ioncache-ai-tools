@@ -307,6 +307,22 @@ async function main() {
   )
   fs.rmSync(malformedProjectRoot, { recursive: true, force: true })
 
+  // getDisabledRuleIds: a string disabledRules value is ignored rather than
+  // iterated character by character
+  const stringShapeProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-string-shape-'))
+  fs.mkdirSync(path.join(stringShapeProjectRoot, '.claude'))
+  fs.writeFileSync(
+    path.join(stringShapeProjectRoot, '.claude', 'ioncache-ai-tools.local.json'),
+    JSON.stringify({ disabledRules: 'test-rule-a' })
+  )
+  const stringShapeDisabled = getDisabledRuleIds(stringShapeProjectRoot, { codexConfigPath: '/does/not/exist.toml' })
+  assert.deepStrictEqual(
+    [...stringShapeDisabled],
+    [],
+    'a string disabledRules value should be ignored, not iterated character by character'
+  )
+  fs.rmSync(stringShapeProjectRoot, { recursive: true, force: true })
+
   // getDisabledRuleIds: reads disabled_rules from a Codex config.toml project section, via the real Python helper
   const codexProjectRoot = '/tmp/rule-engine-codex-test-project'
   const codexConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-codex-config-'))
