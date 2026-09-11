@@ -170,13 +170,24 @@ async function runHook(overrideRulesDir) {
   return await runRules(rules, event, hookInput)
 }
 
+const HANG_TIMEOUT_MS = 5000
+
 function main() {
+  // A scripted rule's check() that never settles (e.g. it holds an
+  // open event-loop handle) would otherwise keep this process alive
+  // forever, since nothing else forces exit. This watchdog fires
+  // regardless of what runHook() is awaiting.
+  const watchdog = setTimeout(() => process.exit(0), HANG_TIMEOUT_MS)
   runHook()
     .then((output) => {
+      clearTimeout(watchdog)
       if (output) console.log(JSON.stringify(output))
       process.exit(0)
     })
-    .catch(() => process.exit(0))
+    .catch(() => {
+      clearTimeout(watchdog)
+      process.exit(0)
+    })
 }
 
 module.exports = {
