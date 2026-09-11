@@ -228,6 +228,26 @@ async function main() {
     true,
     'never-kill-without-asking should match redirection attached directly to the command name'
   )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: '\\kill -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a backslash-escaped command name (Bash executes it as plain kill)'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: 'k\\ill -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a mid-word backslash escape'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: "'kill' -9 12345" } }),
+    true,
+    'never-kill-without-asking should match a single-quoted command name'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: '"kill" -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a double-quoted command name'
+  )
 
   // Real no-manual-lockfile-edit rule file, matched via matchRule directly
   const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))

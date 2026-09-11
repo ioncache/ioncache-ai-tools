@@ -18,14 +18,28 @@ function toolNameMatches(rule, hookInput) {
   return rule.toolNames.includes(hookInput.tool_name)
 }
 
+// Bash removes a backslash before a word character and strips matching
+// quotes before command lookup, so `\kill`, `k\ill`, and `'kill'` all
+// execute plain `kill`. This normalizes those forms before a regex rule
+// sees the command, so a rule doesn't have to special-case them itself.
+// Scoped to Bash's own command field: normalizing an unrelated tool
+// input field (e.g. Write content) would apply shell semantics where
+// none exist.
+function normalizeShellCommand(command) {
+  return command.replace(/\\(\w)/g, '$1').replace(/['"]/g, '')
+}
+
 function matchRule(rule, hookInput) {
   if (!toolNameMatches(rule, hookInput)) return false
   if (typeof rule.matches === 'function') return rule.matches(hookInput)
   const matcher = rule.matcher || {}
   if (matcher.type === 'always') return true
   if (matcher.type === 'regex') {
-    const value = getField(hookInput, matcher.field)
+    let value = getField(hookInput, matcher.field)
     if (typeof value !== 'string') return false
+    if (hookInput.tool_name === 'Bash' && matcher.field === 'tool_input.command') {
+      value = normalizeShellCommand(value)
+    }
     return new RegExp(matcher.pattern).test(value)
   }
   return false

@@ -92,6 +92,14 @@ All three live under `hooks/rules/`, one file per rule, named for the rule
 `toolNames` is an optional restriction (checked before `matcher`); `field` is
 a dot-path into the hook's JSON stdin payload.
 
+When `field` is `tool_input.command` on a `Bash` tool call, the engine
+normalizes the command before testing the pattern: it strips a backslash
+immediately before a word character and strips quote characters, mirroring
+what Bash itself does before command lookup. This closes the otherwise
+trivial `\kill`, `k\ill`, and `'kill'` bypasses of a rule like
+`never-kill-without-asking`. It's still text normalization, not a shell
+parser, so it doesn't cover every form of shell quoting or expansion.
+
 **3. Scripted rule** (JS module, the escape hatch for anything a regex can't
 express):
 
