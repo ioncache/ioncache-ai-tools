@@ -1,12 +1,23 @@
 # Per-Rule Disable Config: Design
 
-> **Note:** this doc predates the Node-to-Python rewrite in
-> `2026-09-11-python-rule-engine-rewrite.md`. The two config sources, the
-> goals, and the disable semantics below are all still accurate. The code
-> samples and the `read_codex_disabled_rules.py`/subprocess mechanics are
-> not: Codex's `config.toml` is now read directly with Python's `tomllib`
-> inside `rule_engine.py`, no subprocess, no separate helper script. See
-> the rewrite doc for the current implementation.
+> **Note:** this doc predates two later changes, both covered in the
+> README's "Disabling a rule" section, which is the current source of
+> truth for this feature's behavior:
+>
+> 1. The Node-to-Python rewrite in `2026-09-11-python-rule-engine-rewrite.md`.
+>    The two config sources below are still accurate; the code samples and
+>    the `read_codex_disabled_rules.py`/subprocess mechanics are not.
+>    Codex's `config.toml` is now read directly with Python's `tomllib`
+>    inside `rule_engine.py`, no subprocess, no separate helper script.
+> 2. Global-plus-project-override scoping. This doc's Goals section below
+>    describes per-project disabling only, on the assumption that was the
+>    primary use case. It wasn't: someone who doesn't want a rule almost
+>    always doesn't want it in any project, so a global config now sets
+>    the baseline (a top-level table in Codex's `config.toml`, a file at
+>    `~/.claude/ioncache-ai-tools.local.json` for Claude Code), and
+>    project-level config overrides it per rule in either direction
+>    (disable one more, or re-enable one the global config turned off),
+>    rather than being the only scope that exists.
 
 ## Problem
 

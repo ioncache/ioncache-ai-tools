@@ -92,23 +92,40 @@ engine code. Three shapes:
 
 ### Disabling a rule
 
-Add either config file, whichever CLI you use. No repo file, no environment
-variable.
+Add config to either tool's own files, whichever CLI you use. No repo file,
+no environment variable. Disabling a rule once, globally, is the common
+case, most people who don't want a rule don't want it in any project, so
+global config is the baseline and project-level config is the exception,
+used only to override that baseline for one specific project (in either
+direction: a project can disable a rule that's enabled everywhere else, or
+re-enable one that's disabled everywhere else).
 
-**Claude Code:** `.claude/ioncache-ai-tools.local.json` in the project root
+**Claude Code:** `ioncache-ai-tools.local.json`, in `~/.claude/` for a global
+setting, or in `<project>/.claude/` to override it for one project
 (gitignored, not shipped with the plugin):
 
 ```json
 { "disabledRules": ["never-kill-without-asking"] }
 ```
 
-**Codex:** a project-scoped table in `~/.codex/config.toml`, hand-edited,
-there is no CLI command for it. Not compatible with Codex's `--strict-config`
-flag, which rejects the unrecognized table:
+A project-level file can also carry `enabledRules`, to re-enable a rule
+the global file disables, for that project only:
+
+```json
+{ "enabledRules": ["never-kill-without-asking"] }
+```
+
+**Codex:** in `~/.codex/config.toml`, hand-edited, there is no CLI command
+for it. A top-level table for a global setting, a project-scoped table to
+override it for one project. Not compatible with Codex's `--strict-config`
+flag, which rejects both unrecognized tables:
 
 ```toml
-[projects."/absolute/path/to/project".ioncache-ai-tools]
+[ioncache-ai-tools]
 disabled_rules = ["never-kill-without-asking"]
+
+[projects."/absolute/path/to/project".ioncache-ai-tools]
+enabled_rules = ["never-kill-without-asking"]
 ```
 
 The rule engine itself is Python and reads Codex's config.toml directly with
@@ -116,11 +133,15 @@ the stdlib `tomllib` parser (3.11+ required); on an older Python, the
 disabled-rules lookup logs the failure to stderr and falls back to none
 disabled, same as any other malformed Codex config.
 
-A rule's id is its filename minus the extension. Both sources are read and
-unioned, disabling a rule in either one disables it. Takes effect
-immediately, on the next tool call. This config is read fresh from disk
-every time, unlike changes to the plugin's own files (see Local development
-below), which do require a reinstall.
+A rule's id is its filename minus the extension. Resolution per tool: start
+from that tool's global config, add anything the project config disables,
+then remove anything the project config enables. Both tools' results are
+then unioned, disabling a rule in either one disables it. There's no
+global-scope `enabledRules`/`enabled_rules`: with nothing disabled globally,
+every rule already runs, so a global enable list would have nothing to
+override. Takes effect immediately, on the next tool call. This config is
+read fresh from disk every time, unlike changes to the plugin's own files
+(see Local development below), which do require a reinstall.
 
 Full design: `docs/superpowers/specs/2026-09-11-rule-config-design.md`.
 
