@@ -77,6 +77,14 @@ engine code. Three shapes:
   the escape hatch for anything a regex can't express, including rewriting
   tool input in place (see `fix-emdash.js`).
 
+| Rule | Shape | Event | What it does |
+| ---- | ----- | ----- | ------------ |
+| `never-kill-without-asking` | Pattern | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command |
+| `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` directly |
+| `fix-emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Bash/Write/Edit/MultiEdit input |
+| `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
+| `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
+
 Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
 
 ## Skills
@@ -118,13 +126,44 @@ the hooks, then start a new thread.
 
 ## Local development
 
-Before pushing, test against the working copy directly:
+Before pushing, run the rule engine's self-check:
+
+```bash
+node hooks/scripts/rule-engine.self-check.js < /dev/null
+```
+
+Then test against the working copy directly.
+
+### Claude Code
 
 ```text
 /plugin marketplace add <local path to repo>
 /plugin install ioncache-ai-tools@ioncache-ai-tools
 ```
 
-Hooks load at session start, so restart the session after any change to
-`hooks/hooks.json`, the scripts under `hooks/scripts/`, or the rules under
-`hooks/rules/`.
+Claude Code copies the plugin's files into its own cache at install time and
+never re-reads the live source directory afterward, even across session
+restarts. After any change (`hooks/hooks.json`, the scripts under
+`hooks/scripts/`, the rules under `hooks/rules/`, or either manifest),
+reinstall to force a fresh copy, then start a new session:
+
+```text
+/plugin uninstall ioncache-ai-tools@ioncache-ai-tools
+/plugin install ioncache-ai-tools@ioncache-ai-tools
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add <local path to repo>
+codex plugin add ioncache-ai-tools@ioncache-ai-tools
+```
+
+Codex has the identical caching behavior: it copies the plugin into
+`~/.codex/plugins/cache/` at install time and never re-reads the live source
+afterward. After any change, reinstall to force a fresh copy:
+
+```bash
+codex plugin remove ioncache-ai-tools@ioncache-ai-tools
+codex plugin add ioncache-ai-tools@ioncache-ai-tools
+```
