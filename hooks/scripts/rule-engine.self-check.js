@@ -345,6 +345,28 @@ async function main() {
   fs.rmSync(bothProjectRoot, { recursive: true, force: true })
   fs.rmSync(bothCodexConfigDir, { recursive: true, force: true })
 
+  // getDisabledRuleIds: respects $CODEX_HOME for the default config path
+  // when codexConfigPath isn't explicitly overridden
+  const codexHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-codex-home-'))
+  fs.writeFileSync(
+    path.join(codexHomeDir, 'config.toml'),
+    `[projects."${codexProjectRoot}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-c"]\n`
+  )
+  const previousCodexHome = process.env.CODEX_HOME
+  process.env.CODEX_HOME = codexHomeDir
+  try {
+    const codexHomeDisabled = getDisabledRuleIds(codexProjectRoot)
+    assert.deepStrictEqual(
+      [...codexHomeDisabled],
+      ['test-rule-c'],
+      'should read config.toml from $CODEX_HOME when set, not the hard-coded ~/.codex default'
+    )
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = previousCodexHome
+    fs.rmSync(codexHomeDir, { recursive: true, force: true })
+  }
+
   // getDisabledRuleIds: neither source present returns an empty set
   const emptyProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-no-config-'))
   const noConfigDisabled = getDisabledRuleIds(emptyProjectRoot, { codexConfigPath: '/does/not/exist.toml' })

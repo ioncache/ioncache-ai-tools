@@ -112,7 +112,12 @@ function loadRuleFile(rulesDir, name) {
   }
 }
 
-function getDisabledRuleIds(projectRoot, { codexConfigPath = path.join(os.homedir(), '.codex', 'config.toml') } = {}) {
+const DEFAULT_CODEX_HOME = path.join(os.homedir(), '.codex')
+
+function getDisabledRuleIds(
+  projectRoot,
+  { codexConfigPath = path.join(process.env.CODEX_HOME || DEFAULT_CODEX_HOME, 'config.toml') } = {}
+) {
   const disabled = new Set()
 
   const claudeConfigPath = path.join(projectRoot, '.claude', 'ioncache-ai-tools.local.json')
