@@ -136,7 +136,9 @@ function getDisabledRuleIds(
       const helperPath = path.join(__dirname, 'read_codex_disabled_rules.py')
       const result = spawnSync('python3', [helperPath, codexConfigPath, projectRoot], { encoding: 'utf8' })
       if (result.stderr) console.error(`rule-engine: ${result.stderr.trim()}`)
-      for (const id of JSON.parse(result.stdout || '[]')) disabled.add(id)
+      const parsed = JSON.parse(result.stdout || '[]')
+      const codexDisabledRules = Array.isArray(parsed) ? parsed : []
+      for (const id of codexDisabledRules) disabled.add(id)
     } catch (err) {
       console.error(`rule-engine: failed to read Codex config: ${err.message}`)
     }

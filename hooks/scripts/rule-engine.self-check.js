@@ -354,6 +354,23 @@ async function main() {
   )
   fs.rmSync(codexConfigDir, { recursive: true, force: true })
 
+  // getDisabledRuleIds: a non-list Codex disabled_rules value is ignored
+  // rather than iterated character by character (same bug class as the
+  // Claude Code side, but in the Codex helper's JSON output)
+  const codexStringShapeConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-codex-string-shape-'))
+  const codexStringShapeConfigPath = path.join(codexStringShapeConfigDir, 'config.toml')
+  fs.writeFileSync(
+    codexStringShapeConfigPath,
+    `[projects."${codexProjectRoot}".ioncache-ai-tools]\ndisabled_rules = "test-rule-b"\n`
+  )
+  const codexStringShapeDisabled = getDisabledRuleIds(codexProjectRoot, { codexConfigPath: codexStringShapeConfigPath })
+  assert.deepStrictEqual(
+    [...codexStringShapeDisabled],
+    [],
+    'a non-list Codex disabled_rules value should be ignored, not iterated character by character'
+  )
+  fs.rmSync(codexStringShapeConfigDir, { recursive: true, force: true })
+
   // getDisabledRuleIds: malformed Codex TOML degrades to empty and logs to
   // stderr (via console.error) rather than failing silently
   const malformedCodexConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-malformed-codex-'))
