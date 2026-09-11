@@ -323,7 +323,7 @@ Expected: prints `All rule-engine self-checks passed.` and exits 0. Any `Asserti
   "matcher": {
     "type": "regex",
     "field": "tool_input.command",
-    "pattern": "(^|[\\s;&|(`])(kill|pkill|killall)($|[\\s;&|)`])"
+    "pattern": "(^|[\\s;&|(`])(?:[\\w./-]*/)?(kill|pkill|killall)($|[\\s;&|)`])"
   },
   "action": "deny",
   "message": "Never run kill/pkill/killall without asking the user first, even for your own leftover process. Ask, then wait for an explicit yes."

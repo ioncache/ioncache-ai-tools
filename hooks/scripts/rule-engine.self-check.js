@@ -208,6 +208,21 @@ async function main() {
     false,
     'never-kill-without-asking should not false-positive on its own filename substring (hyphen-boundary regression)'
   )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: '/bin/kill -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a path-qualified kill invocation (e.g. /bin/kill)'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: '/usr/bin/pkill 12345' } }),
+    true,
+    'never-kill-without-asking should match a path-qualified pkill invocation'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: '/sbin/killall 12345' } }),
+    true,
+    'never-kill-without-asking should match a path-qualified killall invocation'
+  )
 
   // Real no-manual-lockfile-edit rule file, matched via matchRule directly
   const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))
