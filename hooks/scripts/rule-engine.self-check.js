@@ -223,6 +223,11 @@ async function main() {
     true,
     'never-kill-without-asking should match a path-qualified killall invocation'
   )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: 'kill>/tmp/log -9 12345' } }),
+    true,
+    'never-kill-without-asking should match redirection attached directly to the command name'
+  )
 
   // Real no-manual-lockfile-edit rule file, matched via matchRule directly
   const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))

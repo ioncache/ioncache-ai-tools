@@ -83,7 +83,7 @@ All three live under `hooks/rules/`, one file per rule, named for the rule
 {
   "event": "PreToolUse",
   "toolNames": ["Bash"],
-  "matcher": { "type": "regex", "field": "tool_input.command", "pattern": "(^|[\\s;&|(`])(?:[\\w./-]*/)?(kill|pkill|killall)($|[\\s;&|)`])" },
+  "matcher": { "type": "regex", "field": "tool_input.command", "pattern": "(^|[\\s;&|(`<>])(?:[\\w./-]*/)?(kill|pkill|killall)($|[\\s;&|)`<>])" },
   "action": "deny",
   "message": "Never run kill/pkill/killall without asking the user first, even for your own leftover process. Ask, then wait."
 }
