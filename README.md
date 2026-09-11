@@ -202,3 +202,29 @@ afterward. After any change, reinstall to force a fresh copy:
 codex plugin remove ioncache-ai-tools@ioncache-ai-tools
 codex plugin add ioncache-ai-tools@ioncache-ai-tools
 ```
+
+## Known limitations and security considerations
+
+**A rule's disable-config isn't itself protected from the agent it's meant
+to guard.** The per-rule disable config (see "Disabling a rule" above) is a
+plain file in the project (`.claude/ioncache-ai-tools.local.json`) or in
+Codex's own `config.toml`, both of which an AI agent using the tool normally
+has Edit/Write access to. An agent could in principle add a rule's id to
+`disabledRules`/`disabled_rules` itself, which would defeat the point of a
+rule meant to guard the agent's own actions (`never-kill-without-asking`,
+for example). The current design has no concept of a mandatory,
+non-disableable rule, since the original goal was that a user can disable
+any individual rule by hand-editing the config. Hardening this (e.g. a
+`mandatory: true` flag on a rule file that the engine refuses to honor a
+disable request for) is a real design change to what the feature
+guarantees, not a bug fix, and hasn't been made.
+
+**The regex-based rules are best-effort heuristics on raw command text, not
+a security boundary.** They operate on `tool_input.command` as plain text,
+with no shell parsing. This has known, accepted gaps: a matched command run
+through a wrapper the pattern doesn't recognize, shell expansion or
+indirection that produces the guarded command without the guarded text
+appearing literally, or a plain argument that happens to contain a guarded
+word (e.g. `echo kill` matches `never-kill-without-asking`, a false
+positive, not a false negative). These rules are meant to catch the common
+case and prompt a pause, not to withstand deliberate evasion.
