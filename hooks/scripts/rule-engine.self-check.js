@@ -264,6 +264,28 @@ async function main() {
     'normalization should not strip a backslash inside single quotes (Bash treats it as fully literal there), regression check'
   )
 
+  // The process-kill boundary regex is hand-duplicated in the shipped rule
+  // and in two docs; nothing else keeps them in sync, so assert it here.
+  const extractPattern = (docPath) => {
+    const text = fs.readFileSync(docPath, 'utf8')
+    const line = text.split('\n').find((l) => l.includes('kill|pkill|killall'))
+    const match = line && line.match(/"pattern":\s*"((?:[^"\\]|\\.)*)"/)
+    return match && JSON.parse(`"${match[1]}"`)
+  }
+  const docsRoot = path.join(__dirname, '..', '..', 'docs', 'superpowers')
+  const specPattern = extractPattern(path.join(docsRoot, 'specs', '2026-09-04-generic-rule-engine-design.md'))
+  const planPattern = extractPattern(path.join(docsRoot, 'plans', '2026-09-04-generic-rule-engine.md'))
+  assert.strictEqual(
+    specPattern,
+    neverKillRule.matcher.pattern,
+    'the design spec example pattern should match the shipped never-kill-without-asking pattern exactly'
+  )
+  assert.strictEqual(
+    planPattern,
+    neverKillRule.matcher.pattern,
+    'the plan example pattern should match the shipped never-kill-without-asking pattern exactly'
+  )
+
   // Real no-manual-lockfile-edit rule file, matched via matchRule directly
   const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))
   assert.strictEqual(
