@@ -7,7 +7,7 @@ The rule engine's 5 pilot rules are all-or-nothing: every rule that matches an e
 ## Goals
 
 - A user can disable individual rules (by filename, minus extension) per project.
-- Configuration lives inside Claude Code's and Codex's own native config surfaces, not a new repo file, not an env var.
+- Configuration lives inside each tool's own per-project config location (Codex's actual `config.toml`; for Claude Code, a plugin-owned file following its `*.local.json` convention, since Claude Code's own `userConfig`/`pluginConfigs` mechanism exports env vars), not a new repo file, not an env var.
 - No platform-detection branching. The engine checks whether each possible config source exists and reads whichever do; nothing decides "which tool am I running under."
 - Works whether only one tool is in use, both, or neither (falls back to every rule enabled, today's behavior).
 
@@ -21,7 +21,7 @@ The rule engine's 5 pilot rules are all-or-nothing: every rule that matches an e
 
 ### Claude Code: `.claude/ioncache-ai-tools.local.json`
 
-This is Claude Code's own documented `plugin-settings` pattern (a per-project, gitignored settings file a plugin reads directly), not something invented for this feature. Project root is `process.cwd()`, the same assumption `hooks/scripts/graphify_context.js` already makes for locating `graphify-out/` in this repo.
+This is not Claude Code's native `userConfig`/`pluginConfigs` mechanism (that requires the CLI to prompt the user for values and exports them to hook processes as `CLAUDE_PLUGIN_OPTION_*` environment variables, which this feature was explicitly told to avoid). It's a plugin-owned convention file instead, following Claude Code's own `*.local.json` gitignore pattern for per-project, machine-local settings, read directly by this plugin's own code, not by Claude Code itself. Project root is `process.cwd()`, the same assumption `hooks/scripts/graphify_context.js` already makes for locating `graphify-out/` in this repo.
 
 ```json
 { "disabledRules": ["never-kill-without-asking"] }
