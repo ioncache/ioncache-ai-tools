@@ -14,7 +14,12 @@
 
 const fs = require('fs')
 
-const RAW_WORKTREE_ADD = /(^|[\s;&|(`])git\s+(-C\s+\S+\s+)?worktree\s+add($|[\s;&|)`])/
+// Non-greedy `(?:\s+\S+)*?` tolerates any git global options (-C <dir>,
+// --no-pager, -c name=value, etc.) between `git` and `worktree add`, at the
+// cost of also matching an unrelated later `worktree add` in a long command -
+// an acceptable false positive for a safety guard, per the pattern's own
+// design note above.
+const RAW_WORKTREE_ADD = /(^|[\s;&|(`])git(?:\s+\S+)*?\s+worktree\s+add($|[\s;&|)`])/
 const OH_MY_ZSH_ALIAS = /(^|[\s;&|(`<>])gwta($|[\s;&|)`<>])/
 
 function main() {
