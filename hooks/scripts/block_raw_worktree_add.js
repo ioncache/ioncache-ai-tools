@@ -15,7 +15,7 @@
 const fs = require('fs')
 
 const RAW_WORKTREE_ADD = /(^|[\s;&|(`])git\s+(-C\s+\S+\s+)?worktree\s+add($|[\s;&|)`])/
-const OH_MY_ZSH_ALIAS = /(^|[\s;&|(`])gwta($|[\s;&|)`])/
+const OH_MY_ZSH_ALIAS = /(^|[\s;&|(`<>])gwta($|[\s;&|)`<>])/
 
 function main() {
   let input
