@@ -13,6 +13,7 @@
 // have to be removed from the shell, not denied by name.
 
 const fs = require('fs')
+const { normalizeShellCommand } = require('./rule-engine.js')
 
 // Non-greedy `(?:\s+\S+)*?` tolerates any git global options (-C <dir>,
 // --no-pager, -c name=value, etc.) between `git` and `worktree add`, at the
@@ -31,7 +32,7 @@ function main() {
   }
   if (input.tool_name !== 'Bash') return
 
-  const command = (input.tool_input || {}).command || ''
+  const command = normalizeShellCommand((input.tool_input || {}).command || '')
   if (!RAW_WORKTREE_ADD.test(command) && !OH_MY_ZSH_ALIAS.test(command)) return
 
   console.log(
