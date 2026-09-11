@@ -85,6 +85,31 @@ engine code. Three shapes:
 | `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
 | `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
 
+### Disabling a rule
+
+Add either config file, whichever CLI you use. No repo file, no environment
+variable.
+
+**Claude Code:** `.claude/ioncache-ai-tools.local.json` in the project root
+(gitignored, not shipped with the plugin):
+
+```json
+{ "disabledRules": ["never-kill-without-asking"] }
+```
+
+**Codex:** a project-scoped table in `~/.codex/config.toml`, hand-edited,
+there is no CLI command for it:
+
+```toml
+[projects."/absolute/path/to/project".ioncache-ai-tools]
+disabled_rules = ["never-kill-without-asking"]
+```
+
+A rule's id is its filename minus the extension. Both sources are read and
+unioned, disabling a rule in either one disables it. Takes effect after the
+usual reinstall (see Local development above), this applies to real
+installs too, not just local dev.
+
 Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
 
 ## Skills
