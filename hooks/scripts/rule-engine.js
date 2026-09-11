@@ -18,15 +18,49 @@ function toolNameMatches(rule, hookInput) {
   return rule.toolNames.includes(hookInput.tool_name)
 }
 
-// Bash removes a backslash before a word character and strips matching
-// quotes before command lookup, so `\kill`, `k\ill`, and `'kill'` all
-// execute plain `kill`. This normalizes those forms before a regex rule
-// sees the command, so a rule doesn't have to special-case them itself.
-// Scoped to Bash's own command field: normalizing an unrelated tool
-// input field (e.g. Write content) would apply shell semantics where
-// none exist.
+// Bash removes a backslash before a character and strips matching quotes
+// before command lookup, so `\kill`, `k\ill`, and `'kill'` all execute
+// plain `kill`. This normalizes those forms before a regex rule sees the
+// command, so a rule doesn't have to special-case them itself. Meant for
+// Bash's own command field: normalizing an unrelated tool input field
+// (e.g. Write content) would apply shell semantics where none exist.
+//
+// This tracks single-quote state because Bash treats everything inside
+// single quotes as fully literal: no backslash-escaping, no nested-quote
+// closing, no line continuation. A naive "strip every backslash and every
+// quote character" pass (an earlier version of this function) doesn't
+// track that, so `git commit -m "note about 'kill'"` gets every quote
+// stripped instead of just the outer, real delimiters, denying a command
+// that never invokes kill at all, and `echo '\kill'` (a literal 6-character
+// string, since backslash isn't special in single quotes) gets its
+// backslash stripped into a false match. Double-quote content isn't
+// tracked as separately from unquoted text here, since for this rule's
+// purposes ("does a guarded word appear as its own token") the only
+// behavior that actually needs to differ is single-quote literalness.
 function normalizeShellCommand(command) {
-  return command.replace(/\\(\w)/g, '$1').replace(/['"]/g, '')
+  let result = ''
+  let quote = null // null | "'" | '"'
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (ch === '\\' && quote !== "'") {
+      const next = command[i + 1]
+      if (next === '\n') {
+        i++ // line continuation: Bash splices these away entirely
+        continue
+      }
+      if (next !== undefined) {
+        result += next
+        i++
+        continue
+      }
+    }
+    if ((ch === "'" || ch === '"') && (quote === null || quote === ch)) {
+      quote = quote === ch ? null : ch
+      continue
+    }
+    result += ch
+  }
+  return result
 }
 
 function matchRule(rule, hookInput) {
@@ -221,7 +255,8 @@ module.exports = {
   runRules,
   loadRulesForEvent,
   runHook,
-  getDisabledRuleIds
+  getDisabledRuleIds,
+  normalizeShellCommand
 }
 
 if (require.main === module) main()

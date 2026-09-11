@@ -248,6 +248,21 @@ async function main() {
     true,
     'never-kill-without-asking should match a double-quoted command name'
   )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: 'ki\\\nl\\\nl -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a command name split by backslash-newline line continuation'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: `git commit -m "note about 'kill'"` } }),
+    false,
+    'normalization should not strip a single-quoted substring nested inside double quotes (real Bash treats it as literal text, not a delimiter), regression check'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: "echo '\\kill'" } }),
+    false,
+    'normalization should not strip a backslash inside single quotes (Bash treats it as fully literal there), regression check'
+  )
 
   // Real no-manual-lockfile-edit rule file, matched via matchRule directly
   const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))
