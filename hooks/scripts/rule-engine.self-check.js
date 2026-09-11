@@ -9,7 +9,8 @@ const {
   mergePreToolUse,
   mergeUserPromptSubmit,
   runRules,
-  loadRulesForEvent
+  loadRulesForEvent,
+  getDisabledRuleIds
 } = require('./rule-engine.js')
 const fixEmdash = require('../rules/fix-emdash.js')
 
@@ -220,6 +221,91 @@ async function main() {
   })
   assert.strictEqual(multiEditResult.updatedInput.edits[0].new_string, 'a, b')
   assert.strictEqual(multiEditResult.updatedInput.edits[1].new_string, 'unchanged')
+
+  // getDisabledRuleIds: reads disabledRules from a Claude Code local settings file
+  const claudeProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-claude-config-'))
+  fs.mkdirSync(path.join(claudeProjectRoot, '.claude'))
+  fs.writeFileSync(
+    path.join(claudeProjectRoot, '.claude', 'ioncache-ai-tools.local.json'),
+    JSON.stringify({ disabledRules: ['test-rule-a'] })
+  )
+  const claudeDisabled = getDisabledRuleIds(claudeProjectRoot, { codexConfigPath: '/does/not/exist.toml' })
+  assert.deepStrictEqual(
+    [...claudeDisabled],
+    ['test-rule-a'],
+    'should read disabledRules from the Claude Code local settings file'
+  )
+  fs.rmSync(claudeProjectRoot, { recursive: true, force: true })
+
+  // getDisabledRuleIds: a malformed Claude Code settings file degrades to empty, never throws
+  const malformedProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-malformed-config-'))
+  fs.mkdirSync(path.join(malformedProjectRoot, '.claude'))
+  fs.writeFileSync(path.join(malformedProjectRoot, '.claude', 'ioncache-ai-tools.local.json'), '{not valid json')
+  const malformedDisabled = getDisabledRuleIds(malformedProjectRoot, { codexConfigPath: '/does/not/exist.toml' })
+  assert.deepStrictEqual(
+    [...malformedDisabled],
+    [],
+    'a malformed settings file should degrade to no disabled rules, not throw'
+  )
+  fs.rmSync(malformedProjectRoot, { recursive: true, force: true })
+
+  // getDisabledRuleIds: reads disabled_rules from a Codex config.toml project section, via the real Python helper
+  const codexProjectRoot = '/tmp/rule-engine-codex-test-project'
+  const codexConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-codex-config-'))
+  const codexConfigPath = path.join(codexConfigDir, 'config.toml')
+  fs.writeFileSync(
+    codexConfigPath,
+    `[projects."${codexProjectRoot}"]\ntrust_level = "trusted"\n\n[projects."${codexProjectRoot}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n`
+  )
+  const codexDisabled = getDisabledRuleIds(codexProjectRoot, { codexConfigPath })
+  assert.deepStrictEqual(
+    [...codexDisabled],
+    ['test-rule-b'],
+    'should read disabled_rules from the Codex config.toml project section via the Python helper'
+  )
+  fs.rmSync(codexConfigDir, { recursive: true, force: true })
+
+  // getDisabledRuleIds: both sources present at once union together, not error
+  const bothProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-both-config-'))
+  fs.mkdirSync(path.join(bothProjectRoot, '.claude'))
+  fs.writeFileSync(
+    path.join(bothProjectRoot, '.claude', 'ioncache-ai-tools.local.json'),
+    JSON.stringify({ disabledRules: ['test-rule-a'] })
+  )
+  const bothCodexConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-both-codex-'))
+  const bothCodexConfigPath = path.join(bothCodexConfigDir, 'config.toml')
+  fs.writeFileSync(
+    bothCodexConfigPath,
+    `[projects."${bothProjectRoot}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n`
+  )
+  const bothDisabled = getDisabledRuleIds(bothProjectRoot, { codexConfigPath: bothCodexConfigPath })
+  assert.deepStrictEqual(
+    [...bothDisabled].sort(),
+    ['test-rule-a', 'test-rule-b'],
+    'both sources present at once should union together, not overwrite or error'
+  )
+  fs.rmSync(bothProjectRoot, { recursive: true, force: true })
+  fs.rmSync(bothCodexConfigDir, { recursive: true, force: true })
+
+  // getDisabledRuleIds: neither source present returns an empty set
+  const emptyProjectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-no-config-'))
+  const noConfigDisabled = getDisabledRuleIds(emptyProjectRoot, { codexConfigPath: '/does/not/exist.toml' })
+  assert.deepStrictEqual([...noConfigDisabled], [], 'no config anywhere should mean no disabled rules')
+  fs.rmSync(emptyProjectRoot, { recursive: true, force: true })
+
+  // loadRulesForEvent: disabledRuleIds excludes the matching rule, keeps others
+  const filterRulesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rule-engine-filter-'))
+  fs.writeFileSync(
+    path.join(filterRulesDir, 'rule-one.json'),
+    JSON.stringify({ event: 'PreToolUse', matcher: { type: 'always' }, action: 'deny', message: 'one' })
+  )
+  fs.writeFileSync(
+    path.join(filterRulesDir, 'rule-two.json'),
+    JSON.stringify({ event: 'PreToolUse', matcher: { type: 'always' }, action: 'deny', message: 'two' })
+  )
+  const filteredRules = loadRulesForEvent(filterRulesDir, 'PreToolUse', new Set(['rule-one'])).map((r) => r.name)
+  assert.deepStrictEqual(filteredRules, ['rule-two.json'], 'a disabled rule id should exclude that rule and keep the other')
+  fs.rmSync(filterRulesDir, { recursive: true, force: true })
 
   console.log('All rule-engine self-checks passed.')
 }

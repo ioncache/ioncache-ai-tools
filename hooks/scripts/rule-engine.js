@@ -4,6 +4,8 @@
 
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
+const { spawnSync } = require('child_process')
 
 function getField(obj, dotPath) {
   return dotPath
@@ -104,13 +106,40 @@ function loadRuleFile(rulesDir, name) {
   }
 }
 
-function loadRulesForEvent(rulesDir, event) {
+function getDisabledRuleIds(projectRoot, { codexConfigPath = path.join(os.homedir(), '.codex', 'config.toml') } = {}) {
+  const disabled = new Set()
+
+  const claudeConfigPath = path.join(projectRoot, '.claude', 'ioncache-ai-tools.local.json')
+  if (fs.existsSync(claudeConfigPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(claudeConfigPath, 'utf8'))
+      for (const id of config.disabledRules || []) disabled.add(id)
+    } catch (err) {
+      console.error(`rule-engine: failed to read ${claudeConfigPath}: ${err.message}`)
+    }
+  }
+
+  if (fs.existsSync(codexConfigPath)) {
+    try {
+      const helperPath = path.join(__dirname, 'read_codex_disabled_rules.py')
+      const result = spawnSync('python3', [helperPath, codexConfigPath, projectRoot], { encoding: 'utf8' })
+      for (const id of JSON.parse(result.stdout || '[]')) disabled.add(id)
+    } catch (err) {
+      console.error(`rule-engine: failed to read Codex config: ${err.message}`)
+    }
+  }
+
+  return disabled
+}
+
+function loadRulesForEvent(rulesDir, event, disabledRuleIds = new Set()) {
   if (!fs.existsSync(rulesDir)) return []
   return fs
     .readdirSync(rulesDir)
     .filter((name) => name.endsWith('.json') || name.endsWith('.js'))
     .map((name) => loadRuleFile(rulesDir, name))
     .filter((rule) => rule !== null && rule.event === event)
+    .filter((rule) => !disabledRuleIds.has(path.basename(rule.name, path.extname(rule.name))))
 }
 
 async function runHook(overrideRulesDir) {
@@ -123,9 +152,10 @@ async function runHook(overrideRulesDir) {
   }
 
   const rulesDir = overrideRulesDir || path.join(__dirname, '..', 'rules')
+  const disabledRuleIds = getDisabledRuleIds(process.cwd())
   let rules
   try {
-    rules = loadRulesForEvent(rulesDir, event)
+    rules = loadRulesForEvent(rulesDir, event, disabledRuleIds)
   } catch (err) {
     console.error(`rule-engine: failed to load rules from ${rulesDir}: ${err.message}`)
     rules = []
@@ -150,7 +180,8 @@ module.exports = {
   mergeUserPromptSubmit,
   runRules,
   loadRulesForEvent,
-  runHook
+  runHook,
+  getDisabledRuleIds
 }
 
 if (require.main === module) main()
