@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+from rule_engine import (  # noqa: E402
+    match_rule,
+    resolve_action,
+    merge_pre_tool_use,
+    merge_user_prompt_submit,
+    run_rules,
+    load_rules_for_event,
+    get_disabled_rule_ids,
+)
+
+RULES_DIR = os.path.join(SCRIPT_DIR, '..', 'rules')
+
+
+def _load_module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+fix_emdash = _load_module(os.path.join(RULES_DIR, 'fix_emdash.py'), 'fix_emdash')
+no_manual_lockfile_edit_bash = _load_module(
+    os.path.join(RULES_DIR, 'no_manual_lockfile_edit_bash.py'), 'no_manual_lockfile_edit_bash'
+)
+
+
+def main():
+    # match_rule: always
+    assert match_rule({'matcher': {'type': 'always'}}, {}) is True, 'always matcher should always match'
+
+    # match_rule: regex + toolNames restriction
+    regex_rule = {
+        'toolNames': ['Bash'],
+        'matcher': {'type': 'regex', 'field': 'tool_input.command', 'pattern': r'\bkill\b'},
+    }
+    assert (
+        match_rule(regex_rule, {'tool_name': 'Bash', 'tool_input': {'command': 'kill -9 123'}}) is True
+    ), 'regex matcher should match when pattern is present'
+    assert (
+        match_rule(regex_rule, {'tool_name': 'Bash', 'tool_input': {'command': 'ls'}}) is False
+    ), 'regex matcher should not match unrelated command'
+    assert (
+        match_rule(regex_rule, {'tool_name': 'Read', 'tool_input': {'command': 'kill'}}) is False
+    ), 'toolNames restriction should exclude other tools'
+
+    # match_rule: custom matches() function is invoked and its result respected
+    custom_matcher_called = {'value': False}
+
+    def custom_matches(hook_input):
+        custom_matcher_called['value'] = True
+        return hook_input['tool_input']['command'] == 'trigger-me'
+
+    custom_match_rule = {'toolNames': ['Bash'], 'matches': custom_matches}
+    assert (
+        match_rule(custom_match_rule, {'tool_name': 'Bash', 'tool_input': {'command': 'trigger-me'}}) is True
+    ), 'custom matches() should be invoked and its true result respected'
+    assert custom_matcher_called['value'] is True, 'custom matches() should actually be called'
+    assert (
+        match_rule(custom_match_rule, {'tool_name': 'Bash', 'tool_input': {'command': 'something-else'}}) is False
+    ), 'custom matches() false result should be respected'
+
+    # match_rule: custom matches() is still gated by toolNames
+    custom_matcher_called['value'] = False
+    assert (
+        match_rule(custom_match_rule, {'tool_name': 'Read', 'tool_input': {'command': 'trigger-me'}}) is False
+    ), 'toolNames should exclude the tool before custom matches() runs'
+    assert custom_matcher_called['value'] is False, 'custom matches() should not be called when toolNames excludes the tool'
+
+    # resolve_action: declarative deny/inject
+    assert resolve_action({'action': 'deny', 'message': 'no'}, {}) == {'action': 'deny', 'message': 'no'}
+    assert resolve_action({'action': 'inject', 'message': 'hi'}, {}) == {'action': 'inject', 'message': 'hi'}
+
+    # resolve_action: scripted rule
+    scripted_rule = {'check': lambda _input: {'action': 'rewrite', 'updatedInput': {'command': 'fixed'}}}
+    assert resolve_action(scripted_rule, {}) == {'action': 'rewrite', 'updatedInput': {'command': 'fixed'}}
+
+    # merge_pre_tool_use: deny wins over rewrite
+    deny_wins = merge_pre_tool_use(
+        [
+            {'action': 'rewrite', 'updatedInput': {'command': 'fixed'}},
+            {'action': 'deny', 'message': 'blocked'},
+        ]
+    )
+    assert deny_wins['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert deny_wins['hookSpecificOutput']['permissionDecisionReason'] == 'blocked'
+
+    # merge_pre_tool_use: rewrite only
+    rewrite_only = merge_pre_tool_use(
+        [{'action': 'rewrite', 'updatedInput': {'command': 'fixed'}, 'systemMessage': 'msg'}]
+    )
+    assert rewrite_only['hookSpecificOutput']['permissionDecision'] == 'allow'
+    assert rewrite_only['hookSpecificOutput']['updatedInput'] == {'command': 'fixed'}
+    assert rewrite_only['systemMessage'] == 'msg'
+
+    # merge_pre_tool_use: nothing matched
+    assert merge_pre_tool_use([]) is None
+
+    # merge_user_prompt_submit: concatenation
+    injected = merge_user_prompt_submit([{'action': 'inject', 'message': 'first'}, {'action': 'inject', 'message': 'second'}])
+    assert injected['additionalContext'] == 'first\n\nsecond'
+
+    # merge_user_prompt_submit: nothing matched
+    assert merge_user_prompt_submit([]) is None
+
+    # run_rules: a throwing rule does not break other rules
+    def _throw(_input):
+        raise RuntimeError('boom')
+
+    rules_with_failure = [
+        {'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'check': _throw},
+        {'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'caught the good one'},
+    ]
+    run_result = run_rules(rules_with_failure, 'PreToolUse', {'tool_name': 'Bash', 'tool_input': {}})
+    assert run_result['hookSpecificOutput']['permissionDecisionReason'] == 'caught the good one'
+
+    # load_rules_for_event: reads json + py rules, filters by event
+    tmp_dir = tempfile.mkdtemp(prefix='rule-engine-test-')
+    with open(os.path.join(tmp_dir, 'a.json'), 'w', encoding='utf-8') as f:
+        json.dump({'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'a'}, f)
+    with open(os.path.join(tmp_dir, 'b.json'), 'w', encoding='utf-8') as f:
+        json.dump({'event': 'UserPromptSubmit', 'matcher': {'type': 'always'}, 'action': 'inject', 'message': 'b'}, f)
+    with open(os.path.join(tmp_dir, 'c.py'), 'w', encoding='utf-8') as f:
+        f.write("EVENT = 'PreToolUse'\ndef matches(hook_input):\n    return True\ndef check(hook_input):\n    return None\n")
+    pre_tool_use_rules = load_rules_for_event(tmp_dir, 'PreToolUse')
+    assert len(pre_tool_use_rules) == 2, 'should load both PreToolUse rules (json + py)'
+    user_prompt_rules = load_rules_for_event(tmp_dir, 'UserPromptSubmit')
+    assert len(user_prompt_rules) == 1, 'should load only the UserPromptSubmit rule'
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # load_rules_for_event: missing directory returns empty list, never throws
+    assert load_rules_for_event(os.path.join(tmp_dir, 'does-not-exist'), 'PreToolUse') == []
+
+    # load_rules_for_event: a bad rule file is skipped, valid siblings still load
+    bad_rules_dir = tempfile.mkdtemp(prefix='rule-engine-bad-')
+    with open(os.path.join(bad_rules_dir, 'good.json'), 'w', encoding='utf-8') as f:
+        json.dump({'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'good'}, f)
+    with open(os.path.join(bad_rules_dir, 'bad.json'), 'w', encoding='utf-8') as f:
+        f.write('{invalid json')
+    with open(os.path.join(bad_rules_dir, 'throw.py'), 'w', encoding='utf-8') as f:
+        f.write("raise RuntimeError('rule load error')\n")
+    load_error = None
+    bad_dir_rules = []
+    try:
+        bad_dir_rules = load_rules_for_event(bad_rules_dir, 'PreToolUse')
+    except Exception as err:  # pragma: no cover - should never trigger
+        load_error = err
+    assert load_error is None, 'load_rules_for_event should not throw on invalid rule files'
+    assert len(bad_dir_rules) == 1, 'only the valid rule should load, the bad ones are skipped'
+    assert bad_dir_rules[0]['name'] == 'good.json', 'the valid rule should still be the one that loads'
+    shutil.rmtree(bad_rules_dir, ignore_errors=True)
+
+    # Real pilot rules load correctly for PreToolUse
+    real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
+    assert 'never-kill-without-asking.json' in real_pre_tool_use_rules
+    assert 'no-manual-lockfile-edit.json' in real_pre_tool_use_rules
+    assert 'no_manual_lockfile_edit_bash.py' in real_pre_tool_use_rules
+    assert 'block_raw_worktree_add.py' in real_pre_tool_use_rules
+
+    # Real pilot rules load correctly for UserPromptSubmit
+    real_user_prompt_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'UserPromptSubmit')]
+    assert 'scope-exactly-what-asked.json' in real_user_prompt_rules
+    assert 'verify-state-before-claiming.json' in real_user_prompt_rules
+
+    # Real never-kill-without-asking rule file, matched via match_rule directly
+    # (exercises the shipped pattern itself, not a hand-copied one)
+    with open(os.path.join(RULES_DIR, 'never-kill-without-asking.json'), 'r', encoding='utf-8') as f:
+        never_kill_rule = json.load(f)
+    kill_cases = [
+        ('kill -9 12345', True, 'a real kill invocation'),
+        ('cat hooks/rules/never-kill-without-asking.json', False, 'its own filename substring (hyphen-boundary regression)'),
+        ('/bin/kill -9 12345', True, 'a path-qualified kill invocation (e.g. /bin/kill)'),
+        ('/usr/bin/pkill 12345', True, 'a path-qualified pkill invocation'),
+        ('/sbin/killall 12345', True, 'a path-qualified killall invocation'),
+        ('kill>/tmp/log -9 12345', True, 'redirection attached directly to the command name'),
+        ('\\kill -9 12345', True, 'a backslash-escaped command name (Bash executes it as plain kill)'),
+        ('k\\ill -9 12345', True, 'a mid-word backslash escape'),
+        ("'kill' -9 12345", True, 'a single-quoted command name'),
+        ('"kill" -9 12345', True, 'a double-quoted command name'),
+        ('ki\\\nl\\\nl -9 12345', True, 'a command name split by backslash-newline line continuation'),
+        (
+            'git commit -m "note about \'kill\'"',
+            False,
+            "a single-quoted substring nested inside double quotes (real Bash treats it as literal text), regression check",
+        ),
+        ("echo '\\kill'", False, 'a backslash inside single quotes (Bash treats it as fully literal there), regression check'),
+    ]
+    for command, expected, label in kill_cases:
+        got = match_rule(never_kill_rule, {'tool_name': 'Bash', 'tool_input': {'command': command}})
+        assert got is expected, f'never-kill-without-asking should {"" if expected else "not "}match {label}: {command!r}'
+
+    # The process-kill boundary regex is hand-duplicated in the shipped rule
+    # and in two docs; nothing else keeps them in sync, so assert it here.
+    def extract_pattern(doc_path):
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        line = next((l for l in text.split('\n') if 'kill|pkill|killall' in l), None)
+        if line is None:
+            return None
+        match = __import__('re').search(r'"pattern":\s*"((?:[^"\\]|\\.)*)"', line)
+        return json.loads(f'"{match.group(1)}"') if match else None
+
+    docs_root = os.path.join(SCRIPT_DIR, '..', '..', 'docs', 'superpowers')
+    spec_pattern = extract_pattern(os.path.join(docs_root, 'specs', '2026-09-04-generic-rule-engine-design.md'))
+    plan_pattern = extract_pattern(os.path.join(docs_root, 'plans', '2026-09-04-generic-rule-engine.md'))
+    assert (
+        spec_pattern == never_kill_rule['matcher']['pattern']
+    ), 'the design spec example pattern should match the shipped never-kill-without-asking pattern exactly'
+    assert (
+        plan_pattern == never_kill_rule['matcher']['pattern']
+    ), 'the plan example pattern should match the shipped never-kill-without-asking pattern exactly'
+
+    # Real no-manual-lockfile-edit rule file, matched via match_rule directly
+    with open(os.path.join(RULES_DIR, 'no-manual-lockfile-edit.json'), 'r', encoding='utf-8') as f:
+        lockfile_rule = json.load(f)
+    assert (
+        match_rule(lockfile_rule, {'tool_name': 'Edit', 'tool_input': {'file_path': 'package-lock.json'}}) is True
+    ), 'no-manual-lockfile-edit should match a real lockfile edit'
+    # No hyphen-boundary regression case here: this pattern anchors on a
+    # literal filename suffix ($), it never uses \b, so there's no
+    # separator-class boundary for a hyphenated identifier to slip past.
+
+    # no_manual_lockfile_edit_bash: catches Bash mutations the Edit/Write/
+    # MultiEdit-only rule above can't see
+    lockfile_name = 'package-lock.json'
+    lockfile_cases = [
+        (f'printf x > {lockfile_name}', True, 'a redirection into a lockfile'),
+        (f'sed -i s/a/b/ {lockfile_name}', True, 'sed -i targeting a lockfile'),
+        (f'cat {lockfile_name}', False, 'reading a lockfile without a mutation'),
+        (
+            f's\\ed -i s/a/b/ {lockfile_name}',
+            True,
+            'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never-kill-without-asking)',
+        ),
+        ('npm install', False, 'an unrelated Bash command'),
+    ]
+    for command, expected, label in lockfile_cases:
+        got = no_manual_lockfile_edit_bash.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
+        assert got is expected, f'no_manual_lockfile_edit_bash should {"" if expected else "not "}match {label}'
+
+    # fix_emdash: matches per tool type
+    em_dash = chr(0x2014)
+    assert (
+        fix_emdash.matches({'tool_name': 'Bash', 'tool_input': {'command': f'a{em_dash}b'}}) is True
+    ), 'fix_emdash should match a Bash command containing an em-dash'
+    assert (
+        fix_emdash.matches({'tool_name': 'Bash', 'tool_input': {'command': 'a-b'}}) is False
+    ), 'fix_emdash should not match a plain hyphen'
+
+    # fix_emdash: check denies Bash instead of rewriting (an inserted space
+    # could split one shell argument into two)
+    bash_result = fix_emdash.check({'tool_name': 'Bash', 'tool_input': {'command': f'one{em_dash}two', 'description': 'keep me'}})
+    assert bash_result['action'] == 'deny', 'fix_emdash should deny Bash rather than rewrite it'
+    assert isinstance(bash_result.get('message'), str) and bash_result['message'], 'deny should include a message'
+
+    # fix_emdash: check rewrites MultiEdit edits array, leaves unaffected edits untouched
+    multi_edit_result = fix_emdash.check(
+        {
+            'tool_name': 'MultiEdit',
+            'tool_input': {
+                'file_path': 'f.py',
+                'edits': [
+                    {'old_string': 'x', 'new_string': f'a{em_dash}b'},
+                    {'old_string': 'y', 'new_string': 'unchanged'},
+                ],
+            },
+        }
+    )
+    assert multi_edit_result['updatedInput']['edits'][0]['new_string'] == 'a, b'
+    assert multi_edit_result['updatedInput']['edits'][1]['new_string'] == 'unchanged'
+
+    # get_disabled_rule_ids: reads disabledRules from a Claude Code local settings file
+    claude_project_root = tempfile.mkdtemp(prefix='rule-engine-claude-config-')
+    os.mkdir(os.path.join(claude_project_root, '.claude'))
+    with open(os.path.join(claude_project_root, '.claude', 'ioncache-ai-tools.local.json'), 'w', encoding='utf-8') as f:
+        json.dump({'disabledRules': ['test-rule-a']}, f)
+    claude_disabled = get_disabled_rule_ids(claude_project_root, codex_config_path='/does/not/exist.toml')
+    assert claude_disabled == {'test-rule-a'}, 'should read disabledRules from the Claude Code local settings file'
+    shutil.rmtree(claude_project_root, ignore_errors=True)
+
+    # get_disabled_rule_ids: a malformed Claude Code settings file degrades to empty, never throws
+    malformed_project_root = tempfile.mkdtemp(prefix='rule-engine-malformed-config-')
+    os.mkdir(os.path.join(malformed_project_root, '.claude'))
+    with open(os.path.join(malformed_project_root, '.claude', 'ioncache-ai-tools.local.json'), 'w', encoding='utf-8') as f:
+        f.write('{not valid json')
+    malformed_disabled = get_disabled_rule_ids(malformed_project_root, codex_config_path='/does/not/exist.toml')
+    assert malformed_disabled == set(), 'a malformed settings file should degrade to no disabled rules, not throw'
+    shutil.rmtree(malformed_project_root, ignore_errors=True)
+
+    # get_disabled_rule_ids: a string disabledRules value is ignored rather
+    # than iterated character by character
+    string_shape_project_root = tempfile.mkdtemp(prefix='rule-engine-string-shape-')
+    os.mkdir(os.path.join(string_shape_project_root, '.claude'))
+    with open(os.path.join(string_shape_project_root, '.claude', 'ioncache-ai-tools.local.json'), 'w', encoding='utf-8') as f:
+        json.dump({'disabledRules': 'test-rule-a'}, f)
+    string_shape_disabled = get_disabled_rule_ids(string_shape_project_root, codex_config_path='/does/not/exist.toml')
+    assert string_shape_disabled == set(), 'a string disabledRules value should be ignored, not iterated character by character'
+    shutil.rmtree(string_shape_project_root, ignore_errors=True)
+
+    # get_disabled_rule_ids: reads disabled_rules from a Codex config.toml project section
+    codex_project_root = '/tmp/rule-engine-codex-test-project'
+    codex_config_dir = tempfile.mkdtemp(prefix='rule-engine-codex-config-')
+    codex_config_path = os.path.join(codex_config_dir, 'config.toml')
+    with open(codex_config_path, 'w', encoding='utf-8') as f:
+        f.write(
+            f'[projects."{codex_project_root}"]\ntrust_level = "trusted"\n\n'
+            f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n'
+        )
+    codex_disabled = get_disabled_rule_ids(codex_project_root, codex_config_path=codex_config_path)
+    assert codex_disabled == {'test-rule-b'}, 'should read disabled_rules from the Codex config.toml project section'
+    shutil.rmtree(codex_config_dir, ignore_errors=True)
+
+    # get_disabled_rule_ids: a non-list Codex disabled_rules value is ignored
+    # rather than iterated character by character
+    codex_string_shape_dir = tempfile.mkdtemp(prefix='rule-engine-codex-string-shape-')
+    codex_string_shape_path = os.path.join(codex_string_shape_dir, 'config.toml')
+    with open(codex_string_shape_path, 'w', encoding='utf-8') as f:
+        f.write(f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = "test-rule-b"\n')
+    codex_string_shape_disabled = get_disabled_rule_ids(codex_project_root, codex_config_path=codex_string_shape_path)
+    assert (
+        codex_string_shape_disabled == set()
+    ), 'a non-list Codex disabled_rules value should be ignored, not iterated character by character'
+    shutil.rmtree(codex_string_shape_dir, ignore_errors=True)
+
+    # get_disabled_rule_ids: malformed Codex TOML degrades to empty and logs
+    # to stderr rather than failing silently
+    malformed_codex_dir = tempfile.mkdtemp(prefix='rule-engine-malformed-codex-')
+    malformed_codex_path = os.path.join(malformed_codex_dir, 'config.toml')
+    with open(malformed_codex_path, 'w', encoding='utf-8') as f:
+        f.write('not valid toml [[[')
+    captured_stderr = io.StringIO()
+    with contextlib.redirect_stderr(captured_stderr):
+        malformed_codex_disabled = get_disabled_rule_ids(codex_project_root, codex_config_path=malformed_codex_path)
+    assert malformed_codex_disabled == set(), 'malformed Codex TOML should degrade to no disabled rules'
+    assert captured_stderr.getvalue(), 'a malformed Codex TOML parse failure should be logged, not silently swallowed'
+    shutil.rmtree(malformed_codex_dir, ignore_errors=True)
+
+    # get_disabled_rule_ids: both sources present at once union together, not error
+    both_project_root = tempfile.mkdtemp(prefix='rule-engine-both-config-')
+    os.mkdir(os.path.join(both_project_root, '.claude'))
+    with open(os.path.join(both_project_root, '.claude', 'ioncache-ai-tools.local.json'), 'w', encoding='utf-8') as f:
+        json.dump({'disabledRules': ['test-rule-a']}, f)
+    both_codex_dir = tempfile.mkdtemp(prefix='rule-engine-both-codex-')
+    both_codex_path = os.path.join(both_codex_dir, 'config.toml')
+    with open(both_codex_path, 'w', encoding='utf-8') as f:
+        f.write(f'[projects."{both_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n')
+    both_disabled = get_disabled_rule_ids(both_project_root, codex_config_path=both_codex_path)
+    assert both_disabled == {'test-rule-a', 'test-rule-b'}, 'both sources present at once should union together, not overwrite or error'
+    shutil.rmtree(both_project_root, ignore_errors=True)
+    shutil.rmtree(both_codex_dir, ignore_errors=True)
+
+    # get_disabled_rule_ids: respects $CODEX_HOME for the default config path
+    # when codex_config_path isn't explicitly overridden
+    codex_home_dir = tempfile.mkdtemp(prefix='rule-engine-codex-home-')
+    with open(os.path.join(codex_home_dir, 'config.toml'), 'w', encoding='utf-8') as f:
+        f.write(f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-c"]\n')
+    previous_codex_home = os.environ.get('CODEX_HOME')
+    os.environ['CODEX_HOME'] = codex_home_dir
+    try:
+        codex_home_disabled = get_disabled_rule_ids(codex_project_root)
+        assert codex_home_disabled == {
+            'test-rule-c'
+        }, 'should read config.toml from $CODEX_HOME when set, not the hard-coded ~/.codex default'
+    finally:
+        if previous_codex_home is None:
+            os.environ.pop('CODEX_HOME', None)
+        else:
+            os.environ['CODEX_HOME'] = previous_codex_home
+        shutil.rmtree(codex_home_dir, ignore_errors=True)
+
+    # get_disabled_rule_ids: neither source present returns an empty set
+    empty_project_root = tempfile.mkdtemp(prefix='rule-engine-no-config-')
+    no_config_disabled = get_disabled_rule_ids(empty_project_root, codex_config_path='/does/not/exist.toml')
+    assert no_config_disabled == set(), 'no config anywhere should mean no disabled rules'
+    shutil.rmtree(empty_project_root, ignore_errors=True)
+
+    # load_rules_for_event: disabled_rule_ids excludes the matching rule, keeps others
+    filter_rules_dir = tempfile.mkdtemp(prefix='rule-engine-filter-')
+    with open(os.path.join(filter_rules_dir, 'rule-one.json'), 'w', encoding='utf-8') as f:
+        json.dump({'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'one'}, f)
+    with open(os.path.join(filter_rules_dir, 'rule-two.json'), 'w', encoding='utf-8') as f:
+        json.dump({'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'two'}, f)
+    filtered_rules = [r['name'] for r in load_rules_for_event(filter_rules_dir, 'PreToolUse', {'rule-one'})]
+    assert filtered_rules == ['rule-two.json'], 'a disabled rule id should exclude that rule and keep the other'
+    shutil.rmtree(filter_rules_dir, ignore_errors=True)
+
+    print('All rule-engine self-checks passed.')
+
+
+if __name__ == '__main__':
+    main()
