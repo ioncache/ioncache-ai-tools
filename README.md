@@ -228,3 +228,32 @@ appearing literally, or a plain argument that happens to contain a guarded
 word (e.g. `echo kill` matches `never-kill-without-asking`, a false
 positive, not a false negative). These rules are meant to catch the common
 case and prompt a pause, not to withstand deliberate evasion.
+
+**A native permission deny list is a stronger, complementary backstop, and
+you have to add it yourself.** Claude Code's `permissions.deny` does real
+shell-aware matching: it splits compound commands on shell operators,
+strips known wrappers (`timeout`, `nice`, `nohup`, bare `xargs`, etc.)
+before matching, and its own docs give `/bin/rm -rf` and `bash -c 'rm -rf'`
+as things a `Bash(rm *)` deny rule catches, exactly the path-qualification
+gap a hand-rolled regex has to special-case. It's also enforced
+independently of hooks: a matching deny rule blocks the call regardless of
+what a `PreToolUse` hook returns. Codex has a closer analog in its
+`execpolicy` `.rules` files, which match on parsed argv rather than raw
+text. Neither is something this plugin can ship for you: permissions and
+execpolicy rules aren't a supported plugin contribution in either tool, so
+they only exist if you add them to your own personal config. For the
+commands this repo already treats as dangerous, add to your own
+`~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "deny": ["Bash(kill:*)", "Bash(pkill:*)", "Bash(killall:*)"]
+  }
+}
+```
+
+This plugin's `never-kill-without-asking` rule stays in place regardless,
+since it's the only piece of this that installs automatically and can
+carry a custom message coaching the assistant on what to do next, a bare
+deny rule can't do either of those.
