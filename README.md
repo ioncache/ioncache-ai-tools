@@ -99,7 +99,8 @@ variable.
 ```
 
 **Codex:** a project-scoped table in `~/.codex/config.toml`, hand-edited,
-there is no CLI command for it:
+there is no CLI command for it. Not compatible with Codex's `--strict-config`
+flag, which rejects the unrecognized table:
 
 ```toml
 [projects."/absolute/path/to/project".ioncache-ai-tools]

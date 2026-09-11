@@ -38,6 +38,8 @@ disabled_rules = ["never-kill-without-asking"]
 
 There is no Codex CLI command to write this; users hand-edit `~/.codex/config.toml`, same as they already do for other Codex settings.
 
+Not compatible with Codex's `--strict-config` flag: normal parsing and `tomllib` both tolerate the unrecognized `ioncache-ai-tools` table under `[projects."<path>"]`, but Codex rejects unknown `ProjectConfig` fields under `--strict-config`. Users of that flag can't use this config source.
+
 Codex has no confirmed project-root env var for hook subprocesses (unlike Claude Code's `$CLAUDE_PROJECT_DIR`, which this design also doesn't use, see below). `process.cwd()` is the lookup key here too, matching the same assumption used for Claude Code and consistent with the rest of this codebase.
 
 ### Why not `$CLAUDE_PROJECT_DIR`
