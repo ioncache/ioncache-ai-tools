@@ -1,5 +1,13 @@
 # Per-Rule Disable Config: Design
 
+> **Note:** this doc predates the Node-to-Python rewrite in
+> `2026-09-11-python-rule-engine-rewrite.md`. The two config sources, the
+> goals, and the disable semantics below are all still accurate. The code
+> samples and the `read_codex_disabled_rules.py`/subprocess mechanics are
+> not: Codex's `config.toml` is now read directly with Python's `tomllib`
+> inside `rule_engine.py`, no subprocess, no separate helper script. See
+> the rewrite doc for the current implementation.
+
 ## Problem
 
 The rule engine's 5 pilot rules are all-or-nothing: every rule that matches an event always runs, with no way for a user to turn one off for a specific project without editing the plugin's own shipped files (which get clobbered on update/reinstall). A prior session (2026-09-10, see the `selective-hook-enable-deferred` memory) researched broader per-hook enable/disable across the whole plugin and found Claude Code has no native toggle, deferring the question with "an env var is the cheapest design if revisited." That conclusion is superseded here: env vars are explicitly out. Config must live inside each tool's own native per-project settings mechanism, not a new file this plugin invents, and not an environment variable.

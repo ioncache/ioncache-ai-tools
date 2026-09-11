@@ -13,9 +13,8 @@ project's config.
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
-| `block_raw_worktree_add.js` | PreToolUse | Denies creating a worktree by raw git or oh-my-zsh's `gwta` alias; points to `/create-worktree` instead |
-| `rule-engine.js PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
-| `rule-engine.js UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
+| `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
+| `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
 ## Commands
@@ -66,23 +65,28 @@ nothing else), so it is always there to extend.
 
 ### `hooks/rules/`
 
-One file per rule, loaded by `rule-engine.js`. Adding a rule never touches
+One file per rule, loaded by `rule_engine.py`. Adding a rule never touches
 engine code. Three shapes:
 
 - **Always-on** (`.json`, `matcher: {"type": "always"}`): injects a fixed
   reminder into `additionalContext` on every `UserPromptSubmit`.
 - **Pattern** (`.json`, `matcher: {"type": "regex", "field": "...", "pattern": "..."}`):
   denies a `PreToolUse` call when a field of the tool input matches.
-- **Scripted** (`.js`, exports `{event, toolNames, matches(input), async check(input)}`):
-  the escape hatch for anything a regex can't express, including rewriting
-  tool input in place (see `fix-emdash.js`).
+- **Scripted** (`.py`, module-level `EVENT`, optional `TOOL_NAMES`, a
+  `matches(hook_input)` function, and either a `check(hook_input)` function
+  or module-level `ACTION`/`MESSAGE`): the escape hatch for anything a
+  regex can't express on its own, including rewriting tool input in place
+  (see `fix_emdash.py`) or reusing a shared helper like
+  `normalize_shell_command` (see `no_manual_lockfile_edit_bash.py` and
+  `block_raw_worktree_add.py`).
 
 | Rule | Shape | Event | What it does |
 | ---- | ----- | ----- | ------------ |
 | `never-kill-without-asking` | Pattern | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command |
 | `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
-| `no-manual-lockfile-edit-bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
-| `fix-emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
+| `no_manual_lockfile_edit_bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
+| `fix_emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
+| `block_raw_worktree_add` | Scripted | PreToolUse | Denies creating a worktree by raw git or oh-my-zsh's `gwta` alias; points to `/create-worktree` instead |
 | `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
 | `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
 
@@ -107,10 +111,10 @@ flag, which rejects the unrecognized table:
 disabled_rules = ["never-kill-without-asking"]
 ```
 
-Reading the Codex config spawns `python3` and requires Python 3.11+ (for the
-stdlib `tomllib` parser); on an older Python, the disabled-rules lookup logs
-the failure to stderr and falls back to none disabled, same as any other
-malformed Codex config.
+The rule engine itself is Python and reads Codex's config.toml directly with
+the stdlib `tomllib` parser (3.11+ required); on an older Python, the
+disabled-rules lookup logs the failure to stderr and falls back to none
+disabled, same as any other malformed Codex config.
 
 A rule's id is its filename minus the extension. Both sources are read and
 unioned, disabling a rule in either one disables it. Takes effect
@@ -121,6 +125,12 @@ below), which do require a reinstall.
 Full design: `docs/superpowers/specs/2026-09-11-rule-config-design.md`.
 
 Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
+
+The engine was later rewritten from Node to Python; see
+`docs/superpowers/specs/2026-09-11-python-rule-engine-rewrite.md` for why
+and what changed. The two docs above still describe the current matching/
+loading/config design accurately, only the implementation language and the
+scripted-rule file extension (`.py`, not `.js`) changed.
 
 ## Skills
 
@@ -164,7 +174,7 @@ the hooks, then start a new thread.
 Before pushing, run the rule engine's self-check:
 
 ```bash
-node hooks/scripts/rule-engine.self-check.js < /dev/null
+python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 ```
 
 Then test against the working copy directly.
@@ -226,8 +236,15 @@ through a wrapper the pattern doesn't recognize, shell expansion or
 indirection that produces the guarded command without the guarded text
 appearing literally, or a plain argument that happens to contain a guarded
 word (e.g. `echo kill` matches `never-kill-without-asking`, a false
-positive, not a false negative). These rules are meant to catch the common
-case and prompt a pause, not to withstand deliberate evasion.
+positive, not a false negative). There's also a known gap in the other
+direction: `normalize_shell_command` strips quote delimiters to catch
+`'kill'`/`"kill"` as bypasses, but that also exposes any boundary-class
+character (e.g. `|`) that was safely inside the quotes, so a command like
+`grep "kill|pkill|killall" file` can still false-match. Closing that
+properly means real shell tokenization (e.g. Python's `shlex`), not a
+flat-text normalization pass; it hasn't been done. These rules are meant to
+catch the common case and prompt a pause, not to withstand deliberate
+evasion.
 
 **A native permission deny list is a stronger, complementary backstop, and
 you have to add it yourself.** Claude Code's `permissions.deny` does real

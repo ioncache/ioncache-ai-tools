@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note:** this plan predates the Node-to-Python rewrite in
+> `docs/superpowers/specs/2026-09-11-python-rule-engine-rewrite.md`. It
+> documents how the engine was originally built (in JavaScript); the
+> shipped engine is now Python (`hooks/scripts/rule_engine.py`). Read this
+> plan for the original task history, not as instructions for the current
+> codebase.
+
 **Goal:** Build one generic, config-driven hook engine in `ioncache-ai-tools` that can enforce three rule shapes (always-on reminder, pattern match, scripted check), and pilot it with 5 real rules ported from the user's memory store.
 
 **Architecture:** A single Node script, `hooks/scripts/rule-engine.js`, invoked once per lifecycle event (`PreToolUse`, `UserPromptSubmit`) via `hooks/hooks.json`. It loads every rule file under `hooks/rules/` whose `event` matches the invocation, runs each rule's cheap synchronous matcher, then resolves the matched rules' actions concurrently via `Promise.all`, merges the results per event type, and emits one JSON payload (or nothing).

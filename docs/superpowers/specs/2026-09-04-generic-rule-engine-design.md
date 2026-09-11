@@ -1,5 +1,12 @@
 # Generic Rule Engine: Design
 
+> **Note:** this doc predates the Node-to-Python rewrite in
+> `2026-09-11-python-rule-engine-rewrite.md`. The architecture, rule
+> shapes, and matching semantics below are all still accurate. The code
+> samples are JavaScript; the shipped engine is now `hooks/scripts/rule_engine.py`,
+> and scripted rules are `.py` modules, not `.js`. See the rewrite doc for
+> the current implementation and the scripted-rule contract.
+
 ## Problem
 
 Behavioral rules the user has taught Claude over many sessions currently live
