@@ -228,13 +228,14 @@ async function main() {
     'fix-emdash should not match a plain hyphen'
   )
 
-  // fix-emdash: check rewrites Bash command, preserves other fields
+  // fix-emdash: check denies Bash instead of rewriting (an inserted space
+  // could split one shell argument into two)
   const bashResult = await fixEmdash.check({
     tool_name: 'Bash',
     tool_input: { command: `one${emDash}two`, description: 'keep me' }
   })
-  assert.strictEqual(bashResult.updatedInput.command, 'one, two')
-  assert.strictEqual(bashResult.updatedInput.description, 'keep me')
+  assert.strictEqual(bashResult.action, 'deny', 'fix-emdash should deny Bash rather than rewrite it')
+  assert.ok(typeof bashResult.message === 'string' && bashResult.message.length > 0, 'deny should include a message')
 
   // fix-emdash: check rewrites MultiEdit edits array, leaves unaffected edits untouched
   const multiEditResult = await fixEmdash.check({

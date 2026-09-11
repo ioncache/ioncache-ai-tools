@@ -27,10 +27,20 @@ module.exports = {
     return false
   },
   async check(input) {
-    const toolInput = { ...(input.tool_input || {}) }
     if (input.tool_name === 'Bash') {
-      toolInput.command = fix(toolInput.command)
-    } else if (input.tool_name === 'Write') {
+      return {
+        action: 'deny',
+        message:
+          'This Bash command contains an em-dash. Rewriting it automatically ' +
+          'would insert a space, which can split one shell argument into two ' +
+          '(e.g. `rm -- foo' +
+          EM_DASH +
+          'bar` becoming two arguments). Rewrite the command yourself using a ' +
+          'comma, period, parentheses, or colon instead, then resubmit it.'
+      }
+    }
+    const toolInput = { ...(input.tool_input || {}) }
+    if (input.tool_name === 'Write') {
       toolInput.content = fix(toolInput.content)
     } else if (input.tool_name === 'Edit') {
       toolInput.new_string = fix(toolInput.new_string)
