@@ -20,18 +20,18 @@ jobs:
 
       - name: Check hook script syntax
         run: |
-          for f in hooks/scripts/*.py; do
+          for f in hooks/scripts/*.py hooks/rules/*.py; do
             python3 -m py_compile "$f" && echo "$f OK"
           done
 
       - name: Check JS hook script syntax
         run: |
-          for f in hooks/scripts/*.js hooks/rules/*.js scripts/*.js; do
+          for f in hooks/scripts/*.js scripts/*.js; do
             node --check "$f" && echo "$f OK"
           done
 
       - name: Run rule-engine self-check
-        run: node hooks/scripts/rule-engine.self-check.js < /dev/null
+        run: python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 
       - name: Check command/skill frontmatter
         run: |

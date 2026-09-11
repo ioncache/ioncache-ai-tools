@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule-engine.js\" UserPromptSubmit"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" UserPromptSubmit"
           }
         ]
       }
@@ -67,16 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block_raw_worktree_add.js\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule-engine.js\" PreToolUse"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" PreToolUse"
           }
         ]
       }
