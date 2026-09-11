@@ -294,6 +294,11 @@ async function main() {
     'should not match reading a lockfile without a mutation'
   )
   assert.strictEqual(
+    noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: 's\\ed -i s/a/b/ ' + lockfileName } }),
+    true,
+    'should match a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never-kill-without-asking)'
+  )
+  assert.strictEqual(
     noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: 'npm install' } }),
     false,
     'should not match an unrelated Bash command'
