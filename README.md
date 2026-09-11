@@ -106,6 +106,11 @@ there is no CLI command for it:
 disabled_rules = ["never-kill-without-asking"]
 ```
 
+Reading the Codex config spawns `python3` and requires Python 3.11+ (for the
+stdlib `tomllib` parser); on an older Python, the disabled-rules lookup logs
+the failure to stderr and falls back to none disabled, same as any other
+malformed Codex config.
+
 A rule's id is its filename minus the extension. Both sources are read and
 unioned, disabling a rule in either one disables it. Takes effect
 immediately, on the next tool call. This config is read fresh from disk
