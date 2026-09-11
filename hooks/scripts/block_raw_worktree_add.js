@@ -19,7 +19,7 @@ const fs = require('fs')
 // cost of also matching an unrelated later `worktree add` in a long command -
 // an acceptable false positive for a safety guard, per the pattern's own
 // design note above.
-const RAW_WORKTREE_ADD = /(^|[\s;&|(`])git(?:\s+\S+)*?\s+worktree\s+add($|[\s;&|)`])/
+const RAW_WORKTREE_ADD = /(^|[\s;&|(`<>])git(?:\s+\S+)*?\s+worktree\s+add($|[\s;&|)`<>])/
 const OH_MY_ZSH_ALIAS = /(^|[\s;&|(`<>])gwta($|[\s;&|)`<>])/
 
 function main() {
