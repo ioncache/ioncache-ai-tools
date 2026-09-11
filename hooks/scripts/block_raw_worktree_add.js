@@ -14,11 +14,16 @@
 
 const fs = require('fs')
 
-const RAW_WORKTREE_ADD = /\bgit\s+(-C\s+\S+\s+)?worktree\s+add\b/
+const RAW_WORKTREE_ADD = /(^|[\s;&|(`])git\s+(-C\s+\S+\s+)?worktree\s+add($|[\s;&|)`])/
 const OH_MY_ZSH_ALIAS = /(^|[\s;&|(`])gwta($|[\s;&|)`])/
 
 function main() {
-  const input = JSON.parse(fs.readFileSync(0, 'utf8'))
+  let input
+  try {
+    input = JSON.parse(fs.readFileSync(0, 'utf8'))
+  } catch (err) {
+    return
+  }
   if (input.tool_name !== 'Bash') return
 
   const command = (input.tool_input || {}).command || ''

@@ -187,6 +187,34 @@ async function main() {
     'verify-state-before-claiming.json should load for UserPromptSubmit'
   )
 
+  // Real never-kill-without-asking rule file, matched via matchRule directly
+  // (exercises the shipped pattern itself, not a hand-copied one)
+  const neverKillRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'never-kill-without-asking.json'), 'utf8'))
+  assert.strictEqual(
+    matchRule(neverKillRule, { tool_name: 'Bash', tool_input: { command: 'kill -9 12345' } }),
+    true,
+    'never-kill-without-asking should match a real kill invocation'
+  )
+  assert.strictEqual(
+    matchRule(neverKillRule, {
+      tool_name: 'Bash',
+      tool_input: { command: 'cat hooks/rules/never-kill-without-asking.json' }
+    }),
+    false,
+    'never-kill-without-asking should not false-positive on its own filename substring (hyphen-boundary regression)'
+  )
+
+  // Real no-manual-lockfile-edit rule file, matched via matchRule directly
+  const lockfileRule = JSON.parse(fs.readFileSync(path.join(rulesDir, 'no-manual-lockfile-edit.json'), 'utf8'))
+  assert.strictEqual(
+    matchRule(lockfileRule, { tool_name: 'Edit', tool_input: { file_path: 'package-lock.json' } }),
+    true,
+    'no-manual-lockfile-edit should match a real lockfile edit'
+  )
+  // No hyphen-boundary regression case here: this pattern anchors on a
+  // literal filename suffix (`$`), it never uses `\b`, so there's no
+  // separator-class boundary for a hyphenated identifier to slip past.
+
   // fix-emdash: matches per tool type
   const emDash = String.fromCharCode(0x2014)
   assert.strictEqual(

@@ -49,7 +49,13 @@ function mergePreToolUse(results) {
       }
     }
   }
-  const rewrite = results.find((r) => r && r.action === 'rewrite')
+  const rewrites = results.filter((r) => r && r.action === 'rewrite')
+  if (rewrites.length > 1) {
+    console.error(
+      `rule-engine: ${rewrites.length} rules returned a rewrite for the same event; only the first is applied, the rest are silently dropped (see spec's known limitation)`
+    )
+  }
+  const rewrite = rewrites[0]
   if (rewrite) {
     return {
       hookSpecificOutput: {

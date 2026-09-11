@@ -106,9 +106,12 @@ disabled_rules = ["never-kill-without-asking"]
 ```
 
 A rule's id is its filename minus the extension. Both sources are read and
-unioned, disabling a rule in either one disables it. Takes effect after the
-usual reinstall (see Local development above), this applies to real
-installs too, not just local dev.
+unioned, disabling a rule in either one disables it. Takes effect
+immediately, on the next tool call. This config is read fresh from disk
+every time, unlike changes to the plugin's own files (see Local development
+below), which do require a reinstall.
+
+Full design: `docs/superpowers/specs/2026-09-11-rule-config-design.md`.
 
 Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
 

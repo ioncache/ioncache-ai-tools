@@ -160,7 +160,10 @@ function applySetup(mainRoot, worktreePath) {
         fs.symlinkSync(src, dest, fs.statSync(src).isDirectory() ? 'dir' : 'file')
         applied.push(`linked ${rel}`)
       } catch (err) {
-        if (err.code !== 'EEXIST') throw err
+        if (err.code !== 'EEXIST') {
+          report(applied, worktreePath)
+          throw err
+        }
       }
     }
   }

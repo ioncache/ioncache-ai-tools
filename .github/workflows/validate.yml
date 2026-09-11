@@ -48,7 +48,7 @@ jobs:
           import pathlib, sys
           em_dash = chr(0x2014)
           hits = []
-          for pattern in ('**/*.py', '**/*.md', '**/*.json'):
+          for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js'):
               for path in pathlib.Path('.').glob(pattern):
                   if '.git' in path.parts:
                       continue
