@@ -12,6 +12,7 @@ project's config.
 | `docs_first_guard.py user-prompt-submit` | UserPromptSubmit | Flags prompts that require official/current docs |
 | `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
+| `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
