@@ -80,8 +80,9 @@ engine code. Three shapes:
 | Rule | Shape | Event | What it does |
 | ---- | ----- | ----- | ------------ |
 | `never-kill-without-asking` | Pattern | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command |
-| `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` directly |
-| `fix-emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Bash/Write/Edit/MultiEdit input |
+| `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
+| `no-manual-lockfile-edit-bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
+| `fix-emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
 | `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
 | `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
 

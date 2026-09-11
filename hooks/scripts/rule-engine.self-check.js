@@ -13,6 +13,7 @@ const {
   getDisabledRuleIds
 } = require('./rule-engine.js')
 const fixEmdash = require('../rules/fix-emdash.js')
+const noManualLockfileEditBash = require('../rules/no-manual-lockfile-edit-bash.js')
 
 async function main() {
   // matchRule: always
@@ -175,6 +176,10 @@ async function main() {
     realPreToolUseRules.includes('no-manual-lockfile-edit.json'),
     'no-manual-lockfile-edit.json should load for PreToolUse'
   )
+  assert.ok(
+    realPreToolUseRules.includes('no-manual-lockfile-edit-bash.js'),
+    'no-manual-lockfile-edit-bash.js should load for PreToolUse'
+  )
 
   // Real pilot rules load correctly for UserPromptSubmit
   const realUserPromptRules = loadRulesForEvent(rulesDir, 'UserPromptSubmit').map((r) => r.name)
@@ -214,6 +219,30 @@ async function main() {
   // No hyphen-boundary regression case here: this pattern anchors on a
   // literal filename suffix (`$`), it never uses `\b`, so there's no
   // separator-class boundary for a hyphenated identifier to slip past.
+
+  // no-manual-lockfile-edit-bash: catches Bash mutations the Edit/Write/
+  // MultiEdit-only rule above can't see
+  const lockfileName = 'package-lock.json'
+  assert.strictEqual(
+    noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: `printf x > ${lockfileName}` } }),
+    true,
+    'should match a redirection into a lockfile'
+  )
+  assert.strictEqual(
+    noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: `sed -i s/a/b/ ${lockfileName}` } }),
+    true,
+    'should match sed -i targeting a lockfile'
+  )
+  assert.strictEqual(
+    noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: `cat ${lockfileName}` } }),
+    false,
+    'should not match reading a lockfile without a mutation'
+  )
+  assert.strictEqual(
+    noManualLockfileEditBash.matches({ tool_name: 'Bash', tool_input: { command: 'npm install' } }),
+    false,
+    'should not match an unrelated Bash command'
+  )
 
   // fix-emdash: matches per tool type
   const emDash = String.fromCharCode(0x2014)
