@@ -383,113 +383,123 @@ def main():
     shutil.rmtree(claude_global_dir, ignore_errors=True)
     shutil.rmtree(no_project_root, ignore_errors=True)
 
-    # get_disabled_rule_ids: reads disabled_rules from a Codex config.toml project section
+    # These tests parse real TOML via tomllib and expect it to actually
+    # work; on Python 3.10 or earlier tomllib is None (guarded import), so
+    # get_disabled_rule_ids degrades to an empty set for all of them,
+    # failing every assertion below with a confusing, unrelated-looking
+    # error instead of a clear skip. The explicit no-tomllib fallback test
+    # further below covers that degrade path directly and stays active
+    # regardless of which Python this self-check itself runs under.
     codex_project_root = '/tmp/rule-engine-codex-test-project'
-    codex_config_dir = tempfile.mkdtemp(prefix='rule-engine-codex-config-')
-    codex_config_path = os.path.join(codex_config_dir, 'config.toml')
-    write_text(
-        codex_config_path,
-        f'[projects."{codex_project_root}"]\ntrust_level = "trusted"\n\n'
-        f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n',
-    )
-    codex_disabled = get_disabled_rule_ids(codex_project_root, codex_config_path=codex_config_path, claude_global_path=NO_CLAUDE_GLOBAL)
-    assert codex_disabled == {'test-rule-b'}, 'should read disabled_rules from the Codex config.toml project section'
-    shutil.rmtree(codex_config_dir, ignore_errors=True)
-
-    # get_disabled_rule_ids: a non-list Codex disabled_rules value is ignored
-    # rather than iterated character by character
-    codex_string_shape_dir = tempfile.mkdtemp(prefix='rule-engine-codex-string-shape-')
-    codex_string_shape_path = os.path.join(codex_string_shape_dir, 'config.toml')
-    write_text(codex_string_shape_path, f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = "test-rule-b"\n')
-    codex_string_shape_disabled = get_disabled_rule_ids(
-        codex_project_root, codex_config_path=codex_string_shape_path, claude_global_path=NO_CLAUDE_GLOBAL
-    )
-    assert (
-        codex_string_shape_disabled == set()
-    ), 'a non-list Codex disabled_rules value should be ignored, not iterated character by character'
-    shutil.rmtree(codex_string_shape_dir, ignore_errors=True)
-
-    # get_disabled_rule_ids: malformed Codex TOML degrades to empty and logs
-    # to stderr rather than failing silently
-    malformed_codex_dir = tempfile.mkdtemp(prefix='rule-engine-malformed-codex-')
-    malformed_codex_path = os.path.join(malformed_codex_dir, 'config.toml')
-    write_text(malformed_codex_path, 'not valid toml [[[')
-    captured_stderr = io.StringIO()
-    with contextlib.redirect_stderr(captured_stderr):
-        malformed_codex_disabled = get_disabled_rule_ids(
-            codex_project_root, codex_config_path=malformed_codex_path, claude_global_path=NO_CLAUDE_GLOBAL
+    if rule_engine.tomllib is None:
+        print('rule-engine self-check: skipping Codex TOML-parsing tests, tomllib unavailable (Python 3.11+ required)')
+    else:
+        # get_disabled_rule_ids: reads disabled_rules from a Codex config.toml project section
+        codex_config_dir = tempfile.mkdtemp(prefix='rule-engine-codex-config-')
+        codex_config_path = os.path.join(codex_config_dir, 'config.toml')
+        write_text(
+            codex_config_path,
+            f'[projects."{codex_project_root}"]\ntrust_level = "trusted"\n\n'
+            f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n',
         )
-    assert malformed_codex_disabled == set(), 'malformed Codex TOML should degrade to no disabled rules'
-    assert captured_stderr.getvalue(), 'a malformed Codex TOML parse failure should be logged, not silently swallowed'
-    shutil.rmtree(malformed_codex_dir, ignore_errors=True)
+        codex_disabled = get_disabled_rule_ids(codex_project_root, codex_config_path=codex_config_path, claude_global_path=NO_CLAUDE_GLOBAL)
+        assert codex_disabled == {'test-rule-b'}, 'should read disabled_rules from the Codex config.toml project section'
+        shutil.rmtree(codex_config_dir, ignore_errors=True)
 
-    # get_disabled_rule_ids: a top-level Codex table disables a rule globally, with no project section at all
-    codex_global_dir = tempfile.mkdtemp(prefix='rule-engine-codex-global-')
-    codex_global_path = os.path.join(codex_global_dir, 'config.toml')
-    write_text(codex_global_path, '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n')
-    codex_global_only_disabled = get_disabled_rule_ids(
-        '/tmp/rule-engine-codex-no-project-section', codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
-    )
-    assert codex_global_only_disabled == {'test-rule-a'}, 'a top-level Codex table should disable a rule with no project section present'
+        # get_disabled_rule_ids: a non-list Codex disabled_rules value is ignored
+        # rather than iterated character by character
+        codex_string_shape_dir = tempfile.mkdtemp(prefix='rule-engine-codex-string-shape-')
+        codex_string_shape_path = os.path.join(codex_string_shape_dir, 'config.toml')
+        write_text(codex_string_shape_path, f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = "test-rule-b"\n')
+        codex_string_shape_disabled = get_disabled_rule_ids(
+            codex_project_root, codex_config_path=codex_string_shape_path, claude_global_path=NO_CLAUDE_GLOBAL
+        )
+        assert (
+            codex_string_shape_disabled == set()
+        ), 'a non-list Codex disabled_rules value should be ignored, not iterated character by character'
+        shutil.rmtree(codex_string_shape_dir, ignore_errors=True)
 
-    # get_disabled_rule_ids: a Codex project section's disabled_rules adds to the global set (union)
-    write_text(
-        codex_global_path,
-        '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n\n'
-        f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n',
-    )
-    codex_project_adds_disabled = get_disabled_rule_ids(
-        codex_project_root, codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
-    )
-    assert codex_project_adds_disabled == {
-        'test-rule-a',
-        'test-rule-b',
-    }, 'a Codex project-level disable should add to the global set, not replace it'
+        # get_disabled_rule_ids: malformed Codex TOML degrades to empty and logs
+        # to stderr rather than failing silently
+        malformed_codex_dir = tempfile.mkdtemp(prefix='rule-engine-malformed-codex-')
+        malformed_codex_path = os.path.join(malformed_codex_dir, 'config.toml')
+        write_text(malformed_codex_path, 'not valid toml [[[')
+        captured_stderr = io.StringIO()
+        with contextlib.redirect_stderr(captured_stderr):
+            malformed_codex_disabled = get_disabled_rule_ids(
+                codex_project_root, codex_config_path=malformed_codex_path, claude_global_path=NO_CLAUDE_GLOBAL
+            )
+        assert malformed_codex_disabled == set(), 'malformed Codex TOML should degrade to no disabled rules'
+        assert captured_stderr.getvalue(), 'a malformed Codex TOML parse failure should be logged, not silently swallowed'
+        shutil.rmtree(malformed_codex_dir, ignore_errors=True)
 
-    # get_disabled_rule_ids: a Codex project section's enabled_rules overrides a global disable
-    write_text(
-        codex_global_path,
-        '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n\n'
-        f'[projects."{codex_project_root}".ioncache-ai-tools]\nenabled_rules = ["test-rule-a"]\n',
-    )
-    codex_project_overrides_disabled = get_disabled_rule_ids(
-        codex_project_root, codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
-    )
-    assert (
-        codex_project_overrides_disabled == set()
-    ), "a Codex project-level enabled_rules entry should re-enable a rule the global table disables, for that project"
-    shutil.rmtree(codex_global_dir, ignore_errors=True)
+        # get_disabled_rule_ids: a top-level Codex table disables a rule globally, with no project section at all
+        codex_global_dir = tempfile.mkdtemp(prefix='rule-engine-codex-global-')
+        codex_global_path = os.path.join(codex_global_dir, 'config.toml')
+        write_text(codex_global_path, '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n')
+        codex_global_only_disabled = get_disabled_rule_ids(
+            '/tmp/rule-engine-codex-no-project-section', codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
+        )
+        assert codex_global_only_disabled == {'test-rule-a'}, 'a top-level Codex table should disable a rule with no project section present'
 
-    # get_disabled_rule_ids: both tools present at once union together, not error
-    both_project_root = tempfile.mkdtemp(prefix='rule-engine-both-config-')
-    write_json(os.path.join(both_project_root, '.claude', 'ioncache-ai-tools.local.json'), {'disabledRules': ['test-rule-a']})
-    both_codex_dir = tempfile.mkdtemp(prefix='rule-engine-both-codex-')
-    both_codex_path = os.path.join(both_codex_dir, 'config.toml')
-    write_text(both_codex_path, f'[projects."{both_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n')
-    both_disabled = get_disabled_rule_ids(both_project_root, codex_config_path=both_codex_path, claude_global_path=NO_CLAUDE_GLOBAL)
-    assert both_disabled == {'test-rule-a', 'test-rule-b'}, 'both tools present at once should union together, not overwrite or error'
-    shutil.rmtree(both_project_root, ignore_errors=True)
-    shutil.rmtree(both_codex_dir, ignore_errors=True)
+        # get_disabled_rule_ids: a Codex project section's disabled_rules adds to the global set (union)
+        write_text(
+            codex_global_path,
+            '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n\n'
+            f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n',
+        )
+        codex_project_adds_disabled = get_disabled_rule_ids(
+            codex_project_root, codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
+        )
+        assert codex_project_adds_disabled == {
+            'test-rule-a',
+            'test-rule-b',
+        }, 'a Codex project-level disable should add to the global set, not replace it'
 
-    # get_disabled_rule_ids: respects $CODEX_HOME for the default config path
-    # when codex_config_path isn't explicitly overridden
-    codex_home_dir = tempfile.mkdtemp(prefix='rule-engine-codex-home-')
-    write_text(
-        os.path.join(codex_home_dir, 'config.toml'), f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-c"]\n'
-    )
-    previous_codex_home = os.environ.get('CODEX_HOME')
-    os.environ['CODEX_HOME'] = codex_home_dir
-    try:
-        codex_home_disabled = get_disabled_rule_ids(codex_project_root, claude_global_path=NO_CLAUDE_GLOBAL)
-        assert codex_home_disabled == {
-            'test-rule-c'
-        }, 'should read config.toml from $CODEX_HOME when set, not the hard-coded ~/.codex default'
-    finally:
-        if previous_codex_home is None:
-            os.environ.pop('CODEX_HOME', None)
-        else:
-            os.environ['CODEX_HOME'] = previous_codex_home
-        shutil.rmtree(codex_home_dir, ignore_errors=True)
+        # get_disabled_rule_ids: a Codex project section's enabled_rules overrides a global disable
+        write_text(
+            codex_global_path,
+            '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n\n'
+            f'[projects."{codex_project_root}".ioncache-ai-tools]\nenabled_rules = ["test-rule-a"]\n',
+        )
+        codex_project_overrides_disabled = get_disabled_rule_ids(
+            codex_project_root, codex_config_path=codex_global_path, claude_global_path=NO_CLAUDE_GLOBAL
+        )
+        assert (
+            codex_project_overrides_disabled == set()
+        ), "a Codex project-level enabled_rules entry should re-enable a rule the global table disables, for that project"
+        shutil.rmtree(codex_global_dir, ignore_errors=True)
+
+        # get_disabled_rule_ids: both tools present at once union together, not error
+        both_project_root = tempfile.mkdtemp(prefix='rule-engine-both-config-')
+        write_json(os.path.join(both_project_root, '.claude', 'ioncache-ai-tools.local.json'), {'disabledRules': ['test-rule-a']})
+        both_codex_dir = tempfile.mkdtemp(prefix='rule-engine-both-codex-')
+        both_codex_path = os.path.join(both_codex_dir, 'config.toml')
+        write_text(both_codex_path, f'[projects."{both_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-b"]\n')
+        both_disabled = get_disabled_rule_ids(both_project_root, codex_config_path=both_codex_path, claude_global_path=NO_CLAUDE_GLOBAL)
+        assert both_disabled == {'test-rule-a', 'test-rule-b'}, 'both tools present at once should union together, not overwrite or error'
+        shutil.rmtree(both_project_root, ignore_errors=True)
+        shutil.rmtree(both_codex_dir, ignore_errors=True)
+
+        # get_disabled_rule_ids: respects $CODEX_HOME for the default config path
+        # when codex_config_path isn't explicitly overridden
+        codex_home_dir = tempfile.mkdtemp(prefix='rule-engine-codex-home-')
+        write_text(
+            os.path.join(codex_home_dir, 'config.toml'), f'[projects."{codex_project_root}".ioncache-ai-tools]\ndisabled_rules = ["test-rule-c"]\n'
+        )
+        previous_codex_home = os.environ.get('CODEX_HOME')
+        os.environ['CODEX_HOME'] = codex_home_dir
+        try:
+            codex_home_disabled = get_disabled_rule_ids(codex_project_root, claude_global_path=NO_CLAUDE_GLOBAL)
+            assert codex_home_disabled == {
+                'test-rule-c'
+            }, 'should read config.toml from $CODEX_HOME when set, not the hard-coded ~/.codex default'
+        finally:
+            if previous_codex_home is None:
+                os.environ.pop('CODEX_HOME', None)
+            else:
+                os.environ['CODEX_HOME'] = previous_codex_home
+            shutil.rmtree(codex_home_dir, ignore_errors=True)
 
     # get_disabled_rule_ids: nothing configured anywhere returns an empty set
     empty_project_root = tempfile.mkdtemp(prefix='rule-engine-no-config-')
