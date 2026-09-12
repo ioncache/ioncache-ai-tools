@@ -34,6 +34,9 @@ fix_emdash = _load_module(os.path.join(RULES_DIR, 'fix_emdash.py'), 'fix_emdash'
 no_manual_lockfile_edit_bash = _load_module(
     os.path.join(RULES_DIR, 'no_manual_lockfile_edit_bash.py'), 'no_manual_lockfile_edit_bash'
 )
+never_kill_without_asking = _load_module(
+    os.path.join(RULES_DIR, 'never_kill_without_asking.py'), 'never_kill_without_asking'
+)
 
 
 def main():
@@ -181,7 +184,7 @@ def main():
 
     # Real pilot rules load correctly for PreToolUse
     real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
-    assert 'never-kill-without-asking.json' in real_pre_tool_use_rules
+    assert 'never_kill_without_asking.py' in real_pre_tool_use_rules
     assert 'no-manual-lockfile-edit.json' in real_pre_tool_use_rules
     assert 'no_manual_lockfile_edit_bash.py' in real_pre_tool_use_rules
     assert 'block_raw_worktree_add.py' in real_pre_tool_use_rules
@@ -191,10 +194,10 @@ def main():
     assert 'scope-exactly-what-asked.json' in real_user_prompt_rules
     assert 'verify-state-before-claiming.json' in real_user_prompt_rules
 
-    # Real never-kill-without-asking rule file, matched via match_rule directly
-    # (exercises the shipped pattern itself, not a hand-copied one)
-    with open(os.path.join(RULES_DIR, 'never-kill-without-asking.json'), 'r', encoding='utf-8') as f:
-        never_kill_rule = json.load(f)
+    # never_kill_without_asking: exercises the shipped module directly, a
+    # tokenizing scripted rule (not a regex Pattern rule), since matching
+    # "is this word the command being run" reliably needs real command
+    # tokenization, not a flat-text pattern.
     kill_cases = [
         ('kill -9 12345', True, 'a real kill invocation'),
         ('cat hooks/rules/never-kill-without-asking.json', False, 'its own filename substring (hyphen-boundary regression)'),
@@ -213,31 +216,14 @@ def main():
             "a single-quoted substring nested inside double quotes (real Bash treats it as literal text), regression check",
         ),
         ("echo '\\kill'", False, 'a backslash inside single quotes (Bash treats it as fully literal there), regression check'),
+        ('ls /tmp/kill', False, 'a path argument to an unrelated command, not an invocation (prior false-positive regression)'),
+        ('true; /bin/kill -9 12345', True, 'a path-qualified invocation as the second command in a chain'),
+        ('sleep 1 && kill -9 12345', True, 'a bare invocation as the second command in a chain'),
+        ('echo "(kill -9 12345)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
     ]
     for command, expected, label in kill_cases:
-        got = match_rule(never_kill_rule, {'tool_name': 'Bash', 'tool_input': {'command': command}})
-        assert got is expected, f'never-kill-without-asking should {"" if expected else "not "}match {label}: {command!r}'
-
-    # The process-kill boundary regex is hand-duplicated in the shipped rule
-    # and in two docs; nothing else keeps them in sync, so assert it here.
-    def extract_pattern(doc_path):
-        with open(doc_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        line = next((l for l in text.split('\n') if 'kill|pkill|killall' in l), None)
-        if line is None:
-            return None
-        match = __import__('re').search(r'"pattern":\s*"((?:[^"\\]|\\.)*)"', line)
-        return json.loads(f'"{match.group(1)}"') if match else None
-
-    docs_root = os.path.join(SCRIPT_DIR, '..', '..', 'docs', 'superpowers')
-    spec_pattern = extract_pattern(os.path.join(docs_root, 'specs', '2026-09-04-generic-rule-engine-design.md'))
-    plan_pattern = extract_pattern(os.path.join(docs_root, 'plans', '2026-09-04-generic-rule-engine.md'))
-    assert (
-        spec_pattern == never_kill_rule['matcher']['pattern']
-    ), 'the design spec example pattern should match the shipped never-kill-without-asking pattern exactly'
-    assert (
-        plan_pattern == never_kill_rule['matcher']['pattern']
-    ), 'the plan example pattern should match the shipped never-kill-without-asking pattern exactly'
+        got = never_kill_without_asking.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
+        assert got is expected, f'never_kill_without_asking should {"" if expected else "not "}match {label}: {command!r}'
 
     # Real no-manual-lockfile-edit rule file, matched via match_rule directly
     with open(os.path.join(RULES_DIR, 'no-manual-lockfile-edit.json'), 'r', encoding='utf-8') as f:

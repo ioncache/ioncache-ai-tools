@@ -83,7 +83,7 @@ engine code. Three shapes:
 
 | Rule | Shape | Event | What it does |
 | ---- | ----- | ----- | ------------ |
-| `never-kill-without-asking` | Pattern | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command |
+| `never_kill_without_asking` | Scripted | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command, using real command tokenization (not a regex) |
 | `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
 | `no_manual_lockfile_edit_bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
 | `fix_emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
@@ -106,14 +106,14 @@ setting, or in `<project>/.claude/` to override it for one project
 (gitignored, not shipped with the plugin):
 
 ```json
-{ "disabledRules": ["never-kill-without-asking"] }
+{ "disabledRules": ["never_kill_without_asking"] }
 ```
 
 A project-level file can also carry `enabledRules`, to re-enable a rule
 the global file disables, for that project only:
 
 ```json
-{ "enabledRules": ["never-kill-without-asking"] }
+{ "enabledRules": ["never_kill_without_asking"] }
 ```
 
 **Codex:** in `~/.codex/config.toml`, hand-edited, there is no CLI command
@@ -123,10 +123,10 @@ flag, which rejects both unrecognized tables:
 
 ```toml
 [ioncache-ai-tools]
-disabled_rules = ["never-kill-without-asking"]
+disabled_rules = ["never_kill_without_asking"]
 
 [projects."/absolute/path/to/project".ioncache-ai-tools]
-enabled_rules = ["never-kill-without-asking"]
+enabled_rules = ["never_kill_without_asking"]
 ```
 
 The rule engine itself is Python and reads Codex's config.toml directly with
@@ -243,7 +243,7 @@ plain file in the project (`.claude/ioncache-ai-tools.local.json`) or in
 Codex's own `config.toml`, both of which an AI agent using the tool normally
 has Edit/Write access to. An agent could in principle add a rule's id to
 `disabledRules`/`disabled_rules` itself, which would defeat the point of a
-rule meant to guard the agent's own actions (`never-kill-without-asking`,
+rule meant to guard the agent's own actions (`never_kill_without_asking`,
 for example). The current design has no concept of a mandatory,
 non-disableable rule, since the original goal was that a user can disable
 any individual rule by hand-editing the config. Hardening this (e.g. a
@@ -292,7 +292,7 @@ commands this repo already treats as dangerous, add to your own
 }
 ```
 
-This plugin's `never-kill-without-asking` rule stays in place regardless,
+This plugin's `never_kill_without_asking` rule stays in place regardless,
 since it's the only piece of this that installs automatically and can
 carry a custom message coaching the assistant on what to do next, a bare
 deny rule can't do either of those.

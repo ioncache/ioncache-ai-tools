@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import signal
 import sys
 import tomllib
@@ -86,6 +87,60 @@ def normalize_shell_command(command):
         result.append(ch)
         i += 1
     return ''.join(result)
+
+
+# Shell control operators that separate one simple command from the next
+# within a compound Bash command (`a; b`, `a && b`, `a | b`, ...). Used by
+# rules that need to know "is this token in command position" rather than
+# just "does this text appear somewhere in the command", something a flat
+# regex over the whole string can't express: `ls /tmp/kill` and
+# `printf x > out && cat package-lock.json` both contain a guarded word or
+# filename, but neither actually invokes or mutates it.
+CONTROL_OPERATORS = {';', '&&', '||', '|', '&', '(', ')'}
+
+
+def tokenize_command(command):
+    """Splits a Bash command into real shell tokens: quoting and
+    backslash-escaping are resolved the way Bash itself resolves them
+    (shlex's posix mode), and control operators (;, &&, ||, |, &, (, ))
+    come out as their own tokens instead of being glued to an adjacent
+    word (shlex's punctuation_chars mode). Falls back to a plain
+    whitespace split on unbalanced quoting rather than raising, since a
+    hook must never throw on attacker- or mistake-controlled input.
+
+    Bash splices a backslash immediately before a newline away entirely
+    (line continuation), joining the two lines before it even starts
+    tokenizing; shlex does not do this on its own; it just escapes the
+    newline character literally into the token, so it's spliced here
+    first. This also splices inside a single-quoted string, where real
+    Bash would keep the backslash-newline literal, an accepted gap for
+    a case this narrow.
+    """
+    command = command.replace('\\\n', '')
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        return command.split()
+
+
+def split_into_simple_commands(tokens):
+    """Splits a token list into one list per simple command, cutting at
+    each control operator. `a && b; c` becomes [[a], [b], [c]].
+    """
+    commands = []
+    current = []
+    for token in tokens:
+        if token in CONTROL_OPERATORS:
+            if current:
+                commands.append(current)
+            current = []
+            continue
+        current.append(token)
+    if current:
+        commands.append(current)
+    return commands
 
 
 def match_rule(rule, hook_input):
