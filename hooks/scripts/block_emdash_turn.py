@@ -18,9 +18,9 @@ harness has already scoped the text correctly, for both tools, without any
 of that.
 
 Builds the target character from its code point rather than embedding it as
-a literal in source, so this file can't trip hooks/rules/fix-emdash.js (the
-paired PreToolUse rule, run by rule-engine.js) when it is itself written or
-edited.
+a literal in source, so this file can't trip hooks/rules/fix_emdash.py (the
+paired PreToolUse rule, run by hooks/scripts/rule_engine.py) when it is
+itself written or edited.
 """
 
 import json
