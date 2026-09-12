@@ -9,8 +9,7 @@ project's config.
 | Hook | Lifecycle event | What it does |
 | ---- | ---------------- | ------------- |
 | `graphify_context.js` | UserPromptSubmit | When the project has a graphify knowledge graph, tells the agent to use `graphify query` instead of grep/Read/find |
-| `docs_first_guard.py user-prompt-submit` | UserPromptSubmit | Flags prompts that require official/current docs |
-| `docs_first_guard.py pre-tool-use` | PreToolUse | Blocks non-docs tool work until a documentation lookup happens |
+| `docs_first_guard.py` | UserPromptSubmit | Unconditionally reminds the model to verify library/API/tool/service specifics via a real lookup instead of training data |
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |

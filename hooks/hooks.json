@@ -16,9 +16,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" user-prompt-submit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\"",
             "timeout": 5,
-            "statusMessage": "Classifying prompt for docs-first guard"
+            "statusMessage": "Reminding the model to verify docs, not memory"
           }
         ]
       },
@@ -51,17 +51,6 @@
       }
     ],
     "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" pre-tool-use",
-            "timeout": 5,
-            "statusMessage": "Enforcing docs-first guard"
-          }
-        ]
-      },
       {
         "matcher": "*",
         "hooks": [
