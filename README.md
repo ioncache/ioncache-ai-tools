@@ -65,6 +65,17 @@ nothing else), so it is always there to extend.
 
 ### `hooks/rules/`
 
+**Scope, by design:** these guard against common, everyday ways of doing
+something (a bare command, a typical flag, a normal redirection), not
+against deliberate obfuscation. Exhaustive coverage would mean running
+every tool call through a separate LLM to evaluate it against a list of
+rules, real cost and latency on every single call, for a guard that's
+meant to stop casual/automatic action, not survive an adversary. A
+cheap, readable check that catches the common cases is the actual
+design goal; a bypass that requires deliberately obfuscating the
+command to get past it is an accepted, out-of-scope gap, not a bug to
+chase.
+
 One file per rule, loaded by `rule_engine.py`. Adding a rule never touches
 engine code. Three shapes:
 

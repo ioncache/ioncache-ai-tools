@@ -10,6 +10,12 @@ one simple command was enough to deny a completely different mutation
 elsewhere in the same compound command) and missed a real bypass (an
 in-place-edit flag not immediately adjacent to `sed`, e.g. `sed -E -i`,
 since the flag's exact position in the token list was never checked).
+
+Scope, by design (see README's `hooks/rules/` section): this catches
+common redirection/`sed`/`perl`/`tee`/`cp`/`mv` forms, not every possible
+one. A less common redirection operator (`>|`, `&>`) or a deliberately
+obfuscated command is an accepted, out-of-scope gap, the same trade-off
+`never_kill_without_asking` documents for itself.
 """
 import os
 import sys

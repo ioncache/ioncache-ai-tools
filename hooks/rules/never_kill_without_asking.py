@@ -14,6 +14,16 @@ can't tell "this word is the command being run" from "this word is
 somewhere in the text". Real command tokenization (Python's shlex, which
 JS has no equivalent of) can, so this rule is scripted rather than a
 declarative regex pattern.
+
+Scope, by design: this guards against common invocation forms (a bare
+call, a path-qualified call, a wrapper like `timeout`/`nohup`), not every
+way `kill` could be smuggled past it. A deliberately obfuscated form (a
+kill payload inside a `bash -c`/`sh -c` string, a raw newline splitting
+one command into two) is a known, accepted gap: the point of this rule
+is to stop the agent from casually killing a process on its own
+judgment, not to withstand deliberate evasion, and chasing every such
+form trades a simple, readable check for one that's never actually
+complete either.
 """
 import os
 import sys
@@ -27,11 +37,12 @@ EVENT = 'PreToolUse'
 TOOL_NAMES = ['Bash']
 ACTION = 'deny'
 MESSAGE = (
-    'Never run kill/pkill/killall without asking the user first, even for '
-    'your own leftover process. Ask, then wait for an explicit yes. If '
-    'this is genuinely getting in your way, disable this rule via '
-    ".claude/ioncache-ai-tools.local.json or Codex config (see README's "
-    'Disabling a rule section).'
+    'Killing a process is not a decision an agent makes on its own, even '
+    "for what looks like the agent's own leftover process. Never run "
+    'kill/pkill/killall without asking the user first, and wait for an '
+    'explicit yes. If this is genuinely getting in your way, disable this '
+    'rule via .claude/ioncache-ai-tools.local.json or Codex config (see '
+    "README's Disabling a rule section)."
 )
 
 
