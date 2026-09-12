@@ -15,7 +15,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
-from rule_engine import tokenize_command, split_into_simple_commands  # noqa: E402
+from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
 LOCKFILE_NAMES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
 
@@ -37,14 +37,15 @@ def _mutates_lockfile(simple_command):
     for i, token in enumerate(simple_command):
         if token in ('>', '>>') and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
             return True
-    if not simple_command:
+    executable = skip_wrappers(simple_command)
+    if not executable:
         return False
-    head = os.path.basename(simple_command[0])
+    head = os.path.basename(executable[0])
     if head == 'tee':
-        return any(_is_lockfile(t) for t in simple_command[1:])
+        return any(_is_lockfile(t) for t in executable[1:])
     if head in ('sed', 'perl'):
-        has_inplace_flag = any(t == '-i' or t.startswith('-i.') for t in simple_command[1:])
-        return has_inplace_flag and any(_is_lockfile(t) for t in simple_command[1:])
+        has_inplace_flag = any(t == '-i' or t.startswith('-i.') for t in executable[1:])
+        return has_inplace_flag and any(_is_lockfile(t) for t in executable[1:])
     return False
 
 

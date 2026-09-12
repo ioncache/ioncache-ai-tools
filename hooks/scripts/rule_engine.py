@@ -143,6 +143,41 @@ def split_into_simple_commands(tokens):
     return commands
 
 
+# Wrapper commands that run their own argument as the actual command, so
+# a guarded word behind one of these is still the thing actually invoked
+# (`timeout 5 kill -9 1234` really does run kill). Matches the wrapper
+# set Claude Code's own permissions.deny documents stripping for the
+# same reason. NO_ARG_WRAPPERS handles the bare-invocation case (no
+# flags of their own: `nice kill`, `nohup kill`), by skipping exactly
+# the wrapper token; `timeout` is special-cased since its own first
+# argument is a mandatory duration, not part of the wrapped command.
+# Invoked WITH their own flags (`nice -n 10 kill`, `stdbuf -o0 kill`),
+# these wrappers are not recognized: their flags can take a value of
+# their own, and telling a flag from its value needs per-wrapper
+# knowledge, real scope beyond what this covers, and stays a known,
+# accepted gap.
+NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf'}
+DURATION_ARG_WRAPPERS = {'timeout'}
+
+
+def skip_wrappers(simple_command):
+    """Returns the simple command's tokens starting from its actual
+    executable, past any recognized wrapper commands.
+    """
+    i = 0
+    n = len(simple_command)
+    while i < n:
+        name = os.path.basename(simple_command[i])
+        if name in NO_ARG_WRAPPERS:
+            i += 1
+            continue
+        if name in DURATION_ARG_WRAPPERS and i + 1 < n:
+            i += 2
+            continue
+        break
+    return simple_command[i:]
+
+
 def match_rule(rule, hook_input):
     if not tool_name_matches(rule, hook_input):
         return False

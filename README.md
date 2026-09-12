@@ -263,16 +263,18 @@ quoted argument containing an operator character like `|` no longer
 exposes it (`grep "kill|pkill|killall" file` is a single quoted token,
 not three separately-matched pieces).
 
-It also introduces a different gap that the old position-blind text
-match didn't have: a wrapper command around the guarded word (`timeout
-5 kill -9 1234`, `nice kill -9 1234`) is not currently recognized,
-since only the first token of each simple command is checked. The old
-regex would sometimes catch these by luck, since it matched the
-guarded word anywhere in the text regardless of position. This is a
-known, accepted trade-off for now, not a fix; closing it means teaching
-the matcher each wrapper's own flag/argument shape (e.g. `timeout`
-takes a required duration before the wrapped command), which is real
-scope beyond the false-positive fix this was solving.
+It also introduces a narrower version of a different gap the old
+position-blind text match didn't have: a wrapper command around the
+guarded word (`timeout 5 kill -9 1234`, `nohup kill -9 1234`, a bare
+`nice kill -9 1234`) is recognized, `skip_wrappers` strips a small,
+fixed set of wrappers (matching the set Claude Code's own
+`permissions.deny` documents stripping for the same reason) before
+checking the executable position. What's still not recognized is one
+of those same wrappers invoked *with* its own value-taking flag
+(`nice -n 10 kill -9 1234`, `stdbuf -o0 kill -9 1234`): telling a
+flag from its value needs per-wrapper argument-grammar knowledge this
+doesn't have. Closing that fully is real scope beyond the false-positive
+fix this was solving, and stays a known, accepted gap.
 
 `block_raw_worktree_add` still uses the older text-normalization
 approach (`normalize_shell_command`) rather than tokenization, and

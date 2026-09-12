@@ -220,6 +220,15 @@ def main():
         ('true; /bin/kill -9 12345', True, 'a path-qualified invocation as the second command in a chain'),
         ('sleep 1 && kill -9 12345', True, 'a bare invocation as the second command in a chain'),
         ('echo "(kill -9 12345)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
+        ('timeout 5 kill -9 12345', True, 'a timeout wrapper around the invocation'),
+        ('nohup kill -9 12345', True, 'a no-argument wrapper around the invocation'),
+        ('nice kill -9 12345', True, 'a bare (no-flag) nice wrapper around the invocation'),
+        ('timeout 5 ls /tmp/kill', False, 'a wrapper around an unrelated command should still not match'),
+        (
+            'nice -n 10 kill -9 12345',
+            False,
+            'a wrapper invoked with its own value-taking flag, a documented accepted gap, not a regression',
+        ),
     ]
     for command, expected, label in kill_cases:
         got = never_kill_without_asking.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
@@ -260,6 +269,7 @@ def main():
             'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never_kill_without_asking)',
         ),
         ('npm install', False, 'an unrelated Bash command'),
+        (f'timeout 5 sed -i s/a/b/ {lockfile_name}', True, 'a timeout wrapper around an in-place sed targeting a lockfile'),
     ]
     for command, expected, label in lockfile_cases:
         got = no_manual_lockfile_edit_bash.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})

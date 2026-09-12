@@ -19,7 +19,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
-from rule_engine import tokenize_command, split_into_simple_commands  # noqa: E402
+from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
 GUARDED_COMMANDS = {'kill', 'pkill', 'killall'}
 
@@ -39,9 +39,10 @@ def matches(hook_input):
     command = (hook_input.get('tool_input') or {}).get('command') or ''
     tokens = tokenize_command(command)
     for simple_command in split_into_simple_commands(tokens):
-        if not simple_command:
+        executable = skip_wrappers(simple_command)
+        if not executable:
             continue
-        head = os.path.basename(simple_command[0])
+        head = os.path.basename(executable[0])
         if head in GUARDED_COMMANDS:
             return True
     return False
