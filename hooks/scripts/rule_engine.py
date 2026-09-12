@@ -246,7 +246,12 @@ def merge_user_prompt_submit(results):
     messages = [r['message'] for r in results if r and r.get('action') == 'inject']
     if not messages:
         return None
-    return {'additionalContext': '\n\n'.join(messages)}
+    return {
+        'hookSpecificOutput': {
+            'hookEventName': 'UserPromptSubmit',
+            'additionalContext': '\n\n'.join(messages),
+        }
+    }
 
 
 def _validated_result(result, rule_name):

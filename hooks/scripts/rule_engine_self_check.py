@@ -111,9 +111,12 @@ def main():
     # merge_pre_tool_use: nothing matched
     assert merge_pre_tool_use([]) is None
 
-    # merge_user_prompt_submit: concatenation
+    # merge_user_prompt_submit: concatenation, wrapped in hookSpecificOutput
+    # (Claude Code requires additionalContext nested there with hookEventName
+    # set, a bare top-level additionalContext field is silently ignored)
     injected = merge_user_prompt_submit([{'action': 'inject', 'message': 'first'}, {'action': 'inject', 'message': 'second'}])
-    assert injected['additionalContext'] == 'first\n\nsecond'
+    assert injected['hookSpecificOutput']['hookEventName'] == 'UserPromptSubmit'
+    assert injected['hookSpecificOutput']['additionalContext'] == 'first\n\nsecond'
 
     # merge_user_prompt_submit: nothing matched
     assert merge_user_prompt_submit([]) is None
