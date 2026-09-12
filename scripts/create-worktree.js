@@ -4,6 +4,7 @@
 // config, generated caches, or per-repo setup steps that the main worktree has.
 //
 // Usage: node create-worktree.js <same args you'd pass to the git command>
+// Self-test: node create-worktree.js --self-test
 //
 // A repo with no .worktree-setup.json gets one written with generic defaults
 // (Claude Code local config symlinks) on first use, so the file is always
@@ -122,6 +123,25 @@ function runSetupCommands({ config, worktreePath, expand, applied }) {
 }
 
 /**
+ * Resolves `rel` against `root` and rejects it if the result would land
+ * outside `root` (a `..`-escaping entry in .worktree-setup.json, which is
+ * committed repo content, not necessarily trustworthy).
+ *
+ * @param {string} root - Absolute path the result must stay inside
+ * @param {string} rel - Path from the setup config, relative to root
+ * @returns {string} The resolved absolute path
+ * @throws {Error} If the resolved path escapes root
+ */
+function resolveWithinRoot(root, rel) {
+  const resolvedRoot = path.resolve(root)
+  const resolved = path.resolve(resolvedRoot, rel)
+  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+    throw new Error(`.worktree-setup.json path escapes its root (${root}): ${rel}`)
+  }
+  return resolved
+}
+
+/**
  * Applies a repo's .worktree-setup.json to a freshly created worktree:
  * copies, generated files, symlinks, then post-create commands, in order.
  *
@@ -136,14 +156,14 @@ function applySetup(mainRoot, worktreePath) {
   const applied = []
 
   for (const rel of config.copies || []) {
-    const src = path.join(mainRoot, rel)
+    const src = resolveWithinRoot(mainRoot, rel)
     if (!fs.existsSync(src)) continue
-    fs.cpSync(src, path.join(worktreePath, rel), { recursive: true })
+    fs.cpSync(src, resolveWithinRoot(worktreePath, rel), { recursive: true })
     applied.push(`copied ${rel}`)
   }
 
   for (const { path: rel, content } of config.afterCopy || []) {
-    const dest = path.join(worktreePath, rel)
+    const dest = resolveWithinRoot(worktreePath, rel)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     fs.writeFileSync(dest, expand(content))
     applied.push(`wrote ${rel}`)
@@ -151,10 +171,10 @@ function applySetup(mainRoot, worktreePath) {
 
   for (const pattern of config.symlinks || []) {
     for (const rel of expandGlob(mainRoot, pattern)) {
-      const src = path.join(mainRoot, rel)
+      const src = resolveWithinRoot(mainRoot, rel)
       if (!fs.existsSync(src)) continue
 
-      const dest = path.join(worktreePath, rel)
+      const dest = resolveWithinRoot(worktreePath, rel)
       fs.mkdirSync(path.dirname(dest), { recursive: true })
       try {
         fs.symlinkSync(src, dest, fs.statSync(src).isDirectory() ? 'dir' : 'file')
@@ -184,7 +204,20 @@ function report(applied, worktreePath) {
   for (const item of applied) console.log(`  ${item}`)
 }
 
+function selfTest() {
+  const assert = require('assert')
+  assert.strictEqual(resolveWithinRoot('/repo/main', 'a/b.txt'), path.resolve('/repo/main/a/b.txt'))
+  assert.throws(() => resolveWithinRoot('/repo/main', '../../etc/passwd'), /escapes its root/)
+  assert.throws(() => resolveWithinRoot('/repo/main', '../main-evil/x'), /escapes its root/)
+  console.log('create-worktree self-test passed')
+}
+
 function main() {
+  if (process.argv[2] === '--self-test') {
+    selfTest()
+    return
+  }
+
   const args = process.argv.slice(2)
   if (args.length === 0) {
     console.error('usage: create-worktree.js <same args as the git command>')
