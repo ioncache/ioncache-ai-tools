@@ -270,6 +270,11 @@ def main():
         ),
         ('npm install', False, 'an unrelated Bash command'),
         (f'timeout 5 sed -i s/a/b/ {lockfile_name}', True, 'a timeout wrapper around an in-place sed targeting a lockfile'),
+        (f'perl -pi -e s/a/b/ {lockfile_name}', True, "perl's combined -pi in-place flag"),
+        (f'sed -Ei s/a/b/ {lockfile_name}', True, "GNU sed's combined -Ei in-place flag"),
+        (f'sed --in-place s/a/b/ {lockfile_name}', True, "GNU sed's long-form --in-place flag"),
+        (f'cp /tmp/fake-lock.json {lockfile_name}', True, 'a plain copy overwriting a lockfile'),
+        (f'cp {lockfile_name} /tmp/backup.json', False, 'a plain copy reading a lockfile, not overwriting it'),
     ]
     for command, expected, label in lockfile_cases:
         got = no_manual_lockfile_edit_bash.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})

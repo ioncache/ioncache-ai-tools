@@ -33,6 +33,23 @@ def _is_lockfile(token):
     return os.path.basename(token) in LOCKFILE_NAMES
 
 
+# Checks for 'i' anywhere in a short-flag cluster (-i, -pi, -Ei, -i.bak,
+# -Ei.bak), since sed/perl combine single-letter flags into one token and
+# an exact '-i'/'-i.' match misses that. Also accepts GNU sed's long form.
+# Known, accepted gap: doesn't parse cp/mv's own flags, so `cp -t DIR
+# package-lock.json` (destination given via -t, lockfile is actually the
+# source being read) reads as a mutation; narrow enough not to chase.
+def _has_inplace_edit_flag(executable):
+    for token in executable[1:]:
+        if token == '--in-place' or token.startswith('--in-place='):
+            return True
+        if token.startswith('-') and not token.startswith('--'):
+            flags = token[1:].split('.', 1)[0]
+            if 'i' in flags:
+                return True
+    return False
+
+
 def _mutates_lockfile(simple_command):
     for i, token in enumerate(simple_command):
         if token in ('>', '>>') and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
@@ -44,8 +61,9 @@ def _mutates_lockfile(simple_command):
     if head == 'tee':
         return any(_is_lockfile(t) for t in executable[1:])
     if head in ('sed', 'perl'):
-        has_inplace_flag = any(t == '-i' or t.startswith('-i.') for t in executable[1:])
-        return has_inplace_flag and any(_is_lockfile(t) for t in executable[1:])
+        return _has_inplace_edit_flag(executable) and any(_is_lockfile(t) for t in executable[1:])
+    if head in ('cp', 'mv') and len(executable) > 1:
+        return _is_lockfile(executable[-1])
     return False
 
 
