@@ -155,6 +155,27 @@ def merge_user_prompt_submit(results):
     return {'additionalContext': '\n\n'.join(messages)}
 
 
+def _validated_result(result, rule_name):
+    """A scripted rule's check() is arbitrary code; it can return
+    anything, not just the {action, message/updatedInput} shape the
+    merge functions expect. Validating here, inside the same per-rule
+    try/except resolve_action already runs in, means a malformed result
+    from one rule degrades to "no action from this rule" instead of
+    raising inside merge_pre_tool_use/merge_user_prompt_submit, outside
+    any per-rule boundary, where it would silently drop every other
+    rule's valid results too (main()'s broad except swallows it).
+    """
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        print(f'rule-engine: rule "{rule_name}" returned a non-dict result, ignoring it', file=sys.stderr)
+        return None
+    if result.get('action') == 'inject' and not isinstance(result.get('message'), str):
+        print(f'rule-engine: rule "{rule_name}" returned an inject action with a non-string message, ignoring it', file=sys.stderr)
+        return None
+    return result
+
+
 def run_rules(rules, event, hook_input):
     matched = []
     for rule in rules:
@@ -167,7 +188,8 @@ def run_rules(rules, event, hook_input):
     results = []
     for rule in matched:
         try:
-            results.append(resolve_action(rule, hook_input))
+            result = resolve_action(rule, hook_input)
+            results.append(_validated_result(result, rule.get('name', 'unknown')))
         except Exception as err:
             print(f'rule-engine: check threw for rule "{rule.get("name", "unknown")}": {err}', file=sys.stderr)
             results.append(None)

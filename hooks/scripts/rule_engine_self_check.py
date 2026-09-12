@@ -125,6 +125,24 @@ def main():
     run_result = run_rules(rules_with_failure, 'PreToolUse', {'tool_name': 'Bash', 'tool_input': {}})
     assert run_result['hookSpecificOutput']['permissionDecisionReason'] == 'caught the good one'
 
+    # run_rules: a rule returning a malformed result (not a dict, or an
+    # inject with a non-string message) is dropped, not allowed to raise
+    # inside the merge step where it would take every sibling result with it
+    rules_with_malformed_result = [
+        {'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'check': lambda _input: 'not-a-dict'},
+        {'event': 'UserPromptSubmit', 'matcher': {'type': 'always'}, 'check': lambda _input: {'action': 'inject', 'message': None}},
+        {'event': 'PreToolUse', 'matcher': {'type': 'always'}, 'action': 'deny', 'message': 'still works'},
+    ]
+    malformed_pre_tool_use = [r for r in rules_with_malformed_result if r['event'] == 'PreToolUse']
+    malformed_result = run_rules(malformed_pre_tool_use, 'PreToolUse', {'tool_name': 'Bash', 'tool_input': {}})
+    assert (
+        malformed_result['hookSpecificOutput']['permissionDecisionReason'] == 'still works'
+    ), 'a non-dict result from one rule should not prevent a valid sibling deny from surfacing'
+    malformed_prompt_submit = [r for r in rules_with_malformed_result if r['event'] == 'UserPromptSubmit']
+    assert (
+        run_rules(malformed_prompt_submit, 'UserPromptSubmit', {}) is None
+    ), 'an inject result with a non-string message should be dropped, not raise'
+
     # load_rules_for_event: reads json + py rules, filters by event
     tmp_dir = tempfile.mkdtemp(prefix='rule-engine-test-')
     with open(os.path.join(tmp_dir, 'a.json'), 'w', encoding='utf-8') as f:
