@@ -123,9 +123,37 @@ function runSetupCommands({ config, worktreePath, expand, applied }) {
 }
 
 /**
+ * Confirms `absPath`'s real, symlink-resolved location stays within
+ * `resolvedRoot`. A lexically-safe path (no literal `..`) can still land
+ * outside root if a symlink anywhere along it redirects there, so this
+ * resolves the nearest EXISTING ancestor (the target itself may not exist
+ * yet, e.g. a destination being created) with `fs.realpathSync`, which
+ * follows every symlink in that chain, and checks the result.
+ *
+ * @param {string} resolvedRoot - Root directory, already path.resolve'd
+ * @param {string} absPath - Absolute path to check
+ * @param {string} rel - Original relative path, for the error message
+ * @throws {Error} If a symlink redirects the real path outside root
+ */
+function assertRealPathWithinRoot(resolvedRoot, absPath, rel) {
+  const realRoot = fs.realpathSync(resolvedRoot)
+  let existing = absPath
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing)
+    if (parent === existing) break
+    existing = parent
+  }
+  const real = fs.realpathSync(existing)
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    throw new Error(`.worktree-setup.json path escapes its root via a symlink (${resolvedRoot}): ${rel}`)
+  }
+}
+
+/**
  * Resolves `rel` against `root` and rejects it if the result would land
- * outside `root` (a `..`-escaping entry in .worktree-setup.json, which is
- * committed repo content, not necessarily trustworthy).
+ * outside `root`, lexically (a `..`-escaping entry) or via a symlink
+ * component. .worktree-setup.json is committed repo content, not
+ * necessarily trustworthy.
  *
  * @param {string} root - Absolute path the result must stay inside
  * @param {string} rel - Path from the setup config, relative to root
@@ -138,6 +166,7 @@ function resolveWithinRoot(root, rel) {
   if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
     throw new Error(`.worktree-setup.json path escapes its root (${root}): ${rel}`)
   }
+  assertRealPathWithinRoot(resolvedRoot, resolved, rel)
   return resolved
 }
 
@@ -206,9 +235,24 @@ function report(applied, worktreePath) {
 
 function selfTest() {
   const assert = require('assert')
-  assert.strictEqual(resolveWithinRoot('/repo/main', 'a/b.txt'), path.resolve('/repo/main/a/b.txt'))
-  assert.throws(() => resolveWithinRoot('/repo/main', '../../etc/passwd'), /escapes its root/)
-  assert.throws(() => resolveWithinRoot('/repo/main', '../main-evil/x'), /escapes its root/)
+  const os = require('os')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-worktree-self-test-'))
+  const root = fs.mkdtempSync(path.join(tmp, 'root-'))
+  const outside = fs.mkdtempSync(path.join(tmp, 'outside-'))
+
+  assert.strictEqual(resolveWithinRoot(root, 'a/b.txt'), path.resolve(root, 'a/b.txt'))
+  assert.throws(() => resolveWithinRoot(root, '../../etc/passwd'), /escapes its root/)
+  assert.throws(() => resolveWithinRoot(root, `../${path.basename(outside)}/x`), /escapes its root/)
+
+  // Symlink-based escape: no literal ".." in the config, but an existing
+  // ancestor is a symlink that redirects outside root once resolved.
+  fs.symlinkSync(outside, path.join(root, 'escape-link'), 'dir')
+  fs.writeFileSync(path.join(outside, 'x'), 'secret')
+  assert.throws(() => resolveWithinRoot(root, 'escape-link/x'), /escapes its root/, 'source path via a symlinked ancestor should be rejected')
+  assert.throws(() => resolveWithinRoot(root, 'escape-link/new-file.txt'), /escapes its root/, 'destination path via a symlinked ancestor should be rejected, even though the file itself does not exist yet')
+
+  fs.rmSync(tmp, { recursive: true, force: true })
   console.log('create-worktree self-test passed')
 }
 
