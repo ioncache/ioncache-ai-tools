@@ -1,11 +1,15 @@
 # Generic Rule Engine: Design
 
 > **Note:** this doc predates the Node-to-Python rewrite in
-> `2026-09-11-python-rule-engine-rewrite.md`. The architecture, rule
-> shapes, and matching semantics below are all still accurate. The code
-> samples are JavaScript; the shipped engine is now `hooks/scripts/rule_engine.py`,
-> and scripted rules are `.py` modules, not `.js`. See the rewrite doc for
-> the current implementation and the scripted-rule contract.
+> `2026-09-11-python-rule-engine-rewrite.md`. The high-level architecture
+> (match-then-act, the three rule categories, cheap matchers plus
+> concurrent scripted checks) is still accurate. The code is not: the
+> shipped engine is `hooks/scripts/rule_engine.py`, and the scripted-rule
+> contract shown below (`module.exports`, an async `check()`) is not
+> loadable by it at all. A scripted rule today is a `.py` module with
+> module-level `EVENT`/`TOOL_NAMES` and a `matches(hook_input)` function,
+> see the rewrite doc for the exact current contract before writing a new
+> rule from this document.
 
 ## Problem
 
