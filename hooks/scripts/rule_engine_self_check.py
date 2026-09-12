@@ -490,6 +490,24 @@ def main():
     assert filtered_rules == ['rule-two.json'], 'a disabled rule id should exclude that rule and keep the other'
     shutil.rmtree(filter_rules_dir, ignore_errors=True)
 
+    # load_rules_for_event: a disabled .py rule is never imported, so its
+    # module-level side effects never run
+    sentinel_rules_dir = tempfile.mkdtemp(prefix='rule-engine-sentinel-')
+    sentinel_path = os.path.join(sentinel_rules_dir, 'sentinel.marker')
+    with open(os.path.join(sentinel_rules_dir, 'writes-sentinel.py'), 'w', encoding='utf-8') as f:
+        f.write(
+            "import pathlib\n"
+            f"pathlib.Path({sentinel_path!r}).write_text('imported')\n"
+            "EVENT = 'PreToolUse'\n"
+            "def matches(hook_input):\n"
+            "    return True\n"
+        )
+    load_rules_for_event(sentinel_rules_dir, 'PreToolUse', {'writes-sentinel'})
+    assert not os.path.exists(sentinel_path), 'a disabled .py rule should not be imported at all'
+    load_rules_for_event(sentinel_rules_dir, 'PreToolUse', set())
+    assert os.path.exists(sentinel_path), 'an enabled .py rule should still be imported normally'
+    shutil.rmtree(sentinel_rules_dir, ignore_errors=True)
+
     print('All rule-engine self-checks passed.')
 
 

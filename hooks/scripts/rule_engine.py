@@ -297,11 +297,17 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
     for name in sorted(os.listdir(rules_dir)):
         if not (name.endswith('.json') or name.endswith('.py')):
             continue
-        rule = load_rule_file(rules_dir, name)
-        if rule is None or rule.get('event') != event:
-            continue
+        # Compute and check the disabled-id before load_rule_file, which
+        # imports and executes a .py rule's module-level code. Checking
+        # after loading meant a "disabled" rule still ran on every
+        # invocation, its own top-level side effects (or a hang, caught
+        # only by the full watchdog timeout) happened regardless of
+        # whether the rule was ever actually used.
         rule_id = os.path.splitext(name)[0]
         if rule_id in disabled_rule_ids:
+            continue
+        rule = load_rule_file(rules_dir, name)
+        if rule is None or rule.get('event') != event:
             continue
         rules.append(rule)
     return rules
