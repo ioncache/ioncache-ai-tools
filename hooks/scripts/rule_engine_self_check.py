@@ -10,6 +10,7 @@ import tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+import rule_engine  # noqa: E402
 from rule_engine import (  # noqa: E402
     match_rule,
     resolve_action,
@@ -492,6 +493,24 @@ def main():
     no_config_disabled = get_disabled_rule_ids(empty_project_root, codex_config_path=NO_CODEX, claude_global_path=NO_CLAUDE_GLOBAL)
     assert no_config_disabled == set(), 'no config anywhere should mean no disabled rules'
     shutil.rmtree(empty_project_root, ignore_errors=True)
+
+    # get_disabled_rule_ids: tomllib unavailable (pre-3.11 Python) degrades to
+    # no Codex rules disabled instead of crashing the whole engine; module
+    # import is guarded specifically so this can't happen before main() runs
+    no_tomllib_dir = tempfile.mkdtemp(prefix='rule-engine-no-tomllib-')
+    no_tomllib_path = os.path.join(no_tomllib_dir, 'config.toml')
+    write_text(no_tomllib_path, '[ioncache-ai-tools]\ndisabled_rules = ["test-rule-a"]\n')
+    original_tomllib = rule_engine.tomllib
+    rule_engine.tomllib = None
+    captured_stderr = io.StringIO()
+    with contextlib.redirect_stderr(captured_stderr):
+        no_tomllib_disabled = get_disabled_rule_ids(
+            '/tmp/rule-engine-no-tomllib-project', codex_config_path=no_tomllib_path, claude_global_path=NO_CLAUDE_GLOBAL
+        )
+    rule_engine.tomllib = original_tomllib
+    assert no_tomllib_disabled == set(), 'a missing tomllib should degrade to no Codex rules disabled, not raise'
+    assert 'tomllib unavailable' in captured_stderr.getvalue(), 'the tomllib-unavailable case should be logged, not silent'
+    shutil.rmtree(no_tomllib_dir, ignore_errors=True)
 
     # load_rules_for_event: disabled_rule_ids excludes the matching rule, keeps others
     filter_rules_dir = tempfile.mkdtemp(prefix='rule-engine-filter-')

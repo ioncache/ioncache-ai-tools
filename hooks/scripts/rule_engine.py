@@ -16,7 +16,11 @@ import re
 import shlex
 import signal
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
 
 RULES_DIRNAME = 'rules'
 CLAUDE_LOCAL_CONFIG = os.path.join('.claude', 'ioncache-ai-tools.local.json')
@@ -362,7 +366,12 @@ def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_pa
     disabled.update(claude_disabled)
 
     # Codex: one file, both scopes live in it as different tables.
-    if os.path.exists(codex_config_path):
+    if tomllib is None and os.path.exists(codex_config_path):
+        print(
+            f'rule-engine: tomllib unavailable (Python 3.11+ required), skipping Codex config at {codex_config_path}',
+            file=sys.stderr,
+        )
+    elif os.path.exists(codex_config_path):
         try:
             with open(codex_config_path, 'rb') as f:
                 codex_config = tomllib.load(f)
