@@ -251,20 +251,37 @@ any individual rule by hand-editing the config. Hardening this (e.g. a
 disable request for) is a real design change to what the feature
 guarantees, not a bug fix, and hasn't been made.
 
-**The regex-based rules are best-effort heuristics on raw command text, not
-a security boundary.** They operate on `tool_input.command` as plain text,
-with no shell parsing. This has known, accepted gaps: a matched command run
-through a wrapper the pattern doesn't recognize, shell expansion or
-indirection that produces the guarded command without the guarded text
-appearing literally, or a plain argument that happens to contain a guarded
-word (e.g. `echo kill` matches `never-kill-without-asking`, a false
-positive, not a false negative). There's also a known gap in the other
-direction: `normalize_shell_command` strips quote delimiters to catch
-`'kill'`/`"kill"` as bypasses, but that also exposes any boundary-class
-character (e.g. `|`) that was safely inside the quotes, so a command like
-`grep "kill|pkill|killall" file` can still false-match. Closing that
-properly means real shell tokenization (e.g. Python's `shlex`), not a
-flat-text normalization pass; it hasn't been done. These rules are meant to
+**Two rules use real command tokenization; the rest are still text
+heuristics, not a security boundary.** `never_kill_without_asking` and
+`no_manual_lockfile_edit_bash` tokenize the command (Python's `shlex`)
+and check the executable position of each simple command, rather than
+matching text anywhere in the string. That closes two gaps a flat-text
+match had: a plain argument that happens to contain the guarded word no
+longer false-matches (`echo kill` and `ls /tmp/kill` are both correctly
+ignored now, since `kill` isn't in command position in either), and a
+quoted argument containing an operator character like `|` no longer
+exposes it (`grep "kill|pkill|killall" file` is a single quoted token,
+not three separately-matched pieces).
+
+It also introduces a different gap that the old position-blind text
+match didn't have: a wrapper command around the guarded word (`timeout
+5 kill -9 1234`, `nice kill -9 1234`) is not currently recognized,
+since only the first token of each simple command is checked. The old
+regex would sometimes catch these by luck, since it matched the
+guarded word anywhere in the text regardless of position. This is a
+known, accepted trade-off for now, not a fix; closing it means teaching
+the matcher each wrapper's own flag/argument shape (e.g. `timeout`
+takes a required duration before the wrapped command), which is real
+scope beyond the false-positive fix this was solving.
+
+`block_raw_worktree_add` still uses the older text-normalization
+approach (`normalize_shell_command`) rather than tokenization, and
+keeps both of the gaps above for the patterns it matches. Shell
+expansion or indirection that produces a guarded command without the
+guarded word ever appearing literally in the text (a variable or
+command substitution) is a gap for every rule here regardless of
+approach, since none of them actually execute or expand the shell.
+These rules are meant to
 catch the common case and prompt a pause, not to withstand deliberate
 evasion.
 

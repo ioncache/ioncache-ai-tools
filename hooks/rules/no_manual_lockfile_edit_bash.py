@@ -1,16 +1,23 @@
 """Bash-side companion to no-manual-lockfile-edit.json: that rule only
 matches Edit/Write/MultiEdit, so a Bash mutation (redirection, sed -i,
 tee, perl -i) targeting a lockfile bypasses it entirely.
+
+Checks each simple command's mutation operation, its options, and its
+target together, rather than matching a lockfile name and a mutation
+pattern independently anywhere in the whole command. Matching
+independently denied unrelated commands (a lockfile name mentioned in
+one simple command was enough to deny a completely different mutation
+elsewhere in the same compound command) and missed a real bypass (an
+in-place-edit flag not immediately adjacent to `sed`, e.g. `sed -E -i`,
+since the flag's exact position in the token list was never checked).
 """
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
-from rule_engine import normalize_shell_command  # noqa: E402
+from rule_engine import tokenize_command, split_into_simple_commands  # noqa: E402
 
-LOCKFILE_PATTERN = re.compile(r'(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)')
-MUTATION_PATTERN = re.compile(r'(>{1,2}|\btee\b|\bsed\s+-i\b|\bperl\s+-i\b)')
+LOCKFILE_NAMES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
 
 EVENT = 'PreToolUse'
 TOOL_NAMES = ['Bash']
@@ -22,6 +29,25 @@ MESSAGE = (
 )
 
 
+def _is_lockfile(token):
+    return os.path.basename(token) in LOCKFILE_NAMES
+
+
+def _mutates_lockfile(simple_command):
+    for i, token in enumerate(simple_command):
+        if token in ('>', '>>') and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
+            return True
+    if not simple_command:
+        return False
+    head = os.path.basename(simple_command[0])
+    if head == 'tee':
+        return any(_is_lockfile(t) for t in simple_command[1:])
+    if head in ('sed', 'perl'):
+        has_inplace_flag = any(t == '-i' or t.startswith('-i.') for t in simple_command[1:])
+        return has_inplace_flag and any(_is_lockfile(t) for t in simple_command[1:])
+    return False
+
+
 def matches(hook_input):
-    command = normalize_shell_command((hook_input.get('tool_input') or {}).get('command') or '')
-    return bool(LOCKFILE_PATTERN.search(command) and MUTATION_PATTERN.search(command))
+    command = (hook_input.get('tool_input') or {}).get('command') or ''
+    return any(_mutates_lockfile(sc) for sc in split_into_simple_commands(tokenize_command(command)))

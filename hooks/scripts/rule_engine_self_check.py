@@ -236,16 +236,28 @@ def main():
     # separator-class boundary for a hyphenated identifier to slip past.
 
     # no_manual_lockfile_edit_bash: catches Bash mutations the Edit/Write/
-    # MultiEdit-only rule above can't see
+    # MultiEdit-only rule above can't see. Tokenization-based, same as
+    # never_kill_without_asking: binds the mutation operation, its
+    # options, and its target together per simple command, instead of
+    # matching a lockfile name and a mutation pattern independently
+    # anywhere in the whole command.
     lockfile_name = 'package-lock.json'
     lockfile_cases = [
         (f'printf x > {lockfile_name}', True, 'a redirection into a lockfile'),
         (f'sed -i s/a/b/ {lockfile_name}', True, 'sed -i targeting a lockfile'),
+        (f'sed -E -i s/a/b/ {lockfile_name}', True, 'sed -E -i, a flag between sed and -i (prior bypass regression)'),
+        (f'sed -i.bak s/a/b/ {lockfile_name}', True, 'sed -i.bak suffix form'),
+        (f'tee {lockfile_name}', True, 'tee targeting a lockfile'),
         (f'cat {lockfile_name}', False, 'reading a lockfile without a mutation'),
+        (
+            f'printf x > output && cat {lockfile_name}',
+            False,
+            'an unrelated mutation with the lockfile only read elsewhere (prior false-positive regression)',
+        ),
         (
             f's\\ed -i s/a/b/ {lockfile_name}',
             True,
-            'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never-kill-without-asking)',
+            'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never_kill_without_asking)',
         ),
         ('npm install', False, 'an unrelated Bash command'),
     ]
