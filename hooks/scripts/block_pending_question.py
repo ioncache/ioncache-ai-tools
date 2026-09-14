@@ -53,9 +53,11 @@ BASH_MUTATION_PATTERNS = re.compile(
     r"\b(node|nodejs)\s+(-e|--eval)\b|"
     r"\bpython3?\s+-c\b|"
     r"\btee\b|"
-    # A real redirect into a file (`>`, `>>`, `2>`), not a descriptor
-    # duplication like `2>&1`/`>&2` (excluded via the (?!&) lookahead).
-    r">{1,2}(?!&)\s*\S",
+    # A real redirect into a file: `>`, `>>`, `2>`, or `>&file`/`2>&file`
+    # (Bash opens `file` there too, redirecting both streams to it), but
+    # not descriptor duplication/closing like `>&1`, `2>&1`, `>&-`, where
+    # what follows `&` is a bare fd number or `-`, never a real path.
+    r">{1,2}(?!&)\s*\S|>&(?!-|\d+\b)\S",
     re.IGNORECASE,
 )
 

@@ -168,6 +168,9 @@ MUTATION_FIXTURES = [
     ('Bash', {'command': 'printf x >> /tmp/out.txt'}, True, 'append redirect into a file'),
     ('Bash', {'command': 'some-command 2>&1'}, False, 'fd duplication 2>&1 must not be caught'),
     ('Bash', {'command': 'some-command 1>&2'}, False, 'fd duplication 1>&2 must not be caught'),
+    ('Bash', {'command': 'printf x >&created.txt'}, True, '>&file redirects both streams into a real file'),
+    ('Bash', {'command': 'printf x 2>&created.txt'}, True, '2>&file redirects into a real file'),
+    ('Bash', {'command': 'some-command >&-'}, False, 'closing a descriptor with >&- must not be caught'),
 ]
 
 
