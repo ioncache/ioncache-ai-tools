@@ -36,6 +36,9 @@ jobs:
       - name: Run rule-engine self-check
         run: python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 
+      - name: Run pending-question self-check
+        run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
+
       - name: Check command/skill frontmatter
         run: |
           for f in commands/*.md skills/*/SKILL.md; do
