@@ -13,8 +13,10 @@ examples tend not to.
 """
 import json
 import os
+import pathlib
 import subprocess
 import sys
+import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -240,18 +242,25 @@ def main():
     # in isolation, catches a bare top-level additionalContext field (the
     # real bug found here) that a unit-level check on has_question() alone
     # would never see, since has_question() itself was never wrong about
-    # that.
-    result = subprocess.run(
-        [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
-        input=json.dumps({'session_id': 'self-check', 'prompt': 'why is this broken'}),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    output = json.loads(result.stdout)
-    hook_output = output.get('hookSpecificOutput') or {}
-    if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
-        failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
+    # that. Uses a random, unambiguously-synthetic session id so this can
+    # never collide with a real session's marker file, and always cleans
+    # up the flag file classify_question.py writes as a side effect.
+    session_id = f'self-check-{uuid.uuid4()}'
+    flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
+    try:
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
+            input=json.dumps({'session_id': session_id, 'prompt': 'why is this broken'}),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        output = json.loads(result.stdout)
+        hook_output = output.get('hookSpecificOutput') or {}
+        if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
+            failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
+    finally:
+        flag_path.unlink(missing_ok=True)
 
     if failures:
         print(f'{len(failures)} failure(s):', file=sys.stderr)
