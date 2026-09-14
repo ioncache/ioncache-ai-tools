@@ -28,12 +28,15 @@ def main():
     print(
         json.dumps(
             {
-                "additionalContext": (
-                    "This prompt contains a question. Before writing any "
-                    "other output, load and apply the "
-                    "ioncache-ai-tools:answer-questions skill to the "
-                    "response."
-                )
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": (
+                        "This prompt contains a question. Before writing any "
+                        "other output, load and apply the "
+                        "ioncache-ai-tools:answer-questions skill to the "
+                        "response."
+                    ),
+                }
             }
         )
     )
