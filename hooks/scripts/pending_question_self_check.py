@@ -153,6 +153,24 @@ MUTATION_FIXTURES = [
     ),
     (
         'Bash',
+        {'command': "gh api graphql -f query='# a leading comment\nmutation { x }'"},
+        True,
+        'a mutation prefixed with a GraphQL comment must still be caught',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query=',mutation { x }'"},
+        True,
+        'a mutation prefixed with a leading comma must still be caught',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query='# a leading comment\nquery { x }'"},
+        False,
+        'a query prefixed with a GraphQL comment stays read-only',
+    ),
+    (
+        'Bash',
         {'command': "node -e \"require('fs').writeFileSync('/tmp/x', 'y')\""},
         True,
         'node -e is unconditionally mutating (bypass this file exists to close)',

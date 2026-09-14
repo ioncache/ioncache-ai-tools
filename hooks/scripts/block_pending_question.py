@@ -86,7 +86,12 @@ def is_graphql_mutation(command):
     match = GRAPHQL_QUERY_DOCUMENT.search(command)
     if not match:
         return True
-    query_text = match.group("query").lstrip()
+    query_text = match.group("query")
+    # GraphQL's grammar treats commas and "#"-to-end-of-line comments as
+    # insignificant, ignorable tokens that may legally precede the real
+    # operation keyword. Stripping only whitespace let a mutation prefixed
+    # with either slip past as unrecognized instead of matched.
+    query_text = re.sub(r"^(?:\s+|,+|#[^\n]*\n?)+", "", query_text)
     return bool(re.match(r"mutation\b", query_text, re.IGNORECASE))
 
 
