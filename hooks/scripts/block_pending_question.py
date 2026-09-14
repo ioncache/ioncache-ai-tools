@@ -22,9 +22,13 @@ unmatched.
 """
 
 import json
+import os
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rule_engine import tokenize_command, split_into_simple_commands  # noqa: E402
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 
@@ -34,6 +38,11 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 # log/diff/show/status, ls, cat, grep, graphify query, gh pr view) are
 # intentionally not matched here. `gh api graphql` is handled separately
 # (see is_graphql_mutation), since it can be either a read or a write.
+# A real file redirect (`>`, `>>`, `>&file`) is handled separately too
+# (see has_file_redirect): unlike these, a redirect operator needs actual
+# tokenization to check, a raw text scan for `>` also matches one quoted
+# inside another command's argument (`grep "a > b" file`) or a `((...))`
+# arithmetic comparison, neither of which is a redirect at all.
 BASH_MUTATION_PATTERNS = re.compile(
     r"\bgit\s+("
     r"commit|push|reset|checkout\s+--|worktree\s+remove|branch\s+-[fD]\b|"
@@ -52,14 +61,43 @@ BASH_MUTATION_PATTERNS = re.compile(
     # cost next to what these can otherwise do unnoticed.
     r"\b(node|nodejs)\s+(-e|--eval)\b|"
     r"\bpython3?\s+-c\b|"
-    r"\btee\b|"
-    # A real redirect into a file: `>`, `>>`, `2>`, or `>&file`/`2>&file`
-    # (Bash opens `file` there too, redirecting both streams to it), but
-    # not descriptor duplication/closing like `>&1`, `2>&1`, `>&-`, where
-    # what follows `&` is a bare fd number or `-`, never a real path.
-    r">{1,2}(?!&)\s*\S|>&(?!-|\d+\b)\S",
+    r"\btee\b",
     re.IGNORECASE,
 )
+
+# Redirecting to one of these doesn't persist anything; the extremely
+# common `2>/dev/null` idiom for suppressing stderr noise on an otherwise
+# read-only command shouldn't itself count as a mutation.
+NULL_REDIRECT_TARGETS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
+
+
+def _redirects_to_a_file(simple_command):
+    if simple_command and simple_command[0] == "((":
+        # Arithmetic evaluation: `>`/`<` are comparison operators here,
+        # never a redirect.
+        return False
+    for i, token in enumerate(simple_command):
+        if token in (">", ">>"):
+            if i + 1 < len(simple_command) and simple_command[i + 1] not in NULL_REDIRECT_TARGETS:
+                return True
+        elif token == ">&":
+            if i + 1 < len(simple_command):
+                target = simple_command[i + 1]
+                if target != "-" and not target.isdigit() and target not in NULL_REDIRECT_TARGETS:
+                    return True
+    return False
+
+
+def has_file_redirect(command):
+    """True if `command` contains a real Bash redirect into a file
+    (`>`, `>>`, `>&file`), tokenized rather than text-matched so `>`
+    inside a quoted argument or a `((...))` comparison isn't mistaken
+    for one. Excludes descriptor duplication/closing (`>&1`, `2>&1`,
+    `>&-`) and redirects to /dev/null-style sinks, neither persists
+    anything.
+    """
+    tokens = tokenize_command(command)
+    return any(_redirects_to_a_file(sc) for sc in split_into_simple_commands(tokens))
 
 GRAPHQL_QUERY_DOCUMENT = re.compile(
     r"(?:-f|-F|--raw-field|--field)\s+query=(['\"])(?P<query>.*?)\1",
@@ -102,7 +140,7 @@ def is_mutating(tool_name, tool_input):
         command = (tool_input or {}).get("command", "")
         if re.search(r"\bgh\s+api\s+graphql\b", command, re.IGNORECASE) and is_graphql_mutation(command):
             return True
-        return bool(BASH_MUTATION_PATTERNS.search(command))
+        return bool(BASH_MUTATION_PATTERNS.search(command)) or has_file_redirect(command)
     return False
 
 

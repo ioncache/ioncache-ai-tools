@@ -201,6 +201,25 @@ MUTATION_FIXTURES = [
     ('Bash', {'command': 'printf x >&created.txt'}, True, '>&file redirects both streams into a real file'),
     ('Bash', {'command': 'printf x 2>&created.txt'}, True, '2>&file redirects into a real file'),
     ('Bash', {'command': 'some-command >&-'}, False, 'closing a descriptor with >&- must not be caught'),
+    (
+        'Bash',
+        {'command': 'grep "usage: cmd > out" file.txt'},
+        False,
+        'a > inside a quoted argument is not a redirect (needs tokenization, not text-scanning)',
+    ),
+    (
+        'Bash',
+        {'command': '(( $a > $b )) && echo yes'},
+        False,
+        'a > inside a (( )) arithmetic comparison is not a redirect',
+    ),
+    (
+        'Bash',
+        {'command': 'cmd 2>/dev/null'},
+        False,
+        '2>/dev/null is a common read-only idiom for suppressing stderr noise, not a mutation',
+    ),
+    ('Bash', {'command': 'echo "a > b"'}, False, 'a > inside a quoted argument is not a redirect'),
 ]
 
 
