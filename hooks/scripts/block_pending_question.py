@@ -9,9 +9,10 @@ so retrying a different tool does not bypass the block - the assistant has
 to answer in text first.
 
 Read-only/investigative tools (Read, Grep, graphify query, git log/diff/
-show, etc.) are allowed even while a question is pending, since answering
-a question well often requires looking things up - the rule this enforces
-is "don't act before answering," not "don't use any tool at all."
+show, a `gh api graphql` query rather than a mutation, etc.) are allowed
+even while a question is pending, since answering a question well often
+requires looking things up - the rule this enforces is "don't act before
+answering," not "don't use any tool at all."
 """
 
 import json
@@ -24,13 +25,15 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 # Bash commands that change state - git/gh mutations, filesystem writes,
 # package installs. Read-only commands (git log/diff/show/status, ls, cat,
 # grep, graphify query, gh pr view) are intentionally not matched here.
+# `gh api graphql` is handled separately (see is_graphql_mutation), since
+# it can be either a read or a write.
 BASH_MUTATION_PATTERNS = re.compile(
     r"\bgit\s+("
     r"commit|push|reset|checkout\s+--|worktree\s+remove|branch\s+-[fD]\b|"
     r"rebase|merge|cherry-pick|clean\s+-"
     r")\b|"
     r"\bgh\s+("
-    r"pr\s+(create|merge|close|edit)|api\s+graphql|"
+    r"pr\s+(create|merge|close|edit)|"
     r"issue\s+(create|close|edit)|repo\s+(delete|create)"
     r")\b|"
     r"\brm\s|\bmv\s|"
@@ -38,12 +41,42 @@ BASH_MUTATION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+GRAPHQL_QUERY_DOCUMENT = re.compile(
+    r"(?:-f|-F|--raw-field|--field)\s+query=(['\"])(?P<query>.*?)\1",
+    re.DOTALL,
+)
+
+
+def is_graphql_mutation(command):
+    """True if a `gh api graphql` call's query document is a mutation.
+
+    GraphQL over `gh api graphql` is a single transport for two different
+    things: reading (a `query`) and writing (a `mutation`). Matching on
+    `api graphql` alone, as an earlier version of this file did, blocks
+    every read through it too, including the only way to fetch a PR
+    review thread's `isResolved` status, something answering a question
+    often requires. The actual operation type is the leading keyword in
+    the query document itself, not anything visible in the command's
+    surrounding shell syntax.
+
+    Returns True (mutating, the safer default) when the query document
+    can't be confidently extracted, since treating an unparseable call as
+    read-only risks letting a real mutation through unexamined.
+    """
+    match = GRAPHQL_QUERY_DOCUMENT.search(command)
+    if not match:
+        return True
+    query_text = match.group("query").lstrip()
+    return bool(re.match(r"mutation\b", query_text, re.IGNORECASE))
+
 
 def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
+        if re.search(r"\bgh\s+api\s+graphql\b", command, re.IGNORECASE):
+            return is_graphql_mutation(command)
         return bool(BASH_MUTATION_PATTERNS.search(command))
     return False
 
