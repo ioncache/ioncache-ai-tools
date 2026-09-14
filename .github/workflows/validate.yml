@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -20,9 +23,18 @@ jobs:
 
       - name: Check hook script syntax
         run: |
-          for f in hooks/scripts/*.py; do
+          for f in hooks/scripts/*.py hooks/rules/*.py; do
             python3 -m py_compile "$f" && echo "$f OK"
           done
+
+      - name: Check JS hook script syntax
+        run: |
+          for f in hooks/scripts/*.js scripts/*.js; do
+            node --check "$f" && echo "$f OK"
+          done
+
+      - name: Run rule-engine self-check
+        run: python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 
       - name: Check command/skill frontmatter
         run: |
@@ -39,7 +51,7 @@ jobs:
           import pathlib, sys
           em_dash = chr(0x2014)
           hits = []
-          for pattern in ('**/*.py', '**/*.md', '**/*.json'):
+          for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js'):
               for path in pathlib.Path('.').glob(pattern):
                   if '.git' in path.parts:
                       continue

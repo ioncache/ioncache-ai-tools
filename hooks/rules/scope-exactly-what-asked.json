@@ -1,0 +1,6 @@
+{
+  "event": "UserPromptSubmit",
+  "matcher": { "type": "always" },
+  "action": "inject",
+  "message": "Do exactly what was asked, nothing more. If something else seems worth doing, mention it and stop; don't act on it unless asked."
+}

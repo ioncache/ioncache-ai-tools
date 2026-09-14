@@ -7,9 +7,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" user-prompt-submit",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/graphify_context.js\""
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\"",
             "timeout": 5,
-            "statusMessage": "Classifying prompt for docs-first guard"
+            "statusMessage": "Reminding the model to verify docs, not memory"
           }
         ]
       },
@@ -21,20 +30,27 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/classify_question.py\""
           }
         ]
-      }
-    ],
-    "PreToolUse": [
+      },
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_first_guard.py\" pre-tool-use",
-            "timeout": 5,
-            "statusMessage": "Enforcing docs-first guard"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/require_answer_questions_skill.py\""
           }
         ]
       },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
       {
         "matcher": "*",
         "hooks": [
@@ -49,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/fix_emdash_tool_input.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" PreToolUse"
           }
         ]
       }
