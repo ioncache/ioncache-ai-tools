@@ -4,6 +4,46 @@ Personal AI tools, packaged as an installable plugin for both Claude Code
 and Codex, so they apply everywhere without touching any individual
 project's config.
 
+## Table of Contents
+
+- [Install](#install)
+  - [Claude Code](#claude-code)
+  - [Codex](#codex)
+- [Hooks](#hooks)
+- [Rules](#rules)
+  - [Disabling a rule](#disabling-a-rule)
+- [Commands](#commands)
+  - [`.worktree-setup.json`](#worktree-setupjson)
+- [Skills](#skills)
+- [Local development](#local-development)
+  - [Claude Code](#claude-code-1)
+  - [Codex](#codex-1)
+- [Known limitations and security considerations](#known-limitations-and-security-considerations)
+
+## Install
+
+### Claude Code
+
+```text
+/plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
+/plugin install ioncache-ai-tools@ioncache-ai-tools
+```
+
+Enabling it goes in your **global** `~/.claude/settings.json`
+(`enabledPlugins`), so it's active in every project, not just the one you
+installed it from.
+
+### Codex
+
+```bash
+codex plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
+codex
+```
+
+Then, inside the session, open `/plugins`, select the ioncache-ai-tools
+marketplace, and install it. Open `/hooks` afterward to review and trust
+the hooks, then start a new thread.
+
 ## Hooks
 
 | Hook | Lifecycle event | What it does |
@@ -17,53 +57,7 @@ project's config.
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
-## Commands
-
-| Command | Description |
-| ------- | ------------ |
-| `/verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
-| `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
-| `/investigate` | Read-only trace of how a feature or system works |
-| `/triage-errors` | Fix a batch of failures by root cause, not one by one |
-| `/create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
-
-### `.worktree-setup.json`
-
-Lives at a repo's root. `/create-worktree` reads it from the main worktree and
-applies it to every new worktree. A repo without one gets the file written with
-generic defaults on the first run (the Claude Code local-config symlinks below,
-nothing else), so it is always there to extend.
-
-```json
-{
-  "copies": ["generated-cache"],
-  "afterCopy": [{ "path": "generated-cache/.root", "content": "${worktreePath}\n" }],
-  "symlinks": [
-    ".claude/settings.local.json",
-    ".claude/hooks",
-    "CLAUDE.local.md",
-    ".claude/hookify.*.local.md"
-  ],
-  "commands": ["ln -s ~/envs/app.env \"${worktreePath}/apps/app/.env\"", "npm install"]
-}
-```
-
-- `copies` - paths (relative to repo root) recursively copied into the new
-  worktree.
-- `afterCopy` - files written after copying; `${worktreePath}` and
-  `${mainRoot}` in `content` are replaced with the absolute paths.
-- `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
-  main worktree into the new one. Missing sources are skipped.
-- `commands` - shell commands run in the new worktree, in order, after copies
-  and symlinks, with the same `${worktreePath}` and `${mainRoot}` substitution.
-  The first failure stops the run and the command exits non-zero. This is where
-  repo-specific setup goes (env symlinks, installs); the plugin itself knows
-  nothing about any repo's layout. Quote the placeholders, paths can contain
-  spaces. The file is committed to the repo, so its commands run with the same
-  trust as an install script: review it before creating a worktree in a repo
-  you did not write.
-
-### `hooks/rules/`
+## Rules
 
 **Scope, by design:** these guard against common, everyday ways of doing
 something (a bare command, a typical flag, a normal redirection), not
@@ -76,8 +70,8 @@ design goal; a bypass that requires deliberately obfuscating the
 command to get past it is an accepted, out-of-scope gap, not a bug to
 chase.
 
-One file per rule, loaded by `rule_engine.py`. Adding a rule never touches
-engine code. Three shapes:
+One file per rule, in `hooks/rules/`, loaded by `rule_engine.py`. Adding a
+rule never touches engine code. Three shapes:
 
 - **Always-on** (`.json`, `matcher: {"type": "always"}`): injects a fixed
   reminder into `additionalContext` on every `UserPromptSubmit`.
@@ -152,17 +146,65 @@ global-scope `enabledRules`/`enabled_rules`: with nothing disabled globally,
 every rule already runs, so a global enable list would have nothing to
 override. Takes effect immediately, on the next tool call. This config is
 read fresh from disk every time, unlike changes to the plugin's own files
-(see Local development below), which do require a reinstall.
+(see [Local development](#local-development) below), which do require a
+reinstall.
 
-Full design: `docs/superpowers/specs/2026-09-11-rule-config-design.md`.
+Full design docs:
 
-Full design: `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`.
+- `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`
+- `docs/superpowers/specs/2026-09-11-rule-config-design.md`
 
 The engine was later rewritten from Node to Python; see
 `docs/superpowers/specs/2026-09-11-python-rule-engine-rewrite.md` for why
 and what changed. The two docs above still describe the current matching/
 loading/config design accurately, only the implementation language and the
 scripted-rule file extension (`.py`, not `.js`) changed.
+
+## Commands
+
+| Command | Description |
+| ------- | ------------ |
+| `/verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
+| `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
+| `/investigate` | Read-only trace of how a feature or system works |
+| `/triage-errors` | Fix a batch of failures by root cause, not one by one |
+| `/create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
+
+### `.worktree-setup.json`
+
+Lives at a repo's root. `/create-worktree` reads it from the main worktree and
+applies it to every new worktree. A repo without one gets the file written with
+generic defaults on the first run (the Claude Code local-config symlinks below,
+nothing else), so it is always there to extend.
+
+```json
+{
+  "copies": ["generated-cache"],
+  "afterCopy": [{ "path": "generated-cache/.root", "content": "${worktreePath}\n" }],
+  "symlinks": [
+    ".claude/settings.local.json",
+    ".claude/hooks",
+    "CLAUDE.local.md",
+    ".claude/hookify.*.local.md"
+  ],
+  "commands": ["ln -s ~/envs/app.env \"${worktreePath}/apps/app/.env\"", "npm install"]
+}
+```
+
+- `copies` - paths (relative to repo root) recursively copied into the new
+  worktree.
+- `afterCopy` - files written after copying; `${worktreePath}` and
+  `${mainRoot}` in `content` are replaced with the absolute paths.
+- `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
+  main worktree into the new one. Missing sources are skipped.
+- `commands` - shell commands run in the new worktree, in order, after copies
+  and symlinks, with the same `${worktreePath}` and `${mainRoot}` substitution.
+  The first failure stops the run and the command exits non-zero. This is where
+  repo-specific setup goes (env symlinks, installs); the plugin itself knows
+  nothing about any repo's layout. Quote the placeholders, paths can contain
+  spaces. The file is committed to the repo, so its commands run with the same
+  trust as an install script: review it before creating a worktree in a repo
+  you did not write.
 
 ## Skills
 
@@ -176,30 +218,6 @@ scripted-rule file extension (`.py`, not `.js`) changed.
 | `unit-tests` *(opinionated, Vitest)* | BDD `describe`/`it`, AAAR comments |
 | `jsdoc` *(opinionated, JS/TS)* | Required tags, typedef rules, no inline `Object` |
 | `security` *(opinionated, Fastify/MongoDB examples)* | Validate at the edge, sanitize input, secrets in env |
-
-## Install
-
-### Claude Code
-
-```text
-/plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
-/plugin install ioncache-ai-tools@ioncache-ai-tools
-```
-
-Enabling it goes in your **global** `~/.claude/settings.json`
-(`enabledPlugins`), so it's active in every project, not just the one you
-installed it from.
-
-### Codex
-
-```bash
-codex plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
-codex
-```
-
-Then, inside the session, open `/plugins`, select the ioncache-ai-tools
-marketplace, and install it. Open `/hooks` afterward to review and trust
-the hooks, then start a new thread.
 
 ## Local development
 
@@ -248,12 +266,12 @@ codex plugin add ioncache-ai-tools@ioncache-ai-tools
 ## Known limitations and security considerations
 
 **A rule's disable-config isn't itself protected from the agent it's meant
-to guard.** The per-rule disable config (see "Disabling a rule" above) is a
-plain file in the project (`.claude/ioncache-ai-tools.local.json`) or in
-Codex's own `config.toml`, both of which an AI agent using the tool normally
-has Edit/Write access to. An agent could in principle add a rule's id to
-`disabledRules`/`disabled_rules` itself, which would defeat the point of a
-rule meant to guard the agent's own actions (`never_kill_without_asking`,
+to guard.** The per-rule disable config (see [Disabling a rule](#disabling-a-rule)
+above) is a plain file in the project (`.claude/ioncache-ai-tools.local.json`)
+or in Codex's own `config.toml`, both of which an AI agent using the tool
+normally has Edit/Write access to. An agent could in principle add a rule's
+id to `disabledRules`/`disabled_rules` itself, which would defeat the point
+of a rule meant to guard the agent's own actions (`never_kill_without_asking`,
 for example). The current design has no concept of a mandatory,
 non-disableable rule, since the original goal was that a user can disable
 any individual rule by hand-editing the config. Hardening this (e.g. a
@@ -266,25 +284,27 @@ heuristics, not a security boundary.** `never_kill_without_asking` and
 `no_manual_lockfile_edit_bash` tokenize the command (Python's `shlex`)
 and check the executable position of each simple command, rather than
 matching text anywhere in the string. That closes two gaps a flat-text
-match had: a plain argument that happens to contain the guarded word no
-longer false-matches (`echo kill` and `ls /tmp/kill` are both correctly
-ignored now, since `kill` isn't in command position in either), and a
-quoted argument containing an operator character like `|` no longer
-exposes it (`grep "kill|pkill|killall" file` is a single quoted token,
-not three separately-matched pieces).
+match had:
 
-It also introduces a narrower version of a different gap the old
+- A plain argument that happens to contain the guarded word no longer
+  false-matches (`echo kill` and `ls /tmp/kill` are both correctly
+  ignored now, since `kill` isn't in command position in either).
+- A quoted argument containing an operator character like `|` no longer
+  exposes it (`grep "kill|pkill|killall" file` is a single quoted token,
+  not three separately-matched pieces).
+
+It also recognizes a narrower version of a different gap the old
 position-blind text match didn't have: a wrapper command around the
 guarded word (`timeout 5 kill -9 1234`, `nohup kill -9 1234`, a bare
-`nice kill -9 1234`) is recognized, `skip_wrappers` strips a small,
-fixed set of wrappers (matching the set Claude Code's own
-`permissions.deny` documents stripping for the same reason) before
-checking the executable position. What's still not recognized is one
-of those same wrappers invoked *with* its own value-taking flag
-(`nice -n 10 kill -9 1234`, `stdbuf -o0 kill -9 1234`): telling a
-flag from its value needs per-wrapper argument-grammar knowledge this
-doesn't have. Closing that fully is real scope beyond the false-positive
-fix this was solving, and stays a known, accepted gap.
+`nice kill -9 1234`). `skip_wrappers` strips a small, fixed set of
+wrappers (matching the set Claude Code's own `permissions.deny`
+documents stripping for the same reason) before checking the executable
+position. What's still not recognized is one of those same wrappers
+invoked *with* its own value-taking flag (`nice -n 10 kill -9 1234`,
+`stdbuf -o0 kill -9 1234`): telling a flag from its value needs
+per-wrapper argument-grammar knowledge this doesn't have. Closing that
+fully is real scope beyond the false-positive fix this was solving, and
+stays a known, accepted gap.
 
 `block_raw_worktree_add` still uses the older text-normalization
 approach (`normalize_shell_command`) rather than tokenization, and
@@ -293,9 +313,8 @@ expansion or indirection that produces a guarded command without the
 guarded word ever appearing literally in the text (a variable or
 command substitution) is a gap for every rule here regardless of
 approach, since none of them actually execute or expand the shell.
-These rules are meant to
-catch the common case and prompt a pause, not to withstand deliberate
-evasion.
+These rules are meant to catch the common case and prompt a pause, not
+to withstand deliberate evasion.
 
 **A native permission deny list is a stronger, complementary backstop, and
 you have to add it yourself.** Claude Code's `permissions.deny` does real
