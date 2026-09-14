@@ -100,8 +100,8 @@ def is_mutating(tool_name, tool_input):
         return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
-        if re.search(r"\bgh\s+api\s+graphql\b", command, re.IGNORECASE):
-            return is_graphql_mutation(command)
+        if re.search(r"\bgh\s+api\s+graphql\b", command, re.IGNORECASE) and is_graphql_mutation(command):
+            return True
         return bool(BASH_MUTATION_PATTERNS.search(command))
     return False
 

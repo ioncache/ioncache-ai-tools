@@ -171,6 +171,18 @@ MUTATION_FIXTURES = [
     ),
     (
         'Bash',
+        {'command': "gh api graphql -f query='query { viewer { login } }' && rm -rf /tmp/important"},
+        True,
+        'a read-only graphql query chained with a real bash mutation must still be caught',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query='mutation { x }' && echo done"},
+        True,
+        'a graphql mutation chained with a harmless command stays caught',
+    ),
+    (
+        'Bash',
         {'command': "node -e \"require('fs').writeFileSync('/tmp/x', 'y')\""},
         True,
         'node -e is unconditionally mutating (bypass this file exists to close)',
