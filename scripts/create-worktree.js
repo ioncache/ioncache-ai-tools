@@ -144,7 +144,8 @@ function assertRealPathWithinRoot(resolvedRoot, absPath, rel) {
     existing = parent
   }
   const real = fs.realpathSync(existing)
-  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+  const relative = path.relative(realRoot, real)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`.worktree-setup.json path escapes its root via a symlink (${resolvedRoot}): ${rel}`)
   }
 }
@@ -163,7 +164,8 @@ function assertRealPathWithinRoot(resolvedRoot, absPath, rel) {
 function resolveWithinRoot(root, rel) {
   const resolvedRoot = path.resolve(root)
   const resolved = path.resolve(resolvedRoot, rel)
-  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+  const relative = path.relative(resolvedRoot, resolved)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`.worktree-setup.json path escapes its root (${root}): ${rel}`)
   }
   assertRealPathWithinRoot(resolvedRoot, resolved, rel)
@@ -251,6 +253,13 @@ function selfTest() {
   fs.writeFileSync(path.join(outside, 'x'), 'secret')
   assert.throws(() => resolveWithinRoot(root, 'escape-link/x'), /escapes its root/, 'source path via a symlinked ancestor should be rejected')
   assert.throws(() => resolveWithinRoot(root, 'escape-link/new-file.txt'), /escapes its root/, 'destination path via a symlinked ancestor should be rejected, even though the file itself does not exist yet')
+
+  // Filesystem-root regression: a root that already ends with path.sep
+  // (e.g. "/" on POSIX) made a naive `startsWith(realRoot + path.sep)`
+  // check require a doubled separator, wrongly rejecting every real child.
+  const fsRoot = path.parse(tmp).root
+  const relFromFsRoot = path.relative(fsRoot, tmp)
+  assert.doesNotThrow(() => resolveWithinRoot(fsRoot, relFromFsRoot), 'a real child of the filesystem root should not be rejected as escaping it')
 
   fs.rmSync(tmp, { recursive: true, force: true })
   console.log('create-worktree self-test passed')
