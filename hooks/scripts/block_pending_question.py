@@ -13,6 +13,12 @@ show, a `gh api graphql` query rather than a mutation, etc.) are allowed
 even while a question is pending, since answering a question well often
 requires looking things up - the rule this enforces is "don't act before
 answering," not "don't use any tool at all."
+
+Bash matching here is a fixed pattern list, not real command parsing: it
+catches common ways of mutating state, not every way. Known, accepted
+gap: an interpreter one-liner or shell construct not in the list (an
+uncommon shell, an obscure redirect form) can still slip through
+unmatched.
 """
 
 import json
@@ -23,10 +29,11 @@ import sys
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 
 # Bash commands that change state - git/gh mutations, filesystem writes,
-# package installs. Read-only commands (git log/diff/show/status, ls, cat,
-# grep, graphify query, gh pr view) are intentionally not matched here.
-# `gh api graphql` is handled separately (see is_graphql_mutation), since
-# it can be either a read or a write.
+# package installs, and arbitrary-code interpreters that can do any of the
+# above without ever matching a specific pattern. Read-only commands (git
+# log/diff/show/status, ls, cat, grep, graphify query, gh pr view) are
+# intentionally not matched here. `gh api graphql` is handled separately
+# (see is_graphql_mutation), since it can be either a read or a write.
 BASH_MUTATION_PATTERNS = re.compile(
     r"\bgit\s+("
     r"commit|push|reset|checkout\s+--|worktree\s+remove|branch\s+-[fD]\b|"
@@ -37,7 +44,18 @@ BASH_MUTATION_PATTERNS = re.compile(
     r"issue\s+(create|close|edit)|repo\s+(delete|create)"
     r")\b|"
     r"\brm\s|\bmv\s|"
-    r"\bnpm\s+(install|uninstall|remove|update)\b",
+    r"\bnpm\s+(install|uninstall|remove|update)\b|"
+    # node -e/--eval and python -c run arbitrary code that could write
+    # anything; treated as mutating outright rather than trying to parse
+    # whether the inline snippet actually touches the filesystem, an
+    # occasional false positive on a pure read-only one-liner is a small
+    # cost next to what these can otherwise do unnoticed.
+    r"\b(node|nodejs)\s+(-e|--eval)\b|"
+    r"\bpython3?\s+-c\b|"
+    r"\btee\b|"
+    # A real redirect into a file (`>`, `>>`, `2>`), not a descriptor
+    # duplication like `2>&1`/`>&2` (excluded via the (?!&) lookahead).
+    r">{1,2}(?!&)\s*\S",
     re.IGNORECASE,
 )
 
