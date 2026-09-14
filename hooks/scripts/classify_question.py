@@ -60,11 +60,14 @@ def main():
         print(
             json.dumps(
                 {
-                    "additionalContext": (
-                        "This message contains a question. Answer it directly "
-                        "in plain text this turn. Tool calls will be blocked "
-                        "until your next reply."
-                    )
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": (
+                            "This message contains a question. Answer it directly "
+                            "in plain text this turn. Tool calls will be blocked "
+                            "until your next reply."
+                        ),
+                    }
                 }
             )
         )
