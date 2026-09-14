@@ -1,0 +1,6 @@
+{
+  "event": "UserPromptSubmit",
+  "matcher": { "type": "always" },
+  "action": "inject",
+  "message": "Never state the current status of anything (a PR, CI, a file, a branch) from memory or an earlier turn. Check it again in this turn before claiming it."
+}
