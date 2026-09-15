@@ -33,6 +33,24 @@ Enabling it goes in your **global** `~/.claude/settings.json`
 (`enabledPlugins`), so it's active in every project, not just the one you
 installed it from.
 
+**Reinstall** (same commands as install, safe to re-run):
+
+```text
+/plugin marketplace add https://github.com/ioncache/ioncache-ai-tools
+/plugin install ioncache-ai-tools@ioncache-ai-tools
+```
+
+**Remove:**
+
+```text
+/plugin uninstall ioncache-ai-tools@ioncache-ai-tools
+/plugin marketplace remove ioncache-ai-tools
+```
+
+Removing the marketplace also uninstalls the plugin, so the plugin
+`uninstall` step alone is enough if you just want to drop the plugin and
+keep the marketplace registered.
+
 ### Codex
 
 ```bash
@@ -43,6 +61,19 @@ codex
 Then, inside the session, open `/plugins`, select the ioncache-ai-tools
 marketplace, and install it. Open `/hooks` afterward to review and trust
 the hooks, then start a new thread.
+
+**Reinstall:**
+
+```bash
+codex plugin add ioncache-ai-tools --marketplace ioncache-ai-tools
+```
+
+**Remove:**
+
+```bash
+codex plugin remove ioncache-ai-tools --marketplace ioncache-ai-tools
+codex plugin marketplace remove ioncache-ai-tools
+```
 
 ## Hooks
 
