@@ -221,11 +221,18 @@ nothing else), so it is always there to extend.
 
 ## Local development
 
-Before pushing, run the rule engine's self-check:
+Before pushing, run the self-checks:
 
 ```bash
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
+python3 hooks/scripts/pending_question_self_check.py < /dev/null
 ```
+
+Both run in CI (see `.github/workflows/validate.yml`). The second covers
+`classify_question.py` and `block_pending_question.py`, using a fixture of
+real messages pulled from actual session history rather than invented
+ones, real usage turned out to have shapes (unpunctuated questions,
+"do"-led imperatives) invented examples missed.
 
 Then test against the working copy directly.
 
