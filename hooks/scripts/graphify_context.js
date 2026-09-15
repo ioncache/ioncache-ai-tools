@@ -12,8 +12,11 @@ function main() {
 
   console.log(
     JSON.stringify({
-      additionalContext:
-        "graphify-out/graph.json exists in this project. You MUST use graphify query for codebase questions instead of grep, Read, or find. Run: graphify query '<your question>' and use those results."
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext:
+          "graphify-out/graph.json exists in this project. You MUST use graphify query for codebase questions instead of grep, Read, or find. Run: graphify query '<your question>' and use those results."
+      }
     })
   )
 }

@@ -23,9 +23,13 @@ import pathlib
 import re
 import sys
 
-# Words a genuine question typically opens with.
+# Words a genuine question typically opens with. Bare "do" is deliberately
+# excluded: unlike "does"/"did", it's also the standard imperative-sentence
+# auxiliary ("Do not do X", "Do the shell functions too"), and those are far
+# more common in practice than a bare "Do ...?" question, so including it
+# made every ordinary imperative starting with "do" a false positive.
 QUESTION_STARTERS = re.compile(
-    r"^\s*(what|why|how|when|where|who|which|is|are|do|does|did|"
+    r"^\s*(what|why|how|when|where|who|which|is|are|does|did|"
     r"can|could|should|would|will|has|have|was|were)\b",
     re.IGNORECASE,
 )
@@ -33,8 +37,6 @@ QUESTION_STARTERS = re.compile(
 
 def has_question(text):
     text = text.strip()
-    if "?" not in text:
-        return False
 
     clauses = [c for c in re.split(r"(?<=[.!?])\s+|\n+", text) if c.strip()]
     if not clauses:
@@ -58,11 +60,14 @@ def main():
         print(
             json.dumps(
                 {
-                    "additionalContext": (
-                        "This message contains a question. Answer it directly "
-                        "in plain text this turn. Tool calls will be blocked "
-                        "until your next reply."
-                    )
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": (
+                            "This message contains a question. Answer it directly "
+                            "in plain text this turn. Tool calls will be blocked "
+                            "until your next reply."
+                        ),
+                    }
                 }
             )
         )
