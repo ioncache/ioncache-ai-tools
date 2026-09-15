@@ -262,6 +262,7 @@ def main():
         ('git status', False, 'git status, regression'),
         ('git show HEAD', False, 'git show, regression'),
         ('git pull', False, 'git pull is a different subcommand'),
+        ('/usr/bin/git push', True, 'a path-qualified git invocation'),
         ('echo "git push later"', False, 'push mentioned inside a quoted string, never invoked'),
         ('git commit -m "remember to git push"', False, 'push mentioned inside a commit message'),
         ('gh pr create', False, 'unrelated gh command'),
