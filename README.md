@@ -59,16 +59,24 @@ the hooks, then start a new thread.
 
 ## Rules
 
-**Scope, by design:** these guard against common, everyday ways of doing
-something (a bare command, a typical flag, a normal redirection), not
-against deliberate obfuscation. Exhaustive coverage would mean running
-every tool call through a separate LLM to evaluate it against a list of
-rules, real cost and latency on every single call, for a guard that's
-meant to stop casual/automatic action, not survive an adversary. A
-cheap, readable check that catches the common cases is the actual
-design goal; a bypass that requires deliberately obfuscating the
-command to get past it is an accepted, out-of-scope gap, not a bug to
-chase.
+**Scope, by design:**
+
+- These guard against common, everyday ways of doing something (a bare
+  command, a typical flag, a normal redirection), not deliberate
+  obfuscation.
+- Exhaustive coverage would mean running every tool call through a
+  separate LLM to evaluate it against a list of rules: real cost and
+  latency on every call, for a guard meant to stop casual/automatic
+  action, not survive an adversary.
+- A cheap, readable check that catches the common cases is the actual
+  goal. A bypass that requires deliberately obfuscating the command is
+  an accepted, out-of-scope gap, not a bug to chase.
+
+These rules aren't a replacement for your tool's own permission-denial
+system, prefer that for anything security-critical:
+
+- Claude Code: [`permissions.deny`](https://code.claude.com/docs/en/permissions)
+- Codex: [`execpolicy` rules](https://learn.chatgpt.com/docs/agent-configuration/rules)
 
 One file per rule, in `hooks/rules/`, loaded by `rule_engine.py`. Adding a
 rule never touches engine code. Three shapes:
@@ -97,13 +105,15 @@ rule never touches engine code. Three shapes:
 
 ### Disabling a rule
 
-Add config to either tool's own files, whichever CLI you use. No repo file,
-no environment variable. Disabling a rule once, globally, is the common
-case, most people who don't want a rule don't want it in any project, so
-global config is the baseline and project-level config is the exception,
-used only to override that baseline for one specific project (in either
-direction: a project can disable a rule that's enabled everywhere else, or
-re-enable one that's disabled everywhere else).
+Add config to either tool's own files, whichever CLI you use, no repo file,
+no environment variable.
+
+- Global config is the baseline; project-level config only overrides it
+  for one project (in either direction: a project can disable a rule
+  that's enabled everywhere else, or re-enable one that's disabled
+  everywhere else).
+- Disabling a rule once, globally, is the common case, most people who
+  don't want a rule don't want it in any project.
 
 **Claude Code:** `ioncache-ai-tools.local.json`, in `~/.claude/` for a global
 setting, or in `<project>/.claude/` to override it for one project
@@ -138,27 +148,17 @@ the stdlib `tomllib` parser (3.11+ required); on an older Python, the
 disabled-rules lookup logs the failure to stderr and falls back to none
 disabled, same as any other malformed Codex config.
 
-A rule's id is its filename minus the extension. Resolution per tool: start
-from that tool's global config, add anything the project config disables,
-then remove anything the project config enables. Both tools' results are
-then unioned, disabling a rule in either one disables it. There's no
-global-scope `enabledRules`/`enabled_rules`: with nothing disabled globally,
-every rule already runs, so a global enable list would have nothing to
-override. Takes effect immediately, on the next tool call. This config is
-read fresh from disk every time, unlike changes to the plugin's own files
-(see [Local development](#local-development) below), which do require a
-reinstall.
-
-Full design docs:
-
-- `docs/superpowers/specs/2026-09-04-generic-rule-engine-design.md`
-- `docs/superpowers/specs/2026-09-11-rule-config-design.md`
-
-The engine was later rewritten from Node to Python; see
-`docs/superpowers/specs/2026-09-11-python-rule-engine-rewrite.md` for why
-and what changed. The two docs above still describe the current matching/
-loading/config design accurately, only the implementation language and the
-scripted-rule file extension (`.py`, not `.js`) changed.
+- A rule's id is its filename minus the extension.
+- Resolution per tool: start from that tool's global config, add anything
+  the project config disables, then remove anything the project config
+  enables. Both tools' results are then unioned, disabling a rule in
+  either one disables it.
+- No global-scope `enabledRules`/`enabled_rules`: with nothing disabled
+  globally, every rule already runs, so a global enable list would have
+  nothing to override.
+- Takes effect immediately, on the next tool call, read fresh from disk
+  every time. Unlike changes to the plugin's own files (see
+  [Local development](#local-development)), this never needs a reinstall.
 
 ## Commands
 
@@ -197,14 +197,16 @@ nothing else), so it is always there to extend.
   `${mainRoot}` in `content` are replaced with the absolute paths.
 - `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
   main worktree into the new one. Missing sources are skipped.
-- `commands` - shell commands run in the new worktree, in order, after copies
-  and symlinks, with the same `${worktreePath}` and `${mainRoot}` substitution.
-  The first failure stops the run and the command exits non-zero. This is where
-  repo-specific setup goes (env symlinks, installs); the plugin itself knows
-  nothing about any repo's layout. Quote the placeholders, paths can contain
-  spaces. The file is committed to the repo, so its commands run with the same
-  trust as an install script: review it before creating a worktree in a repo
-  you did not write.
+- `commands` - shell commands run in the new worktree, in order, after
+  copies and symlinks, with the same `${worktreePath}`/`${mainRoot}`
+  substitution (quote the placeholders, paths can contain spaces). The
+  first failure stops the run and the command exits non-zero. This is
+  where repo-specific setup goes (env symlinks, installs); the plugin
+  itself knows nothing about any repo's layout.
+
+The file is committed to the repo, so its commands run with the same
+trust as an install script: review it before creating a worktree in a
+repo you did not write.
 
 ## Skills
 
@@ -272,82 +274,55 @@ codex plugin add ioncache-ai-tools@ioncache-ai-tools
 
 ## Known limitations and security considerations
 
-**A rule's disable-config isn't itself protected from the agent it's meant
-to guard.** The per-rule disable config (see [Disabling a rule](#disabling-a-rule)
-above) is a plain file in the project (`.claude/ioncache-ai-tools.local.json`)
-or in Codex's own `config.toml`, both of which an AI agent using the tool
-normally has Edit/Write access to. An agent could in principle add a rule's
-id to `disabledRules`/`disabled_rules` itself, which would defeat the point
-of a rule meant to guard the agent's own actions (`never_kill_without_asking`,
-for example). The current design has no concept of a mandatory,
-non-disableable rule, since the original goal was that a user can disable
-any individual rule by hand-editing the config. Hardening this (e.g. a
-`mandatory: true` flag on a rule file that the engine refuses to honor a
-disable request for) is a real design change to what the feature
-guarantees, not a bug fix, and hasn't been made.
+### Disable-config isn't tamper-proof
 
-**Two rules use real command tokenization; the rest are still text
-heuristics, not a security boundary.** `never_kill_without_asking` and
-`no_manual_lockfile_edit_bash` tokenize the command (Python's `shlex`)
-and check the executable position of each simple command, rather than
-matching text anywhere in the string. That closes two gaps a flat-text
-match had:
+- The per-rule disable config (see [Disabling a rule](#disabling-a-rule))
+  is a plain file, `.claude/ioncache-ai-tools.local.json` or Codex's
+  `config.toml`, that an agent normally has Edit/Write access to.
+- An agent could add a rule's id to `disabledRules`/`disabled_rules`
+  itself, defeating a rule meant to guard its own actions (e.g.
+  `never_kill_without_asking`).
+- There's no mandatory, non-disableable rule concept today; the original
+  goal was that a user can disable any rule by hand-editing the config.
+  A `mandatory: true` flag the engine refuses to honor would be a real
+  design change, not a bug fix, and hasn't been made.
 
-- A plain argument that happens to contain the guarded word no longer
-  false-matches (`echo kill` and `ls /tmp/kill` are both correctly
-  ignored now, since `kill` isn't in command position in either).
+### Text heuristics, not a security boundary
+
+`never_kill_without_asking` and `no_manual_lockfile_edit_bash` tokenize
+the command (Python's `shlex`) and check the executable position of each
+simple command, instead of matching text anywhere in the string. That
+closes two gaps a flat-text match had:
+
+- A plain argument containing the guarded word no longer false-matches
+  (`echo kill`, `ls /tmp/kill`, both correctly ignored now, since `kill`
+  isn't in command position).
 - A quoted argument containing an operator character like `|` no longer
-  exposes it (`grep "kill|pkill|killall" file` is a single quoted token,
-  not three separately-matched pieces).
+  exposes it (`grep "kill|pkill|killall" file` is one quoted token, not
+  three separately-matched pieces).
 
-It also recognizes a narrower version of a different gap the old
-position-blind text match didn't have: a wrapper command around the
-guarded word (`timeout 5 kill -9 1234`, `nohup kill -9 1234`, a bare
-`nice kill -9 1234`). `skip_wrappers` strips a small, fixed set of
-wrappers (matching the set Claude Code's own `permissions.deny`
-documents stripping for the same reason) before checking the executable
-position. What's still not recognized is one of those same wrappers
-invoked *with* its own value-taking flag (`nice -n 10 kill -9 1234`,
-`stdbuf -o0 kill -9 1234`): telling a flag from its value needs
-per-wrapper argument-grammar knowledge this doesn't have. Closing that
-fully is real scope beyond the false-positive fix this was solving, and
-stays a known, accepted gap.
+It also recognizes a narrower version of a different gap the old text
+match didn't have: a wrapper command around the guarded word
+(`timeout 5 kill -9 1234`, `nohup kill -9 1234`, a bare `nice kill -9
+1234`).
 
-`block_raw_worktree_add` still uses the older text-normalization
-approach (`normalize_shell_command`) rather than tokenization, and
-keeps both of the gaps above for the patterns it matches. Shell
-expansion or indirection that produces a guarded command without the
-guarded word ever appearing literally in the text (a variable or
-command substitution) is a gap for every rule here regardless of
-approach, since none of them actually execute or expand the shell.
-These rules are meant to catch the common case and prompt a pause, not
-to withstand deliberate evasion.
+- `skip_wrappers` strips a small, fixed set of wrappers (matching what
+  Claude Code's own `permissions.deny` documents stripping) before
+  checking the executable position.
+- Still not recognized: one of those wrappers invoked *with* its own
+  value-taking flag (`nice -n 10 kill -9 1234`, `stdbuf -o0 kill -9
+  1234`). Telling a flag from its value needs per-wrapper grammar
+  knowledge this doesn't have, real scope beyond the false-positive fix
+  this was solving, and stays a known, accepted gap.
 
-**A native permission deny list is a stronger, complementary backstop, and
-you have to add it yourself.** Claude Code's `permissions.deny` does real
-shell-aware matching: it splits compound commands on shell operators,
-strips known wrappers (`timeout`, `nice`, `nohup`, bare `xargs`, etc.)
-before matching, and its own docs give `/bin/rm -rf` and `bash -c 'rm -rf'`
-as things a `Bash(rm *)` deny rule catches, exactly the path-qualification
-gap a hand-rolled regex has to special-case. It's also enforced
-independently of hooks: a matching deny rule blocks the call regardless of
-what a `PreToolUse` hook returns. Codex has a closer analog in its
-`execpolicy` `.rules` files, which match on parsed argv rather than raw
-text. Neither is something this plugin can ship for you: permissions and
-execpolicy rules aren't a supported plugin contribution in either tool, so
-they only exist if you add them to your own personal config. For the
-commands this repo already treats as dangerous, add to your own
-`~/.claude/settings.json`:
+Other gaps:
 
-```json
-{
-  "permissions": {
-    "deny": ["Bash(kill:*)", "Bash(pkill:*)", "Bash(killall:*)"]
-  }
-}
-```
-
-This plugin's `never_kill_without_asking` rule stays in place regardless,
-since it's the only piece of this that installs automatically and can
-carry a custom message coaching the assistant on what to do next, a bare
-deny rule can't do either of those.
+- `block_raw_worktree_add` still uses the older text-normalization
+  approach (`normalize_shell_command`), not tokenization, and keeps both
+  gaps above for the patterns it matches.
+- Shell expansion or indirection that produces a guarded command without
+  the guarded word ever appearing literally in the text (a variable or
+  command substitution) is a gap for every rule here, regardless of
+  approach, since none of them actually execute or expand the shell.
+- These rules catch the common case and prompt a pause; they don't
+  withstand deliberate evasion.
