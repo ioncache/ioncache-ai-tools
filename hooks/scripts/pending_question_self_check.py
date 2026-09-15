@@ -129,6 +129,12 @@ MUTATION_FIXTURES = [
     ('Bash', {'command': 'npm install lodash'}, True, 'npm install'),
     ('Bash', {'command': 'cat file.txt'}, False, 'cat is read-only'),
     ('Bash', {'command': 'ls -la'}, False, 'ls is read-only'),
+    (
+        'Bash',
+        {'command': 'touch /tmp/x'},
+        False,
+        'touch is not in the mutation pattern list; known, accepted gap, not asserted as mutating',
+    ),
     ('Bash', {'command': 'gh pr view --json number'}, False, 'gh pr view is read-only'),
     (
         'Bash',
