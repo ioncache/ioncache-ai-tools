@@ -37,7 +37,8 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 # above without ever matching a specific pattern. Read-only commands (git
 # log/diff/show/status, ls, cat, grep, graphify query, gh pr view) are
 # intentionally not matched here. `gh api graphql` is handled separately
-# (see is_graphql_mutation), since it can be either a read or a write.
+# (see _is_graphql_mutation_document), since it can be either a read or
+# a write.
 # A real file redirect (`>`, `>>`, `>&file`, `&>file`, `>|file`) is
 # handled separately too (see has_file_redirect): unlike these, a
 # redirect operator needs actual tokenization to check, a raw text scan
@@ -74,8 +75,9 @@ NULL_REDIRECT_TARGETS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
 
 # Redirect operators that always take a real target (no fd-duplication
 # form exists for any of them): `>`/`>>` (write/append), `>|` (force
-# write past noclobber), `&>`/`&>>` (both stdout+stderr, write/append).
-FILE_REDIRECT_OPERATORS = {">", ">>", ">|", "&>", "&>>"}
+# write past noclobber), `&>`/`&>>` (both stdout+stderr, write/append),
+# `<>` (open for read+write, creating the target if it doesn't exist).
+FILE_REDIRECT_OPERATORS = {">", ">>", ">|", "&>", "&>>", "<>"}
 
 
 def _redirects_to_a_file(simple_command):
@@ -97,16 +99,15 @@ def _redirects_to_a_file(simple_command):
 
 def has_file_redirect(command):
     """True if `command` contains a real Bash redirect into a file
-    (`>`, `>>`, `>|`, `>&file`, `&>file`, `&>>file`), tokenized rather
-    than text-matched so `>` inside a quoted argument or a `((...))`
-    comparison isn't mistaken for one. Excludes descriptor duplication/
-    closing (`>&1`, `2>&1`, `>&-`) and redirects to /dev/null-style
-    sinks, neither persists anything.
+    (`>`, `>>`, `>|`, `<>`, `>&file`, `&>file`, `&>>file`), tokenized
+    rather than text-matched so `>` inside a quoted argument or a
+    `((...))` comparison isn't mistaken for one. Excludes descriptor
+    duplication/closing (`>&1`, `2>&1`, `>&-`) and redirects to
+    /dev/null-style sinks, neither persists anything.
 
-    Known, accepted gap: `<>` (open for read+write, which can create a
-    file) and named-fd redirects (`{fd}>file`) aren't recognized. Both
-    are rare enough in practice not to be worth the added complexity
-    here, unlike `&>`/`>|`, which are common everyday forms.
+    Known, accepted gap: named-fd redirects (`{fd}>file`) aren't
+    recognized, rare enough in practice not to be worth the added
+    complexity here.
     """
     tokens = tokenize_command(command)
     return any(_redirects_to_a_file(sc) for sc in split_into_simple_commands(tokens))
@@ -114,20 +115,23 @@ def has_file_redirect(command):
 GRAPHQL_FIELD_FLAGS = {"-f", "-F", "--raw-field", "--field"}
 
 
-def _extract_graphql_query_document(command):
+def _extract_graphql_query_document(simple_command):
     """Extracts the value of a `query=...` field passed to `gh api
-    graphql` via `-f`/`-F`/`--raw-field`/`--field`, from real command
-    tokens rather than a regex anchored on one specific shell-quoting
-    style. `-f query='...'` (only the value quoted) and `-f 'query=...'`
-    (the whole `key=value` pair quoted together) are both valid and
-    tokenize to the exact same shape, a regex expecting the literal
-    text `query=` to appear unquoted matched the first form and silently
-    missed the second. Returns None if no such field is found.
+    graphql` via `-f`/`-F`/`--raw-field`/`--field`, from one simple
+    command's real tokens rather than a regex anchored on one specific
+    shell-quoting style. `-f query='...'` (only the value quoted) and
+    `-f 'query=...'` (the whole `key=value` pair quoted together) are
+    both valid and tokenize to the exact same shape, a regex expecting
+    the literal text `query=` to appear unquoted matched the first form
+    and silently missed the second. Returns None if no such field is
+    found. Takes one simple command, not the whole compound command, so
+    a second `gh api graphql` call chained after a first one (`cmd1 &&
+    cmd2`) is extracted and checked independently rather than the first
+    match in the whole command winning and the second never being seen.
     """
-    tokens = tokenize_command(command)
-    for i, token in enumerate(tokens):
-        if token in GRAPHQL_FIELD_FLAGS and i + 1 < len(tokens) and tokens[i + 1].startswith("query="):
-            return tokens[i + 1][len("query="):]
+    for i, token in enumerate(simple_command):
+        if token in GRAPHQL_FIELD_FLAGS and i + 1 < len(simple_command) and simple_command[i + 1].startswith("query="):
+            return simple_command[i + 1][len("query="):]
     return None
 
 
@@ -169,17 +173,9 @@ def _skip_leading_fragments(query_text):
         query_text = query_text[end:]
 
 
-def is_graphql_mutation(command):
-    """True if a `gh api graphql` call's query document is a mutation.
-
-    GraphQL over `gh api graphql` is a single transport for two different
-    things: reading (a `query`) and writing (a `mutation`). Matching on
-    `api graphql` alone, as an earlier version of this file did, blocks
-    every read through it too, including the only way to fetch a PR
-    review thread's `isResolved` status, something answering a question
-    often requires. The actual operation type is the leading keyword in
-    the query document itself (after skipping any leading fragments),
-    not anything visible in the command's surrounding shell syntax.
+def _is_graphql_mutation_document(query_text):
+    """True if a GraphQL query document (after skipping any leading
+    fragments) is a mutation.
 
     Only an explicit `query` operation, or GraphQL's anonymous-query
     shorthand (a bare `{`, which the spec permits only for queries, never
@@ -189,9 +185,6 @@ def is_graphql_mutation(command):
     unrecognized document as read-only risks letting a real mutation
     through unexamined.
     """
-    query_text = _extract_graphql_query_document(command)
-    if query_text is None:
-        return True
     query_text = _strip_ignored_tokens(_skip_leading_fragments(query_text))
     return not (query_text.startswith("{") or bool(re.match(r"query\b", query_text, re.IGNORECASE)))
 
@@ -207,8 +200,20 @@ def is_mutating(tool_name, tool_input):
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
         simple_commands = split_into_simple_commands(tokenize_command(command))
-        if any(_is_graphql_call(sc) for sc in simple_commands) and is_graphql_mutation(command):
-            return True
+        # Each `gh api graphql` call in a compound command is checked on
+        # its own: GraphQL over this transport is a single mechanism for
+        # two different things, reading (a `query`) and writing (a
+        # `mutation`), and one simple command's query document says
+        # nothing about another's. Checking the whole command as one
+        # unit meant a read-only call followed by `&& gh api graphql -f
+        # query='mutation {...}'` let the first match win and the
+        # second, mutating call was never examined.
+        for simple_command in simple_commands:
+            if not _is_graphql_call(simple_command):
+                continue
+            query_text = _extract_graphql_query_document(simple_command)
+            if query_text is None or _is_graphql_mutation_document(query_text):
+                return True
         return bool(BASH_MUTATION_PATTERNS.search(command)) or has_file_redirect(command)
     return False
 

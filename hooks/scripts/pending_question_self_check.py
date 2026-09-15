@@ -241,6 +241,25 @@ MUTATION_FIXTURES = [
     ('Bash', {'command': 'printf x &>>/tmp/out'}, True, '&>> appends both streams into a real file'),
     ('Bash', {'command': 'printf x >|/tmp/out'}, True, '>| force-writes into a real file'),
     ('Bash', {'command': 'cmd &>/dev/null'}, False, '&> to /dev/null stays safe, same as > and >&'),
+    ('Bash', {'command': ': <> /tmp/pending-question-bypass'}, True, '<> opens for read+write, can create the target file'),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query='query { x }' && gh api graphql -f query='mutation { m }'"},
+        True,
+        'chained graphql calls: the second, mutating call must still be caught, not just the first',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query='mutation { m }' && gh api graphql -f query='query { x }'"},
+        True,
+        'chained graphql calls: the first, mutating call must still be caught',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f query='query { x }' && gh api graphql -f query='query { y }'"},
+        False,
+        'chained graphql calls: both read-only stays safe',
+    ),
     (
         'Bash',
         {'command': "node -e \"require('fs').writeFileSync('/tmp/x', 'y')\""},
