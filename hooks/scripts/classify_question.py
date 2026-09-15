@@ -64,8 +64,13 @@ def main():
                         "hookEventName": "UserPromptSubmit",
                         "additionalContext": (
                             "This message contains a question. Answer it directly "
-                            "in plain text this turn. Tool calls will be blocked "
-                            "until your next reply."
+                            "in plain text this turn before taking any action. "
+                            "Mutating tool calls (Edit/Write/NotebookEdit/MultiEdit, "
+                            "state-changing Bash) will be blocked until your next "
+                            "reply, but read-only lookups (Read, Grep, Glob, "
+                            "WebFetch, WebSearch, read-only Bash) stay available, "
+                            "use them if answering well requires checking "
+                            "something first."
                         ),
                     }
                 }
