@@ -38,6 +38,9 @@ no_manual_lockfile_edit_bash = _load_module(
 never_kill_without_asking = _load_module(
     os.path.join(RULES_DIR, 'never_kill_without_asking.py'), 'never_kill_without_asking'
 )
+never_push_without_asking = _load_module(
+    os.path.join(RULES_DIR, 'never_push_without_asking.py'), 'never_push_without_asking'
+)
 
 
 def main():
@@ -189,6 +192,7 @@ def main():
     # Real pilot rules load correctly for PreToolUse
     real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
     assert 'never_kill_without_asking.py' in real_pre_tool_use_rules
+    assert 'never_push_without_asking.py' in real_pre_tool_use_rules
     assert 'no-manual-lockfile-edit.json' in real_pre_tool_use_rules
     assert 'no_manual_lockfile_edit_bash.py' in real_pre_tool_use_rules
     assert 'block_raw_worktree_add.py' in real_pre_tool_use_rules
@@ -237,6 +241,34 @@ def main():
     for command, expected, label in kill_cases:
         got = never_kill_without_asking.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
         assert got is expected, f'never_kill_without_asking should {"" if expected else "not "}match {label}: {command!r}'
+
+    # never_push_without_asking: same tokenization approach, but the
+    # guarded action is a git subcommand rather than a bare executable,
+    # so it has to find `push` past git's own global options first.
+    push_cases = [
+        ('git push', True, 'bare push'),
+        ('git push origin main', True, 'push with args'),
+        ('git push -u origin branch', True, 'push -u'),
+        ('git push --dry-run', True, 'push --dry-run is still a push'),
+        ('timeout 5 git push', True, 'wrapped in timeout'),
+        ('nohup git push', True, 'wrapped in nohup'),
+        ('git -C /some/dir push origin main', True, 'git -C global option before the subcommand'),
+        ('git --no-pager push', True, 'a bare git global flag before the subcommand'),
+        ('git status && git push', True, 'chained: the second command is a push'),
+        ('git push && echo done', True, 'chained: the first command is a push'),
+        ('\\git push', True, 'a backslash-escaped git (Bash executes it as plain git)'),
+        ('git log', False, 'git log, regression'),
+        ('git diff', False, 'git diff, regression'),
+        ('git status', False, 'git status, regression'),
+        ('git show HEAD', False, 'git show, regression'),
+        ('git pull', False, 'git pull is a different subcommand'),
+        ('echo "git push later"', False, 'push mentioned inside a quoted string, never invoked'),
+        ('git commit -m "remember to git push"', False, 'push mentioned inside a commit message'),
+        ('gh pr create', False, 'unrelated gh command'),
+    ]
+    for command, expected, label in push_cases:
+        got = never_push_without_asking.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
+        assert got is expected, f'never_push_without_asking should {"" if expected else "not "}match {label}: {command!r}'
 
     # Real no-manual-lockfile-edit rule file, matched via match_rule directly
     with open(os.path.join(RULES_DIR, 'no-manual-lockfile-edit.json'), 'r', encoding='utf-8') as f:

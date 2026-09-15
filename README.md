@@ -127,6 +127,7 @@ rule never touches engine code. Three shapes:
 | Rule | Shape | Event | What it does |
 | ---- | ----- | ----- | ------------ |
 | `never_kill_without_asking` | Scripted | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command, using real command tokenization (not a regex) |
+| `never_push_without_asking` | Scripted | PreToolUse | Denies `git push` in a Bash command; one approval covers exactly one push, never a standing permission |
 | `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
 | `no_manual_lockfile_edit_bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
 | `fix_emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
