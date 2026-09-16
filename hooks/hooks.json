@@ -61,6 +61,17 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Bash(*git*push*)",
+            "prompt": "A Bash tool call is about to run `git push`. Hook input: $ARGUMENTS\n\nRead the transcript file at the input's transcript_path and find the user's most recent message(s) in the current turn only. Decide whether that message explicitly and unambiguously told the assistant to run `git push` right now. Authorization from an earlier turn or an earlier session never carries over, only the current turn's own message can authorize this specific push.\n\nIf there is any doubt, ambiguity, vagueness, or the user did not clearly and explicitly say to push right now, you MUST respond with ok: false. Only respond ok: true when the user's current message unmistakably authorizes pushing now. When uncertain, always choose false.\n\nRespond with JSON: {\"ok\": true} to allow the push, or {\"ok\": false, \"reason\": \"<why, plain and short>\"} to deny it.",
+            "continueOnBlock": true
+          }
+        ]
+      },
+      {
         "matcher": "*",
         "hooks": [
           {
