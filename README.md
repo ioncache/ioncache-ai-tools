@@ -91,10 +91,10 @@ codex plugin marketplace remove ioncache-ai-tools
 
 ### `git push` agent hook: accepted false-positive tradeoff
 
-The hook only spawns when `hooks.json`'s `if` filter (`Bash(*git*push)` /
-`Bash(*git*push*)`) matches the raw Bash command text, and that filter has
-no concept of "this is the program actually being run" versus "this text
-happens to appear somewhere in the command":
+The hook only spawns when `hooks.json`'s `if` filter (`Bash(*git*push*)`)
+matches the raw Bash command text, and that filter has no concept of "this
+is the program actually being run" versus "this text happens to appear
+somewhere in the command":
 
 - **Verified working:** a bare `git push`, `git -C <dir> push`,
   `git --no-pager push`, and `git push <remote> <branch>` are all caught and
@@ -107,6 +107,12 @@ happens to appear somewhere in the command":
   the safe direction (it can only cause an unneeded block, never miss a
   real push), so it's accepted rather than chased away, in the same
   "Scope, by design" spirit as the other rules below.
+- **Accepted false positive, branch names:** a branch name containing
+  "push" anywhere in it (e.g. `never-push-without-asking`, this very
+  branch) also triggers the check on any git command that references it
+  by name, `git log origin/never-push-without-asking..HEAD` included,
+  since the filter matches raw text, not word boundaries. Same safe
+  direction, same accepted gap.
 
 ## Rules
 
