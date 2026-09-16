@@ -34,7 +34,8 @@ const DEFAULT_SETUP = {
     '.claude/settings.local.json',
     '.claude/hooks',
     'CLAUDE.local.md',
-    '.claude/hookify.*.local.md'
+    '.claude/hookify.*.local.md',
+    '.graphifyignore'
   ],
   commands: []
 }
