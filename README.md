@@ -99,14 +99,20 @@ somewhere in the command":
 - **Verified working:** a bare `git push`, `git -C <dir> push`,
   `git --no-pager push`, and `git push <remote> <branch>` are all caught and
   denied without explicit current-turn authorization. `git log`/`git status`
-  and other non-push git commands pass through untouched.
+  and other non-push git commands pass through untouched, unless their raw
+  text happens to contain "push" (see the branch-name exception below).
 - **Accepted false positive:** a command that merely contains the
   substrings `git` and `push` anywhere in its text, even a harmless
   `echo "reminder: git push later"` or a `grep` search for that phrase,
   also triggers the check and gets denied without authorization. This is
-  the safe direction (it can only cause an unneeded block, never miss a
-  real push), so it's accepted rather than chased away, in the same
-  "Scope, by design" spirit as the other rules below.
+  the safe direction for a command that matches (it can only cause an
+  unneeded block on that command, never miss a push whose own text
+  matches), so it's accepted rather than chased away, in the same "Scope,
+  by design" spirit as the other rules below. It does not cover a wrapper
+  script, alias, or function that runs `git push` internally without that
+  text appearing in the Bash call itself (e.g. `./publish.sh`), that's a
+  separate, out-of-scope gap: the filter can only see the literal command
+  text Claude actually invokes.
 - **Accepted false positive, branch names:** a branch name containing
   "push" anywhere in it (e.g. `never-push-without-asking`, this very
   branch) also triggers the check on any git command that references it
