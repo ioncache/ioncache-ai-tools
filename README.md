@@ -89,6 +89,25 @@ codex plugin marketplace remove ioncache-ai-tools
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
+### `git push` agent hook: accepted false-positive tradeoff
+
+The hook only spawns when `hooks.json`'s `if` filter (`Bash(*git*push)` /
+`Bash(*git*push*)`) matches the raw Bash command text, and that filter has
+no concept of "this is the program actually being run" versus "this text
+happens to appear somewhere in the command":
+
+- **Verified working:** a bare `git push`, `git -C <dir> push`,
+  `git --no-pager push`, and `git push <remote> <branch>` are all caught and
+  denied without explicit current-turn authorization. `git log`/`git status`
+  and other non-push git commands pass through untouched.
+- **Accepted false positive:** a command that merely contains the
+  substrings `git` and `push` anywhere in its text, even a harmless
+  `echo "reminder: git push later"` or a `grep` search for that phrase,
+  also triggers the check and gets denied without authorization. This is
+  the safe direction (it can only cause an unneeded block, never miss a
+  real push), so it's accepted rather than chased away, in the same
+  "Scope, by design" spirit as the other rules below.
+
 ## Rules
 
 **Scope, by design:**
