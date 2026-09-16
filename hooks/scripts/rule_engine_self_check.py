@@ -553,22 +553,24 @@ def main():
     assert os.path.exists(sentinel_path), 'an enabled .py rule should still be imported normally'
     shutil.rmtree(sentinel_rules_dir, ignore_errors=True)
 
-    # git push agent hook: its `if` filter and authorization judgment live
-    # inside Claude Code itself, not in this repo's Python, so they can't be
-    # unit-tested here (see README's "accepted false-positive tradeoff"
-    # section for the manually-verified command shapes). This assertion is
-    # a narrower regression guard: catch an accidental edit to the
-    # configured pattern itself, not the matching behavior it produces.
+    # git push / git commit agent hooks: their `if` filters and
+    # authorization judgment live inside Claude Code itself, not in this
+    # repo's Python, so they can't be unit-tested here (see README's
+    # "accepted false-positive tradeoff" sections for the manually-verified
+    # command shapes). This assertion is a narrower regression guard: catch
+    # an accidental edit to the configured patterns themselves, not the
+    # matching behavior they produce.
     with open(os.path.join(SCRIPT_DIR, '..', 'hooks.json'), 'r', encoding='utf-8') as f:
         hooks_config = json.load(f)
-    git_push_hooks = [
-        handler
+    agent_hook_filters = {
+        handler['if']
         for group in hooks_config['hooks']['PreToolUse']
         for handler in group['hooks']
         if handler.get('type') == 'agent'
-    ]
-    assert len(git_push_hooks) == 1, 'expected exactly one agent-type PreToolUse hook (the git push authorization hook)'
-    assert git_push_hooks[0]['if'] == 'Bash(*git*push*)', 'git push agent hook if-filter changed unexpectedly'
+    }
+    assert agent_hook_filters == {'Bash(*git*push*)', 'Bash(*git* commit*)'}, (
+        'expected exactly the git push and git commit agent hook if-filters, one changed or is missing'
+    )
 
     print('All rule-engine self-checks passed.')
 

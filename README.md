@@ -85,6 +85,7 @@ codex plugin marketplace remove ioncache-ai-tools
 | `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
 | `git push` agent hook | PreToolUse | On any Bash `git push`, spawns a subagent (Claude Code's experimental `type: "agent"` hook) that reads the transcript and denies unless the current turn explicitly authorized this specific push; any doubt denies |
+| `git commit` agent hook | PreToolUse | Same mechanism as the `git push` hook, applied to `git commit`; denies unless the current turn explicitly asked for a commit right now, a prior turn's "commit" or a generic "finish it"/"proceed" doesn't carry over |
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
@@ -119,6 +120,34 @@ somewhere in the command":
   by name, `git log origin/never-push-without-asking..HEAD` included,
   since the filter matches raw text, not word boundaries. Same safe
   direction, same accepted gap.
+
+### `git commit` agent hook
+
+Same mechanism as the `git push` hook above, applied to `git commit`
+instead: a `PreToolUse` `type: "agent"` hook, an `if: "Bash(*git* commit*)"`
+pre-filter, and a prompt that reads the transcript and denies unless the
+current turn explicitly asked for a commit right now.
+
+- **Verified working:** a bare `git commit`, `git -C <dir> commit`, and
+  `git commit -m "..."` are all caught and denied without explicit
+  current-turn authorization. `git status`/`git log` pass through
+  untouched. The `if` pattern's leading space before "commit" (rather than
+  `Bash(*git*commit*)`) means a branch name containing "commit" (e.g.
+  `never-commit-without-asking`, this very branch) does not false-positive
+  the way the `git push` hook's branch-name case does, since the hyphen
+  before "commit" in a branch name isn't a space.
+- **Accepted, occasional misjudgment on real authorization:** unlike the
+  deterministic rules elsewhere in this file, this hook's decision is an
+  LLM judgment call, not a script. In testing, it once denied a commit
+  that had, in fact, been explicitly authorized earlier in the same turn,
+  after several unrelated tool calls sat between the authorization and the
+  actual commit attempt in the transcript; retrying the identical commit
+  succeeded. This is the opposite failure direction from the false
+  positives above (an occasional false *denial* of something that was
+  authorized, not an occasional unneeded block), and is accepted for the
+  same reason a deterministic keyword match was rejected in the first
+  place: judging "was this actually authorized" from open-ended language
+  isn't reliably expressible as a script.
 
 ## Rules
 
