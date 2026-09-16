@@ -72,6 +72,17 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Bash(*git* commit*)",
+            "prompt": "A Bash tool call is about to run `git commit`. Hook input: $ARGUMENTS\n\nRead the transcript file at the input's transcript_path and find the user's most recent message(s) in the current turn only. Decide whether that message explicitly asked for a commit right now. A prior turn's \"commit\" instruction, or a generic \"finish it\"/\"proceed\", does not authorize a later, unrelated commit, only the current turn's own message can.\n\nIf there is any doubt, ambiguity, vagueness, or the user did not clearly and explicitly ask for a commit right now, you MUST respond with ok: false. Only respond ok: true when the user's current message unmistakably asks for a commit now. When uncertain, always choose false.\n\nRespond with JSON: {\"ok\": true} to allow the commit, or {\"ok\": false, \"reason\": \"<why, plain and short>\"} to deny it.",
+            "continueOnBlock": true
+          }
+        ]
+      },
+      {
         "matcher": "*",
         "hooks": [
           {
