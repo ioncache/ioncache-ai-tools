@@ -84,6 +84,7 @@ codex plugin marketplace remove ioncache-ai-tools
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
+| `git push` agent hook | PreToolUse | On any Bash `git push`, spawns a subagent (Claude Code's experimental `type: "agent"` hook) that reads the transcript and denies unless the current turn explicitly authorized this specific push; any doubt denies |
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
@@ -127,7 +128,6 @@ rule never touches engine code. Three shapes:
 | Rule | Shape | Event | What it does |
 | ---- | ----- | ----- | ------------ |
 | `never_kill_without_asking` | Scripted | PreToolUse | Denies `kill`/`pkill`/`killall` in a Bash command, using real command tokenization (not a regex) |
-| `never_push_without_asking` | Scripted | PreToolUse | Denies `git push` in a Bash command; one approval covers exactly one push, never a standing permission |
 | `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
 | `no_manual_lockfile_edit_bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
 | `fix_emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
