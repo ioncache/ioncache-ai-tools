@@ -84,41 +84,47 @@ codex plugin marketplace remove ioncache-ai-tools
 | `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
 | `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
 | `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
-| `git push` agent hook | PreToolUse | On any Bash `git push`, spawns a subagent (Claude Code's experimental `type: "agent"` hook) that reads the transcript and denies unless the current turn explicitly authorized this specific push; any doubt denies |
+| `git push` agent hook | PreToolUse | Spawns a subagent (Claude Code's experimental `type: "agent"` hook) that first checks whether the command really is a `git push`, allowing it straight through if not, then denies unless the current turn explicitly authorized this specific push; any doubt denies |
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
-### `git push` agent hook: accepted false-positive tradeoff
+### `git push` agent hook: how it decides
 
-The hook only spawns when `hooks.json`'s `if` filter (`Bash(*git*push*)`)
-matches the raw Bash command text, and that filter has no concept of "this
-is the program actually being run" versus "this text happens to appear
-somewhere in the command":
+Two separate stages, and the distinction matters:
 
-- **Verified working:** a bare `git push`, `git -C <dir> push`,
-  `git --no-pager push`, and `git push <remote> <branch>` are all caught and
-  denied without explicit current-turn authorization. `git log`/`git status`
-  and other non-push git commands pass through untouched, unless their raw
-  text happens to contain "push" (see the branch-name exception below).
-- **Accepted false positive:** a command that merely contains the
-  substrings `git` and `push` anywhere in its text, even a harmless
-  `echo "reminder: git push later"` or a `grep` search for that phrase,
-  also triggers the check and gets denied without authorization. This is
-  the safe direction for a command that matches (it can only cause an
-  unneeded block on that command, never miss a push whose own text
-  matches), so it's accepted rather than chased away, in the same "Scope,
-  by design" spirit as the other rules below. It does not cover a wrapper
-  script, alias, or function that runs `git push` internally without that
-  text appearing in the Bash call itself (e.g. `./publish.sh`), that's a
-  separate, out-of-scope gap: the filter can only see the literal command
-  text Claude actually invokes.
-- **Accepted false positive, branch names:** a branch name containing
-  "push" anywhere in it (e.g. `never-push-without-asking`, this very
-  branch) also triggers the check on any git command that references it
-  by name, `git log origin/never-push-without-asking..HEAD` included,
-  since the filter matches raw text, not word boundaries. Same safe
-  direction, same accepted gap.
+1. **`hooks.json`'s `if` filter (`Bash(*git*push*)`) decides whether to
+   spawn the subagent at all.** It is a raw-text glob, so it is a poor
+   judge of what a command does: it over-fires on text that merely mentions
+   "git" and "push", it under-fires on forms the docs confirm it misses
+   (`Bash(git push *)` does not match `git -C . push`), and Claude Code
+   also spawns the hook anyway whenever it cannot statically determine what
+   a command does. The filter is a cost optimization only, never the
+   decision.
+2. **The subagent decides.** Its prompt checks, as an explicit first step,
+   whether the command actually runs `git push`, and returns allow
+   immediately if not, without reading the transcript. Only a real push
+   reaches the authorization check against the current turn.
+
+Because stage 2 does the judging, stage 1 over-firing is harmless. These
+all pass through untouched, verified against the live hook:
+
+- `echo "reminder: git push later"`, or a `grep` for that phrase
+- a branch name containing "push", e.g.
+  `git log origin/never-push-without-asking`
+- an unrelated program whose arguments contain a command substitution, e.g.
+  `gh api ... -f body="$(cat file)"`, which Claude Code cannot statically
+  resolve and therefore escalates to the hook
+
+The same design closes an obfuscation gap a pattern-matching rule cannot:
+`git${IFS}push` is caught, because the subagent reads the command's intent
+rather than matching its spelling.
+
+**What it still does not cover:** indirection the command text does not
+reveal. A wrapper script, alias, or shell function that runs `git push`
+internally (`./publish.sh`) is invisible here, since the hook only ever
+sees the literal command Claude invokes. Closing that would require
+enforcing at execution time rather than on command text.
 
 ## Rules
 
