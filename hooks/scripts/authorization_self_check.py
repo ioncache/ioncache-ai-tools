@@ -47,6 +47,9 @@ def main():
         ('/usr/bin/git push', 'a path-qualified git'),
         ('timeout 5 git push', 'a recognized wrapper command'),
         ('git status && git push', 'the second command in a chain'),
+        ('cd /some/dir\ngit commit -m "x"', 'a newline-separated script, not just a && chain'),
+        ('git add -A\ngit commit -m "x"\ngit log --oneline -1', 'the middle line of a multi-line script'),
+        ('git \\\n  push', 'one command split across lines by a trailing backslash'),
     ]
     for command, label in guarded:
         assert consume_authorization.runs_guarded_action(command) is True, f'should recognize {label}: {command!r}'
@@ -63,6 +66,7 @@ def main():
         ('gh api repos/o/r/pulls/1/replies -f body="$(cat f)"', 'an unrelated program with a substitution'),
         ('curl -d "$(cat payload.json)" https://example.com', 'curl with a substitution'),
         ('ls -la', 'an unrelated command'),
+        ('echo one\necho two', 'a multi-line script with no git in it'),
     ]
     for command, label in unguarded:
         assert consume_authorization.runs_guarded_action(command) is False, f'should not recognize {label}: {command!r}'
