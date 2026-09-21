@@ -237,11 +237,16 @@ def main():
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
+                    # Names the classifier as the thing that fired, and gives a
+                    # way out, because the classifier is a word match and
+                    # misfires on instructions opening with "when" or "if".
+                    # Asserting the message *was* a question left the user with
+                    # no way to tell a misfire from a real block, and no way
+                    # past it.
                     "permissionDecisionReason": (
-                        "BLOCKED: the user's last message is a pending question "
-                        "and this is a state-changing tool call. Answer the "
-                        "question in plain text before making any change. "
-                        "Read-only lookups are still allowed."
+                        "BLOCKED: classified as a question, answer it in plain "
+                        "text first. Read-only calls still work. If that was an "
+                        "instruction, not a question, say so and it goes through."
                     ),
                 }
             }
