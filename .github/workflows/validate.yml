@@ -39,6 +39,9 @@ jobs:
       - name: Run pending-question self-check
         run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
 
+      - name: Run authorization self-check
+        run: python3 hooks/scripts/authorization_self_check.py < /dev/null
+
       - name: Check command/skill frontmatter
         run: |
           for f in commands/*.md skills/*/SKILL.md; do
