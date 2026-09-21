@@ -100,7 +100,21 @@ def normalize_shell_command(command):
 # regex over the whole string can't express: `ls /tmp/kill` and
 # `printf x > out && cat package-lock.json` both contain a guarded word or
 # filename, but neither actually invokes or mutates it.
-CONTROL_OPERATORS = {';', '&&', '||', '|', '&', '(', ')'}
+# A newline separates two commands exactly as `;` does, so it belongs in
+# this set. Without it a multi-line script collapses into a single
+# "command" whose first word is whatever came first (often `cd`), and
+# every rule asking "what is actually being invoked here" reads the wrong
+# answer for every line but the first.
+CONTROL_OPERATORS = {';', '&&', '||', '|', '&', '(', ')', '\n'}
+
+
+# shlex's own punctuation set plus the newline. Newline has to be listed
+# as punctuation rather than split off the raw string beforehand, because
+# only the lexer knows whether a given newline is a separator or an
+# ordinary character inside a quoted argument: pre-splitting the text
+# turns `printf 'a\ngit commit\nb'` into three "commands", one of which
+# looks exactly like a real commit.
+SHELL_PUNCTUATION = '();<>|&\n'
 
 
 def tokenize_command(command):
@@ -108,9 +122,18 @@ def tokenize_command(command):
     backslash-escaping are resolved the way Bash itself resolves them
     (shlex's posix mode), and control operators (;, &&, ||, |, &, (, ))
     come out as their own tokens instead of being glued to an adjacent
-    word (shlex's punctuation_chars mode). Falls back to a plain
-    whitespace split on unbalanced quoting rather than raising, since a
-    hook must never throw on attacker- or mistake-controlled input.
+    word (shlex's punctuation_chars mode). A newline is one of those
+    operators, so newline is removed from the lexer's whitespace set and
+    added to its punctuation set. Falls back to a plain whitespace split
+    on unbalanced quoting rather than raising, since a hook must never
+    throw on attacker- or mistake-controlled input; that fallback loses
+    newline separation, which is acceptable for an input already too
+    malformed to lex.
+
+    Known, accepted gap: a heredoc body is not opaque to the lexer, so
+    `cat <<EOF` followed by a line reading `git push` yields tokens that
+    look like a real invocation. Closing that means tracking heredoc
+    state, which is a real shell parser rather than a lexer.
 
     Bash splices a backslash immediately before a newline away entirely
     (line continuation), joining the two lines before it even starts
@@ -121,8 +144,9 @@ def tokenize_command(command):
     a case this narrow.
     """
     command = command.replace('\\\n', '')
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=SHELL_PUNCTUATION)
     lexer.whitespace_split = True
+    lexer.whitespace = ' \t\r'
     try:
         return list(lexer)
     except ValueError:

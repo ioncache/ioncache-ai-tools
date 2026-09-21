@@ -15,6 +15,7 @@ one the feature exists to provide, was never run once.
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import uuid
@@ -26,14 +27,22 @@ import consume_authorization  # noqa: E402
 PROMPT_FILE = "/tmp/.ioncache-last-prompt-{session_id}"
 
 
-def run_hook(script, payload):
+def run_hook_raw(script, payload_text):
+    """Feeds a hook exactly these bytes, so a payload that is not valid JSON at
+    all can be exercised. A hook must never throw whatever it is handed, so a
+    non-zero exit is a failure of the test, not of the case.
+    """
     subprocess.run(
         [sys.executable, os.path.join(SCRIPT_DIR, script)],
-        input=json.dumps(payload),
+        input=payload_text,
         text=True,
         capture_output=True,
         check=True,
     )
+
+
+def run_hook(script, payload):
+    run_hook_raw(script, json.dumps(payload))
 
 
 def main():
@@ -67,6 +76,8 @@ def main():
         ('curl -d "$(cat payload.json)" https://example.com', 'curl with a substitution'),
         ('ls -la', 'an unrelated command'),
         ('echo one\necho two', 'a multi-line script with no git in it'),
+        ("printf 'first\ngit commit\nlast'", 'a newline inside a quoted argument, not a separator'),
+        ('echo "deploy steps:\ngit push origin main"', 'a newline inside a double-quoted argument'),
     ]
     for command, label in unguarded:
         assert consume_authorization.runs_guarded_action(command) is False, f'should not recognize {label}: {command!r}'
@@ -77,6 +88,13 @@ def main():
     # authorization unconsumed, it never denies anything.
     assert consume_authorization.runs_guarded_action('git${IFS}push') is False, (
         'documented gap: the tokenizer cannot see through ${IFS} expansion'
+    )
+
+    # A second deliberate gap, asserted for the same reason: a heredoc body is
+    # not opaque to the lexer, so a guarded-looking line inside one reads as a
+    # real invocation. Costs an unspent authorization, never allows an action.
+    assert consume_authorization.runs_guarded_action("cat <<'EOF'\ngit push\nEOF") is True, (
+        'documented gap: a heredoc body is not opaque to the tokenizer'
     )
 
     session_id = f'selfcheck-{uuid.uuid4()}'
@@ -110,6 +128,19 @@ def main():
         run_hook('consume_authorization.py',
                  {'session_id': session_id, 'tool_name': 'Read', 'tool_input': {'file_path': '/tmp/x'}})
         assert path.exists(), 'a non-Bash tool should leave the captured prompt in place'
+
+        # capture_prompt: the file is owner-only. It holds the user's raw
+        # message in a directory every other local account can read.
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, 'the capture should be readable only by its owner'
+
+        # capture_prompt: a payload that will not parse destroys the previous
+        # turn's capture instead of leaving it to be read as current. Parsing
+        # used to happen outside the failure guard, so a malformed payload
+        # silently left an earlier authorization standing.
+        run_hook('capture_prompt.py', {'session_id': session_id, 'prompt': 'go ahead and push'})
+        assert path.exists(), 'precondition: a capture exists before the malformed payload'
+        run_hook_raw('capture_prompt.py', '{"session_id": "' + session_id + '", "prompt": not-json}')
+        assert not path.exists(), 'a payload that fails to parse should invalidate the previous capture'
     finally:
         path.unlink(missing_ok=True)
 

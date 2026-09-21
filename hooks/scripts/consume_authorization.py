@@ -49,19 +49,16 @@ def git_subcommand(executable):
 
 
 def runs_guarded_action(command):
-    # A newline separates commands just as `;` does, but it is not one of the
-    # control operators the shared tokenizer splits on, so a multi-line script
-    # would otherwise collapse into a single "command" whose first word is
-    # whatever came first (often `cd`) and never look like git at all. Splice
-    # line continuations away first so a command broken across lines with a
-    # trailing backslash is still read as one command.
-    for line in command.replace("\\\n", "").split("\n"):
-        for simple_command in split_into_simple_commands(tokenize_command(line)):
-            executable = skip_wrappers(simple_command)
-            if not executable or os.path.basename(executable[0]) != "git":
-                continue
-            if git_subcommand(executable) in GUARDED_SUBCOMMANDS:
-                return True
+    # Newline separation is the tokenizer's job, not this function's. An
+    # earlier version split the raw text on newlines here, before anything
+    # knew about quoting, so `printf 'a\ngit commit\nb'` looked like a real
+    # commit and spent an authorization on a command that only printed text.
+    for simple_command in split_into_simple_commands(tokenize_command(command)):
+        executable = skip_wrappers(simple_command)
+        if not executable or os.path.basename(executable[0]) != "git":
+            continue
+        if git_subcommand(executable) in GUARDED_SUBCOMMANDS:
+            return True
     return False
 
 
