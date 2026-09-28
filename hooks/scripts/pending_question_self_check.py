@@ -332,6 +332,7 @@ def main():
     # Same input the hook receives below, so this resolves to the path the
     # hook actually writes rather than one reconstructed by hand.
     flag_path = state_file({'session_id': session_id}, PENDING_QUESTION)
+    assert flag_path is not None, 'no private location for session state; the hooks would be silently disabled'
     try:
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],

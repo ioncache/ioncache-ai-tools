@@ -25,6 +25,7 @@ import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+import session_state  # noqa: E402
 from session_state import PROMPTS, TRANSCRIPT_SUFFIX, state_file  # noqa: E402
 import capture_prompt  # noqa: E402
 
@@ -149,14 +150,45 @@ def check_capture_behavior(root):
 
 
 def check_location_safety():
-    uid_dir = pathlib.Path(tempfile.gettempdir()) / f'.ioncache-{os.getuid()}'
+    uid_dir = session_state.TMP_DIR  # /tmp/.ioncache-<uid>
     name = f'{TRANSCRIPT_SUFFIX}{PROMPTS}'
 
-    # No transcript path at all (Codex, or an unusual host): the per-user
-    # fallback, which is private.
+    # No transcript path at all (Codex, or an unusual host): the fallback is
+    # plain /tmp on Linux and macOS alike, always usable. An earlier version
+    # vetted /tmp's permissions, refused Linux's shared sticky /tmp, and so
+    # returned None on every Linux host, silently switching the pending-question
+    # guard off. Its contents are temporary and gone after a reboot.
     fallback = state_file({'session_id': 'abc'}, PROMPTS)
-    assert fallback == uid_dir / f'{PROMPTS}-abc', f'no transcript path should fall back, got {fallback}'
-    assert stat.S_IMODE(uid_dir.stat().st_mode) == 0o700, 'the fallback directory should be owner-only'
+    assert fallback == uid_dir / f'{PROMPTS}-abc', f'no transcript path should fall back to /tmp, got {fallback}'
+    assert uid_dir.is_dir(), 'the fallback directory should exist once resolved'
+
+    # Our own /tmp subdirectory is checked even though /tmp is not. Exercised
+    # by pointing the module at a stand-in path, so the real directory is never
+    # touched. (An entry owned by another account is the case this exists for,
+    # but a non-root test cannot create one; a symlink and a directory others
+    # can write into stand in for it.)
+    real = session_state.TMP_DIR
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            root = pathlib.Path(root)
+            session_state.TMP_DIR = root / 'ok'
+            assert state_file({'session_id': 'x'}, PROMPTS) == root / 'ok' / f'{PROMPTS}-x', (
+                'a fresh subdirectory should be created and used'
+            )
+
+            (root / 'elsewhere').mkdir()
+            (root / 'link').symlink_to(root / 'elsewhere')
+            session_state.TMP_DIR = root / 'link'
+            assert state_file({'session_id': 'x'}, PROMPTS) is None, 'a symlinked subdirectory must not be used'
+
+            (root / 'open').mkdir()
+            (root / 'open').chmod(0o777)
+            session_state.TMP_DIR = root / 'open'
+            assert state_file({'session_id': 'x'}, PROMPTS) is None, (
+                'a subdirectory others can write into must not be used'
+            )
+    finally:
+        session_state.TMP_DIR = real
 
     # A falsy session id normalizes to one path for every caller.
     assert state_file({'session_id': None}, PROMPTS) == state_file({'session_id': ''}, PROMPTS)
@@ -190,6 +222,7 @@ def check_location_safety():
         assert state_file({'transcript_path': str(link / 's.jsonl'), 'session_id': 'x'}, PROMPTS).parent == uid_dir, (
             'a symlinked directory must not be followed'
         )
+
 
 
 def main():

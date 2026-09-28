@@ -22,9 +22,15 @@ prompt of a brand-new session fires. It sits in the user's home directory, not
 the shared /tmp, owned by the user and not writable by anyone else.
 
 Codex loads these same hooks with its own input shape, so there is still a
-fallback: a per-user directory under the system temp dir. The judge cannot
-reach the fallback and will deny, which is the safe direction for a guard; the
+fallback: `/tmp/.ioncache-<uid>/`, on Linux and macOS alike. /tmp itself is
+used without any checks, because it is the place meant for exactly this; only
+our own subdirectory is checked, to be sure it really is ours. The judge
+never reads the fallback, so nothing written there can authorize a commit; the
 pending-question hooks, which are all command hooks, work in either location.
+
+Everything in the fallback is temporary and is gone after a reboot. Nothing may
+depend on it persisting: a missing prompts list reads as empty (the judge then
+denies), and a missing pending-question flag reads as "no question pending".
 
 Nothing in this module raises. A hook that throws exits 1, and Claude Code
 treats exit 1 as a non-blocking error and proceeds, so a raise here would
@@ -33,7 +39,6 @@ silently switch a guard off. Callers get None instead and decide explicitly.
 import os
 import pathlib
 import stat
-import tempfile
 
 PROMPTS = "prompts"
 PENDING_QUESTION = "pending-question"
@@ -41,6 +46,10 @@ PENDING_QUESTION = "pending-question"
 # Appended to the transcript path. The result ends in neither `.jsonl` nor
 # anything else Claude Code reads, so it cannot be mistaken for a session.
 TRANSCRIPT_SUFFIX = ".ioncache-"
+
+# Literal /tmp rather than tempfile.gettempdir(), which on macOS is a per-user
+# /var/folders path. /tmp is the same well-known place on both systems.
+TMP_DIR = pathlib.Path("/tmp") / f".ioncache-{os.getuid()}"
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -60,30 +69,9 @@ def is_private_dir(path):
         info = os.lstat(path)
     except OSError:
         return False
-    return (
-        stat.S_ISDIR(info.st_mode)
-        and info.st_uid == os.getuid()
-        and not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-    )
-
-
-def ensure_private_dir(path):
-    """Returns `path` if it is, or can be made, a private directory, else None.
-
-    Creates only the final component, and only when its parent is itself
-    private: creating missing parents would give them the default mode, and a
-    world-writable parent would let someone swap the directory out from under
-    us between the check and the use.
-    """
-    if is_private_dir(path):
-        return path
-    if not is_private_dir(path.parent):
-        return None
-    try:
-        path.mkdir(mode=DIR_MODE)
-    except OSError:
-        pass  # raced with another hook, or cannot create; the check decides
-    return path if is_private_dir(path) else None
+    if not stat.S_ISDIR(info.st_mode):
+        return False
+    return info.st_uid == os.getuid() and not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
 
 
 def state_file(hook_input, name):
@@ -102,9 +90,18 @@ def state_file(hook_input, name):
         if is_private_dir(path.parent):
             return path
 
-    directory = ensure_private_dir(pathlib.Path(tempfile.gettempdir()) / f".ioncache-{os.getuid()}")
-    if directory is None:
+    try:
+        TMP_DIR.mkdir(mode=DIR_MODE, exist_ok=True)
+    except OSError:
+        return None  # /tmp itself unusable; callers treat None explicitly
+    # /tmp itself is never vetted, it is the right place for temp files. Our
+    # own subdirectory is: on a shared host another account could create
+    # /tmp/.ioncache-<uid> first, as its own directory or a symlink to one, and
+    # then plant or delete the pending-question flag inside it. If the entry is
+    # not a real directory owned by this user, use nothing rather than theirs.
+    if not is_private_dir(TMP_DIR):
         return None
+    directory = TMP_DIR
     # A falsy id normalizes to one name for every caller. Writer and reader
     # once normalized differently, one writing `...-unknown` while the other
     # deleted `...-None`, so state silently outlived what cleared it.
