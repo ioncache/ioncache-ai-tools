@@ -19,9 +19,12 @@ go ahead", which is cheaper than the classifier silently guessing wrong.
 """
 
 import json
-import pathlib
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from session_state import PENDING_QUESTION, state_file, write_private  # noqa: E402
 
 # Words a genuine question typically opens with. Bare "do" is deliberately
 # excluded: unlike "does"/"did", it's also the standard imperative-sentence
@@ -50,13 +53,18 @@ def has_question(text):
 
 def main():
     data = json.load(sys.stdin)
-    session_id = data.get("session_id", "unknown")
     prompt = data.get("prompt", "") or ""
 
-    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
+    # None means there is nowhere private to keep the flag. The instruction
+    # below is still worth giving, it just cannot be enforced this turn.
+    flag_path = state_file(data, PENDING_QUESTION)
 
     if has_question(prompt):
-        flag_path.write_text("1")
+        if flag_path is not None:
+            try:
+                write_private(flag_path, "1")
+            except OSError:
+                pass
         print(
             json.dumps(
                 {
@@ -76,9 +84,15 @@ def main():
                 }
             )
         )
-    elif flag_path.exists():
-        flag_path.unlink()
+    elif flag_path is not None:
+        flag_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # A throwing hook exits 1, which Claude Code treats as a non-blocking
+        # error. Exiting 0 explicitly says the same thing without the noise.
+        pass
+    sys.exit(0)

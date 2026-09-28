@@ -13,13 +13,13 @@ examples tend not to.
 """
 import json
 import os
-import pathlib
 import subprocess
 import sys
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+from session_state import PENDING_QUESTION, state_file  # noqa: E402
 
 from classify_question import has_question  # noqa: E402
 from block_pending_question import is_mutating  # noqa: E402
@@ -329,7 +329,9 @@ def main():
     # never collide with a real session's marker file, and always cleans
     # up the flag file classify_question.py writes as a side effect.
     session_id = f'self-check-{uuid.uuid4()}'
-    flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
+    # Same input the hook receives below, so this resolves to the path the
+    # hook actually writes rather than one reconstructed by hand.
+    flag_path = state_file({'session_id': session_id}, PENDING_QUESTION)
     try:
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],

@@ -153,6 +153,33 @@ def tokenize_command(command):
         return command.split()
 
 
+def is_separator(token):
+    """True if a token separates one simple command from the next.
+
+    Not a plain membership test, because shlex's punctuation_chars mode
+    accumulates a RUN of punctuation into one token. Once newline joined
+    that set, `a &&\nb` lexed the operator and the newline together as
+    the single token `&&\n`, which is not a member of CONTROL_OPERATORS,
+    so the whole thing collapsed into one simple command and every
+    command-position guard read the wrong executable. Wrapping a line
+    after `&&` was enough to walk past the kill guard.
+
+    Newlines are stripped before the membership test rather than testing
+    "is every character an operator character", because `>` and `((` are
+    punctuation too and neither separates commands: `>` is a redirect
+    that has to stay attached to its target for redirect detection, and
+    `((` marks arithmetic evaluation, where `>` is a comparison rather
+    than a redirect. A token of nothing but newlines (a blank line) is a
+    separator in its own right.
+    """
+    if not token:
+        return False
+    without_newlines = token.replace('\n', '')
+    if not without_newlines:
+        return True  # one or more bare newlines
+    return without_newlines in CONTROL_OPERATORS
+
+
 def split_into_simple_commands(tokens):
     """Splits a token list into one list per simple command, cutting at
     each control operator. `a && b; c` becomes [[a], [b], [c]].
@@ -160,7 +187,7 @@ def split_into_simple_commands(tokens):
     commands = []
     current = []
     for token in tokens:
-        if token in CONTROL_OPERATORS:
+        if is_separator(token):
             if current:
                 commands.append(current)
             current = []

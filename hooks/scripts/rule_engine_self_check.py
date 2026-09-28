@@ -19,6 +19,8 @@ from rule_engine import (  # noqa: E402
     run_rules,
     load_rules_for_event,
     get_disabled_rule_ids,
+    split_into_simple_commands,
+    tokenize_command,
 )
 
 RULES_DIR = os.path.join(SCRIPT_DIR, '..', 'rules')
@@ -197,6 +199,42 @@ def main():
     real_user_prompt_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'UserPromptSubmit')]
     assert 'scope-exactly-what-asked.json' in real_user_prompt_rules
     assert 'verify-state-before-claiming.json' in real_user_prompt_rules
+
+    # split_into_simple_commands: an operator followed by a newline arrives as
+    # ONE glued token, because shlex's punctuation_chars mode accumulates runs
+    # of punctuation. Every case here split correctly until newline joined that
+    # set, and then silently stopped, which turned a line wrap after `&&` into a
+    # way past every command-position guard.
+    separator_cases = [
+        ('echo hi && grep x f', 2, 'a plain operator'),
+        ('echo hi &&\ngrep x f', 2, 'an operator glued to a following newline'),
+        ('echo hi;\ngrep x f', 2, 'a semicolon glued to a following newline'),
+        ('echo hi ||\ngrep x f', 2, 'an or-operator glued to a following newline'),
+        ('echo hi |\ngrep x', 2, 'a pipe glued to a following newline'),
+        ('echo hi &\ngrep x f', 2, 'a background operator glued to a following newline'),
+        ('echo hi\ngrep x f', 2, 'a bare newline'),
+        ('echo hi\n\ngrep x f', 2, 'a blank line, which lexes as a run of newlines'),
+        ('echo hi &&\n\ngrep x f', 2, 'an operator followed by a blank line'),
+        ('a\nb\nc', 3, 'three newline-separated commands'),
+    ]
+    for command, expected_count, label in separator_cases:
+        parts = split_into_simple_commands(tokenize_command(command))
+        assert len(parts) == expected_count, (
+            f'{label} should split into {expected_count} commands, got {parts}: {command!r}'
+        )
+
+    # split_into_simple_commands: punctuation that is NOT a separator has to stay
+    # attached. `>` belongs with its redirect target, and `((` opens arithmetic
+    # evaluation where `>` is a comparison rather than a redirect. Treating
+    # either as a separator breaks redirect detection outright, so the fix for
+    # the glued-operator bug must not reach them.
+    non_separator_cases = [
+        ('printf x > out', [['printf', 'x', '>', 'out']], 'a redirect operator and its target'),
+        ('(( 1 > 2 ))', [['((', '1', '>', '2', '))']], 'arithmetic evaluation'),
+    ]
+    for command, expected, label in non_separator_cases:
+        parts = split_into_simple_commands(tokenize_command(command))
+        assert parts == expected, f'{label} should not be split: {command!r} gave {parts}'
 
     # never_kill_without_asking: exercises the shipped module directly, a
     # tokenizing scripted rule (not a regex Pattern rule), since matching

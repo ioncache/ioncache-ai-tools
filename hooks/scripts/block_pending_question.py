@@ -23,12 +23,12 @@ unmatched.
 
 import json
 import os
-import pathlib
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
+from session_state import PENDING_QUESTION, state_file  # noqa: E402
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 
@@ -220,12 +220,14 @@ def is_mutating(tool_name, tool_input):
 
 def main():
     data = json.load(sys.stdin)
-    session_id = data.get("session_id", "unknown")
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
-    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
-    if not flag_path.exists():
+    # Resolves from the same input fields classify_question.py used, so it
+    # finds the flag wherever that hook put it. None means no private location
+    # exists, in which case that hook could not have written a flag either.
+    flag_path = state_file(data, PENDING_QUESTION)
+    if flag_path is None or not flag_path.exists():
         return
 
     if not is_mutating(tool_name, tool_input):
@@ -237,16 +239,22 @@ def main():
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    # Names the classifier as the thing that fired, and gives a
-                    # way out, because the classifier is a word match and
-                    # misfires on instructions opening with "when" or "if".
-                    # Asserting the message *was* a question left the user with
-                    # no way to tell a misfire from a real block, and no way
-                    # past it.
+                    # Names the classifier as the thing that fired, because it
+                    # is a word match that misfires on instructions opening with
+                    # "when" or "if", and asserting the message *was* a question
+                    # left no way to tell a misfire from a real block.
+                    #
+                    # The way out has to name the mechanism. An earlier version
+                    # said "say so and it goes through", which is false: nothing
+                    # clears the flag except a later prompt that does not parse
+                    # as a question. A model that took it literally said so,
+                    # retried the identical call, was denied identically, and
+                    # could loop there.
                     "permissionDecisionReason": (
-                        "BLOCKED: classified as a question, answer it in plain "
-                        "text first. Read-only calls still work. If that was an "
-                        "instruction, not a question, say so and it goes through."
+                        "BLOCKED: classified as a question, so answer it in plain "
+                        "text and stop. Read-only calls still work. Only the next "
+                        "user message clears this, so if the classifier misfired "
+                        "on an instruction, say so and wait to be told again."
                     ),
                 }
             }
@@ -255,4 +263,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Deliberately explicit rather than left to the default. An
+        # uncaught exception exits 1, which Claude Code treats as
+        # non-blocking, so the call would proceed either way; this just
+        # makes that outcome visible in the code instead of accidental.
+        # The only paths that can reach here are malformed hook input and
+        # an unreadable flag, neither of which a flag could exist behind.
+        pass
+    sys.exit(0)

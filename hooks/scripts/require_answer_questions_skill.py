@@ -13,16 +13,18 @@ just be a second place for the two classifications to drift apart.
 """
 
 import json
-import pathlib
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from session_state import PENDING_QUESTION, state_file  # noqa: E402
 
 
 def main():
     data = json.load(sys.stdin)
-    session_id = data.get("session_id", "unknown")
 
-    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
-    if not flag_path.exists():
+    flag_path = state_file(data, PENDING_QUESTION)
+    if flag_path is None or not flag_path.exists():
         return
 
     print(
@@ -43,4 +45,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Advisory only: a failure here costs one skill reminder, and a
+        # throwing hook must never stall the prompt.
+        pass
+    sys.exit(0)

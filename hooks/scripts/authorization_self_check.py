@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Self-checks for the deterministic halves of the git authorization guard.
+"""Self-checks for the deterministic half of the git authorization guard.
 
 The guard has two halves. The judgment half (does this message authorize this
-action) runs inside Claude Code's agent runtime and cannot be exercised from
-here. The mechanical half can be, and is: capturing the prompt, truncating a
-previous turn's capture, and recognizing a guarded action well enough to
-consume the authorization afterwards.
+action, and was it typed by a human) runs inside Claude Code's agent runtime and
+cannot be exercised from here. The mechanical half can be, and is: where state
+lives, whether the judge can find it, who can write it, what survives a
+machine-injected message, and what a malformed payload does to an authorization
+already on disk.
 
 Cases are organized by behavior, not by past bug, and both outcomes of every
-check are asserted. An earlier version of this guard was signed off on a test
-set drawn entirely from reported symptoms, which meant the success path, the
-one the feature exists to provide, was never run once.
+check are asserted. An earlier version of this guard was signed off on tests
+that exercised the writer alone. The writer was correct, the judge was told to
+look somewhere else, and every authorized commit was denied. The path contract
+test below exists so that cannot pass silently again.
 """
 import json
 import os
@@ -18,13 +20,21 @@ import pathlib
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
-import consume_authorization  # noqa: E402
+from session_state import PROMPTS, TRANSCRIPT_SUFFIX, state_file  # noqa: E402
+import capture_prompt  # noqa: E402
 
-PROMPT_FILE = "/tmp/.ioncache-last-prompt-{session_id}"
+HOOKS_JSON = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
+
+# Verbatim shapes of the two machine-injected message types that Claude Code
+# submits through UserPromptSubmit exactly as if the user had typed them. These
+# are what used to destroy an authorization the user had just given.
+HANDBACK = '<agent-message from="a7872aca">\n[Subagent hand-back] The report follows:\n  # Findings\n</agent-message>'
+NOTIFICATION = '<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n</task-notification>'
 
 
 def run_hook_raw(script, payload_text):
@@ -41,109 +51,152 @@ def run_hook_raw(script, payload_text):
     )
 
 
-def run_hook(script, payload):
-    run_hook_raw(script, json.dumps(payload))
+def prompts_of(path):
+    return [m['prompt'] for m in json.loads(path.read_text())['messages']]
+
+
+def check_path_contract():
+    """The capture hook and the judge must resolve the same file. The judge is
+    an agent hook with only Read, Grep and Glob, so the only path it can build
+    is one it copies from its own hook input. Both agent prompts have to name
+    `transcript_path` and the exact suffix the capture hook appends, and the
+    capture hook has to write exactly <transcript_path><that suffix>.
+
+    Two earlier designs passed every other check here and still denied every
+    authorized commit in a live session, because this contract was broken.
+    """
+    suffix = f'{TRANSCRIPT_SUFFIX}{PROMPTS}'
+    prompts = [
+        hook['prompt']
+        for entry in json.loads(HOOKS_JSON.read_text())['hooks'].get('PreToolUse', [])
+        for hook in entry.get('hooks', [])
+        if hook.get('type') == 'agent' and 'git' in (hook.get('if') or '')
+    ]
+    assert len(prompts) == 2, f'expected the push and commit guards, found {len(prompts)}'
+    for prompt in prompts:
+        assert 'transcript_path' in prompt, 'the judge must derive the path from its hook input'
+        assert suffix in prompt, f'the judge must be told the exact suffix {suffix}'
+        assert 'scratchpad_dir' not in prompt, 'scratchpad_dir is absent in headless sessions and must not be used'
+        assert '\\n' not in prompt, 'prompt paragraphs must be real newlines, not a literal backslash-n'
+
+    with tempfile.TemporaryDirectory() as root:
+        transcript = f'{root}/1234.jsonl'
+        assert state_file({'transcript_path': transcript}, PROMPTS) == pathlib.Path(transcript + suffix), (
+            'the capture hook must write exactly where the judge is told to look'
+        )
+
+
+def check_capture_behavior(root):
+    transcript = f'{root}/{uuid.uuid4()}.jsonl'
+    base = {'session_id': f'selfcheck-{uuid.uuid4()}', 'transcript_path': transcript}
+    path = state_file(base, PROMPTS)
+    assert path == pathlib.Path(f'{transcript}{TRANSCRIPT_SUFFIX}{PROMPTS}'), f'unexpected state path {path}'
+
+    def submit(prompt):
+        run_hook_raw('capture_prompt.py', json.dumps({**base, 'prompt': prompt}))
+
+    # The success path. The captured message is what a later authorization
+    # check reads, so it has to survive verbatim.
+    submit('go ahead and commit')
+    assert prompts_of(path) == ['go ahead and commit'], 'the prompt should be captured verbatim'
+
+    # THE REGRESSION THIS DESIGN EXISTS FOR. A subagent hand-back and a task
+    # notification both arrive through UserPromptSubmit. While only the latest
+    # message was kept, either one erased the user's instruction and the next
+    # guarded action was refused. Both must now land AFTER it.
+    submit(HANDBACK)
+    submit(NOTIFICATION)
+    assert prompts_of(path) == ['go ahead and commit', HANDBACK, NOTIFICATION], (
+        'a machine-injected message must not displace the human instruction'
+    )
+
+    # A later human message lands last, which is what expires an old
+    # authorization: it stops being the most recent human message.
+    submit('actually just run the tests')
+    assert prompts_of(path)[-1] == 'actually just run the tests'
+
+    # Nothing consumes the list, so a second guarded action in the same turn
+    # still finds the instruction. Refusing the second commit of a turn was the
+    # other half of the reported bug.
+    assert 'go ahead and commit' in prompts_of(path), 'one instruction covers the turn'
+
+    # Bounded, so a long session cannot grow the file without limit.
+    for i in range(capture_prompt.MAX_MESSAGES + 5):
+        submit(f'message {i}')
+    captured = prompts_of(path)
+    assert len(captured) == capture_prompt.MAX_MESSAGES, f'should cap at {capture_prompt.MAX_MESSAGES}'
+    assert captured[-1] == f'message {capture_prompt.MAX_MESSAGES + 4}', 'the newest message should be kept'
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600, 'the prompts file should be owner-only'
+
+    # A payload that will not parse discards what came before instead of
+    # leaving it to be read as current, using the locating fields recovered
+    # from the raw text.
+    submit('go ahead and push')
+    run_hook_raw('capture_prompt.py',
+                 '{"session_id": "%s", "transcript_path": "%s", "prompt": not-json}'
+                 % (base['session_id'], transcript))
+    assert not path.exists(), 'a payload that fails to parse should discard the previous state'
+
+    # Payloads with nothing recoverable must still exit cleanly.
+    run_hook_raw('capture_prompt.py', 'garbage')
+    run_hook_raw('capture_prompt.py', '')
+
+    # A corrupt state file is treated as empty rather than fatal.
+    path.write_text('{ not json at all')
+    submit('commit it')
+    assert prompts_of(path) == ['commit it'], 'a corrupt state file should not stop a new capture'
+
+
+def check_location_safety():
+    uid_dir = pathlib.Path(tempfile.gettempdir()) / f'.ioncache-{os.getuid()}'
+    name = f'{TRANSCRIPT_SUFFIX}{PROMPTS}'
+
+    # No transcript path at all (Codex, or an unusual host): the per-user
+    # fallback, which is private.
+    fallback = state_file({'session_id': 'abc'}, PROMPTS)
+    assert fallback == uid_dir / f'{PROMPTS}-abc', f'no transcript path should fall back, got {fallback}'
+    assert stat.S_IMODE(uid_dir.stat().st_mode) == 0o700, 'the fallback directory should be owner-only'
+
+    # A falsy session id normalizes to one path for every caller.
+    assert state_file({'session_id': None}, PROMPTS) == state_file({'session_id': ''}, PROMPTS)
+
+    with tempfile.TemporaryDirectory() as root:
+        root = pathlib.Path(root)  # mkdtemp creates it 0700
+
+        # The normal case: the transcript's directory exists and is private.
+        ok = root / 'project'
+        ok.mkdir(mode=0o755)
+        assert state_file({'transcript_path': str(ok / 's.jsonl')}, PROMPTS) == ok / f's.jsonl{name}'
+
+        # A missing transcript directory is never created, because it belongs
+        # to Claude Code. The state falls back instead.
+        missing = root / 'absent'
+        assert state_file({'transcript_path': str(missing / 's.jsonl'), 'session_id': 'x'}, PROMPTS).parent == uid_dir
+        assert not missing.exists(), "Claude Code's directory must not be created by a hook"
+
+        # A directory others can write into is never used: someone could plant
+        # a forged authorization there before the capture hook runs.
+        shared = root / 'shared'
+        shared.mkdir()
+        shared.chmod(0o777)
+        assert state_file({'transcript_path': str(shared / 's.jsonl'), 'session_id': 'x'}, PROMPTS).parent == uid_dir, (
+            'a group- or world-writable directory must not be used'
+        )
+
+        # Nor a symlink standing in for one.
+        link = root / 'link'
+        link.symlink_to(ok)
+        assert state_file({'transcript_path': str(link / 's.jsonl'), 'session_id': 'x'}, PROMPTS).parent == uid_dir, (
+            'a symlinked directory must not be followed'
+        )
 
 
 def main():
-    # runs_guarded_action: a real guarded action is recognized. These are the
-    # cells that must be caught for the authorization to be consumed at all.
-    guarded = [
-        ('git push', 'a bare push'),
-        ('git commit -m "x"', 'a bare commit'),
-        ('git -C /some/dir push origin main', 'a global option before the subcommand'),
-        ('git --no-pager commit -m "x"', 'a bare global flag before the subcommand'),
-        ('/usr/bin/git push', 'a path-qualified git'),
-        ('timeout 5 git push', 'a recognized wrapper command'),
-        ('git status && git push', 'the second command in a chain'),
-        ('cd /some/dir\ngit commit -m "x"', 'a newline-separated script, not just a && chain'),
-        ('git add -A\ngit commit -m "x"\ngit log --oneline -1', 'the middle line of a multi-line script'),
-        ('git \\\n  push', 'one command split across lines by a trailing backslash'),
-    ]
-    for command, label in guarded:
-        assert consume_authorization.runs_guarded_action(command) is True, f'should recognize {label}: {command!r}'
-
-    # runs_guarded_action: everything that is not a guarded action. A false
-    # positive here consumes an authorization the user has not spent, so the
-    # negative cases matter as much as the positive ones.
-    unguarded = [
-        ('git log --oneline -1', 'git log'),
-        ('git status --porcelain', 'git status'),
-        ('git diff', 'git diff'),
-        ('echo "reminder: git push later"', 'the words quoted inside an echo'),
-        ('git log origin/never-push-without-asking', 'a branch name containing the verb'),
-        ('gh api repos/o/r/pulls/1/replies -f body="$(cat f)"', 'an unrelated program with a substitution'),
-        ('curl -d "$(cat payload.json)" https://example.com', 'curl with a substitution'),
-        ('ls -la', 'an unrelated command'),
-        ('echo one\necho two', 'a multi-line script with no git in it'),
-        ("printf 'first\ngit commit\nlast'", 'a newline inside a quoted argument, not a separator'),
-        ('echo "deploy steps:\ngit push origin main"', 'a newline inside a double-quoted argument'),
-    ]
-    for command, label in unguarded:
-        assert consume_authorization.runs_guarded_action(command) is False, f'should not recognize {label}: {command!r}'
-
-    # A known, deliberate gap, asserted so that it stays visible rather than
-    # being rediscovered later: shlex sees one opaque token, so the tokenizer
-    # cannot see through shell expansion. Missing here only leaves an
-    # authorization unconsumed, it never denies anything.
-    assert consume_authorization.runs_guarded_action('git${IFS}push') is False, (
-        'documented gap: the tokenizer cannot see through ${IFS} expansion'
-    )
-
-    # A second deliberate gap, asserted for the same reason: a heredoc body is
-    # not opaque to the lexer, so a guarded-looking line inside one reads as a
-    # real invocation. Costs an unspent authorization, never allows an action.
-    assert consume_authorization.runs_guarded_action("cat <<'EOF'\ngit push\nEOF") is True, (
-        'documented gap: a heredoc body is not opaque to the tokenizer'
-    )
-
-    session_id = f'selfcheck-{uuid.uuid4()}'
-    path = pathlib.Path(PROMPT_FILE.format(session_id=session_id))
-    try:
-        # capture_prompt: the success path. The captured message is what a
-        # later authorization check will read, so it must survive verbatim.
-        run_hook('capture_prompt.py', {'session_id': session_id, 'prompt': 'go ahead and commit'})
-        assert path.exists(), 'capture should write the prompt file'
-        assert json.loads(path.read_text())['prompt'] == 'go ahead and commit', 'prompt should be captured verbatim'
-
-        # capture_prompt: a new prompt replaces the previous one. This is what
-        # makes an earlier turn's authorization unusable without anything
-        # having to reason about where a turn began.
-        run_hook('capture_prompt.py', {'session_id': session_id, 'prompt': 'what does this do?'})
-        assert json.loads(path.read_text())['prompt'] == 'what does this do?', 'a new prompt should replace the old one'
-
-        # consume_authorization: a guarded action spends the authorization,
-        # so a second action in the same turn has none.
-        run_hook('consume_authorization.py',
-                 {'session_id': session_id, 'tool_name': 'Bash', 'tool_input': {'command': 'git push'}})
-        assert not path.exists(), 'a guarded action should consume the captured prompt'
-
-        # consume_authorization: an unguarded command leaves it alone.
-        run_hook('capture_prompt.py', {'session_id': session_id, 'prompt': 'commit this'})
-        run_hook('consume_authorization.py',
-                 {'session_id': session_id, 'tool_name': 'Bash', 'tool_input': {'command': 'git status'}})
-        assert path.exists(), 'an unguarded command should leave the captured prompt in place'
-
-        # consume_authorization: a non-Bash tool leaves it alone.
-        run_hook('consume_authorization.py',
-                 {'session_id': session_id, 'tool_name': 'Read', 'tool_input': {'file_path': '/tmp/x'}})
-        assert path.exists(), 'a non-Bash tool should leave the captured prompt in place'
-
-        # capture_prompt: the file is owner-only. It holds the user's raw
-        # message in a directory every other local account can read.
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600, 'the capture should be readable only by its owner'
-
-        # capture_prompt: a payload that will not parse destroys the previous
-        # turn's capture instead of leaving it to be read as current. Parsing
-        # used to happen outside the failure guard, so a malformed payload
-        # silently left an earlier authorization standing.
-        run_hook('capture_prompt.py', {'session_id': session_id, 'prompt': 'go ahead and push'})
-        assert path.exists(), 'precondition: a capture exists before the malformed payload'
-        run_hook_raw('capture_prompt.py', '{"session_id": "' + session_id + '", "prompt": not-json}')
-        assert not path.exists(), 'a payload that fails to parse should invalidate the previous capture'
-    finally:
-        path.unlink(missing_ok=True)
-
+    check_path_contract()
+    with tempfile.TemporaryDirectory() as root:
+        check_capture_behavior(root)
+    check_location_safety()
     print('All authorization self-checks passed.')
 
 
