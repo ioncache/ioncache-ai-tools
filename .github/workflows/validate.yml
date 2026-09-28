@@ -21,16 +21,22 @@ jobs:
             python3 -c "import json; json.load(open('$f')); print('$f OK')"
           done
 
+      # These two loops run each check as its own command, not as
+      # `check && echo`. `bash -e` does not stop on a failure inside an &&
+      # list, so with that form a loop's status came only from its last
+      # iteration, and a broken file passed unless it was checked last.
       - name: Check hook script syntax
         run: |
           for f in hooks/scripts/*.py hooks/rules/*.py; do
-            python3 -m py_compile "$f" && echo "$f OK"
+            python3 -m py_compile "$f"
+            echo "$f OK"
           done
 
       - name: Check JS hook script syntax
         run: |
           for f in hooks/scripts/*.js scripts/*.js; do
-            node --check "$f" && echo "$f OK"
+            node --check "$f"
+            echo "$f OK"
           done
 
       - name: Run rule-engine self-check
