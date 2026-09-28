@@ -38,6 +38,7 @@ silently switch a guard off. Callers get None instead and decide explicitly.
 """
 import os
 import pathlib
+import secrets
 import stat
 
 PROMPTS = "prompts"
@@ -54,9 +55,11 @@ TMP_DIR = pathlib.Path("/tmp") / f".ioncache-{os.getuid()}"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
-# O_NOFOLLOW so a symlink where the file should be is an error rather than a
-# redirected write. O_TRUNC because every writer here replaces the whole file.
-CREATE_FLAGS = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW
+# For the temporary file write_private creates next to its target: O_EXCL so
+# it is always a brand-new file of our own, never something already sitting at
+# that name, and O_NOFOLLOW so a symlink there is an error rather than a
+# redirected write.
+TEMP_FLAGS = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW
 
 
 def is_private_dir(path):
@@ -109,15 +112,36 @@ def state_file(hook_input, name):
 
 
 def write_private(path, text):
-    """Writes `text` to `path`, owner-readable only. May raise; callers that
-    write are expected to handle it, since a failed write has to be turned
-    into an explicit decision rather than silently ignored.
+    """Replaces the contents of `path` with `text`, owner-readable only, as one
+    atomic step. May raise; callers that write are expected to handle it, since
+    a failed write has to be turned into an explicit decision rather than
+    silently ignored.
+
+    Written to a temporary file in the same directory and renamed over the
+    target, rather than truncating the target and writing into it. Truncate
+    then write leaves a window in which the file is empty or half-written, and
+    under a stress test over a quarter of concurrent reads landed in it. The
+    reader that matters is another capture: a subagent hand-back arriving
+    while the prompts file was empty read it as having no history, wrote back
+    only itself, and erased the user's instruction, which is the exact failure
+    this state exists to prevent. A rename is atomic on the same filesystem,
+    so a reader sees the old contents or the new, never anything between.
+    Renaming also replaces a symlink planted at the target instead of
+    following it.
     """
-    fd = os.open(path, CREATE_FLAGS, FILE_MODE)
+    path = pathlib.Path(path)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(temp, TEMP_FLAGS, FILE_MODE)
     try:
-        # A file that already existed keeps its old mode, so set it explicitly
-        # rather than trusting the create mode to have applied.
-        os.fchmod(fd, FILE_MODE)
-        os.write(fd, text.encode())
-    finally:
-        os.close(fd)
+        try:
+            # The create mode is reduced by the umask, so set it explicitly.
+            os.fchmod(fd, FILE_MODE)
+            data = text.encode()
+            while data:  # os.write may write only part of what it is given
+                data = data[os.write(fd, data):]
+        finally:
+            os.close(fd)
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise

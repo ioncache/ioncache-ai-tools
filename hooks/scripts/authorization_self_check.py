@@ -21,12 +21,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
+import threading
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 import session_state  # noqa: E402
-from session_state import PROMPTS, TRANSCRIPT_SUFFIX, state_file  # noqa: E402
+from session_state import PROMPTS, TRANSCRIPT_SUFFIX, state_file, write_private  # noqa: E402
 import capture_prompt  # noqa: E402
 
 HOOKS_JSON = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
@@ -225,8 +227,46 @@ def check_location_safety():
 
 
 
+def check_atomic_writes():
+    """A reader must never see the state file half-written. The capture hook
+    once truncated the file and then wrote into it, and under load over a
+    quarter of concurrent reads saw an empty or partial file. The reader that
+    matters is a second capture: one that read the file as empty wrote back
+    only its own message and erased the user's instruction. Stressed for half
+    a second, which is thousands of writes and enough to have caught that.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        path = pathlib.Path(root) / 'state'
+        payload = json.dumps({'messages': [{'prompt': 'ok commit this ' * 20, 'captured_at': 1.0}] * 10})
+        write_private(path, payload)
+        stop = threading.Event()
+        bad = []
+
+        def reader():
+            while not stop.is_set():
+                text = path.read_text()
+                try:
+                    json.loads(text)
+                except ValueError:
+                    bad.append(len(text))
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        deadline = time.monotonic() + 0.5
+        writes = 0
+        while time.monotonic() < deadline:
+            write_private(path, payload)
+            writes += 1
+        stop.set()
+        thread.join()
+        assert not bad, f'{len(bad)} of the reads during {writes} writes saw an empty or partial file'
+        leftovers = [p.name for p in pathlib.Path(root).iterdir() if p.name != 'state']
+        assert not leftovers, f'temporary files were left behind: {leftovers}'
+
+
 def main():
     check_path_contract()
+    check_atomic_writes()
     with tempfile.TemporaryDirectory() as root:
         check_capture_behavior(root)
     check_location_safety()
