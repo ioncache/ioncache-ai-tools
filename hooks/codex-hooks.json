@@ -1,0 +1,39 @@
+{
+  "description": "Ordered shared hooks with Codex patch normalization",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" UserPromptSubmit",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" PreToolUse",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/block_emdash_turn.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

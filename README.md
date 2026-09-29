@@ -11,6 +11,7 @@ any individual project's config.
   - [Codex](#codex)
   - [GitHub Copilot CLI](#github-copilot-cli)
 - [Hooks](#hooks)
+  - [Codex hook compatibility](#codex-hook-compatibility)
   - [Copilot hook compatibility](#copilot-hook-compatibility)
 - [Rules](#rules)
   - [Disabling a rule](#disabling-a-rule)
@@ -130,10 +131,42 @@ copilot plugin marketplace remove ioncache-ai-tools
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
 
+### Codex hook compatibility
+
+Claude Code uses `hooks/hooks.json` directly. Codex's
+`.codex-plugin/plugin.json` points to `hooks/codex-hooks.json`.
+The Codex adapter and Copilot adapter share `hook_adapter_common.py` for
+ordered execution of the shared manifest and patch parsing. Rules remain
+in one place.
+
+Codex launches matching hooks concurrently. Its manifest registers one
+adapter command for `UserPromptSubmit`, which runs the shared scripts in
+order and combines their additional context. The question classifier
+therefore finishes before the skill reminder reads its marker.
+
+Codex reports file changes as `apply_patch`, with the patch in
+`tool_input.command`, even when a hook matcher uses `Edit` or `Write`.
+The adapter checks each patch target as an edit, including additions,
+deletions, and both ends of renames. This applies pending-question and
+lockfile guards to native Codex patches.
+
+Only added lines are checked for em-dashes. A required rewrite becomes a
+denial asking the agent to correct the patch; context and removed lines
+are never rewritten. Safe calls return no permission override. Bash
+keeps the shared shell checks, and `Stop` still calls the existing script
+directly with Codex's `last_assistant_message`.
+
+Adapter failures log to stderr and exit with code 2, which blocks the
+prompt or tool call. The shared engine still isolates individual rule
+errors; these hooks are guardrails, not a security boundary.
+
+After updating the installed plugin, review and trust the changed hooks
+in `/hooks`, then start a new thread. See the
+[Codex hooks reference](https://learn.chatgpt.com/docs/hooks).
+
 ### Copilot hook compatibility
 
-Claude Code and Codex use `hooks/hooks.json` directly. Copilot's
-`.github/plugin/plugin.json` points to `hooks/copilot-hooks.json`, whose
+Copilot's `.github/plugin/plugin.json` points to `hooks/copilot-hooks.json`, whose
 `copilot_adapter.py` entrypoint runs the same scripts in the shared
 manifest's order. Rules, skills, and command prompts stay shared.
 
@@ -360,6 +393,7 @@ Before pushing, run the self-checks:
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
+python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 ```
 
@@ -375,6 +409,15 @@ transcript timing. Run one test with:
 
 ```bash
 python3 hooks/scripts/copilot_adapter_self_check.py CopilotAdapterTests.test_native_shell_rules
+```
+
+The Codex checks dispatch the plugin manifest's real commands with native
+payloads and isolated configuration. They cover concurrent host dispatch,
+question state, patch targets and added text, shell rules, and stop checks.
+Run one test with:
+
+```bash
+python3 hooks/scripts/codex_adapter_self_check.py CodexAdapterTests.test_prompt_order_survives_concurrent_host_dispatch
 ```
 
 Then test against the working copy directly.
