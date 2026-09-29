@@ -3,12 +3,12 @@
 import json
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 import time
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+from hook_adapter_common import PATCH_REWRITE_REASON, patch_inputs, run_shared_hooks
+
 TRANSCRIPT_WAIT_SECONDS = 2
 
 
@@ -21,32 +21,6 @@ def shared_input(data):
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),
     }
-
-
-def run_shared_hooks(event, hook_input):
-    """Use the shared manifest as the sole source of hook order and commands."""
-    manifest = json.loads((PLUGIN_ROOT / 'hooks' / 'hooks.json').read_text())
-    outputs = []
-    for group in manifest['hooks'].get(event, []):
-        for hook in group['hooks']:
-            command = [
-                arg.replace('${CLAUDE_PLUGIN_ROOT}', str(PLUGIN_ROOT))
-                for arg in shlex.split(hook['command'])
-            ]
-            result = subprocess.run(
-                command, input=json.dumps(hook_input), capture_output=True,
-                text=True, cwd=hook_input['cwd'], timeout=hook.get('timeout', 5),
-            )
-            if result.stderr:
-                print(result.stderr, file=sys.stderr, end='')
-            if result.returncode:
-                raise RuntimeError(f'{Path(command[1]).name} exited with {result.returncode}')
-            if result.stdout.strip():
-                output = json.loads(result.stdout)
-                if not isinstance(output, dict):
-                    raise ValueError(f'{Path(command[1]).name} returned a non-object result')
-                outputs.append(output)
-    return outputs
 
 
 def transform_prompt(data):
@@ -63,22 +37,6 @@ def transform_prompt(data):
             + '\n\n'.join(messages) + '\n</ioncache-ai-tools>'
         )
     }
-
-
-def patch_inputs(patch):
-    """Check patch targets and added text without rewriting matching context."""
-    inputs = []
-    current = None
-    for line in patch.splitlines():
-        match = re.match(r'^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$', line)
-        if match:
-            current = {'file_path': match[1], 'new_string': ''}
-            inputs.append(current)
-        elif line.startswith('+') and current is not None:
-            current['new_string'] += line[1:] + '\n'
-    if not inputs:
-        raise ValueError('apply_patch input has no recognized file headers')
-    return inputs
 
 
 def normalized_tools(data):
@@ -122,11 +80,7 @@ def pre_tool_use(data):
     if data['toolName'] == 'apply_patch':
         return {
             'permissionDecision': 'deny',
-            'permissionDecisionReason': (
-                'This patch contains added text that a rule would rewrite. '
-                'Remove em-dashes from the added text and resubmit the patch. '
-                'Patch context and removed lines must not be auto-rewritten.'
-            ),
+            'permissionDecisionReason': PATCH_REWRITE_REASON,
         }
     original = data['toolArgs']
     modified = dict(json.loads(original) if isinstance(original, str) else original)

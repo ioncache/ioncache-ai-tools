@@ -13,10 +13,11 @@ Python uses the standard library; JavaScript uses CommonJS and Node built-ins.
 Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
-- Claude Code and Codex share `hooks/hooks.json`, which wires
-  `UserPromptSubmit`, `PreToolUse`, and `Stop`. `.codex-plugin/plugin.json`
-  explicitly points to that file; Claude uses the conventional hooks location.
-  Copilot uses `.github/plugin/plugin.json` and `hooks/copilot-hooks.json`.
+- Claude Code uses `hooks/hooks.json`, which wires `UserPromptSubmit`,
+  `PreToolUse`, and `Stop`. Codex uses `.codex-plugin/plugin.json` and
+  `hooks/codex-hooks.json`; Copilot uses `.github/plugin/plugin.json` and
+  `hooks/copilot-hooks.json`. Their adapters share `hook_adapter_common.py`
+  for ordered execution of the shared manifest and patch parsing.
   Keep shared metadata in all three plugin manifests consistent. Marketplace
   registration lives in `.claude-plugin/marketplace.json` and
   `.agents/plugins/marketplace.json`, with different schemas.
@@ -24,6 +25,11 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   native inputs and outputs. Use `userPromptTransformed`, not
   `userPromptSubmitted`, for reminders: Copilot drops the latter's command
   output. The adapter preserves transformed prompt content and adds context.
+- Codex launches matching hooks concurrently. Register one adapter command
+  per prompt/tool event so question classification precedes its consumer.
+  Normalize `apply_patch` from `tool_input.command`, checking every target
+  and added line. Deny required rewrites instead of altering patch context.
+  Adapter errors exit 2 to block; safe calls leave permissions unchanged.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, config
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
   hooks handle question state, documentation reminders, optional graphify
@@ -46,6 +52,7 @@ Run from the repository root:
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
+python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 ```
 
@@ -77,7 +84,8 @@ python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py
 for f in hooks/scripts/*.js scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
-         .github/plugin/plugin.json hooks/hooks.json hooks/copilot-hooks.json; do
+         .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
+         hooks/copilot-hooks.json; do
   python3 -m json.tool "$f" > /dev/null || exit 1
 done
 ```
@@ -101,7 +109,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   permission checks. Raw `apply_patch` checks all targets and added lines;
   deny required rewrites rather than altering patch context.
 - Resolve shipped files relative to the script or the host's plugin-root
-  variable (`${CLAUDE_PLUGIN_ROOT}` or `${COPILOT_PLUGIN_ROOT}`).
+  variable (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, or `${COPILOT_PLUGIN_ROOT}`).
   The process working directory is the consuming project, used for project
   config and graphify detection, not the installed plugin directory.
 - Add one `.json` or `.py` file per rule without modifying the engine.

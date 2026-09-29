@@ -13,6 +13,7 @@ from unittest import mock
 import uuid
 
 import copilot_adapter
+import hook_adapter_common
 
 ROOT = Path(__file__).resolve().parents[2]
 EM_DASH = chr(0x2014)
@@ -250,10 +251,10 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_shared_hook_failure_is_not_silently_ignored(self):
         failure = subprocess.CompletedProcess(['python3', 'hook.py'], 1, '', 'fixture failure\n')
-        with mock.patch.object(copilot_adapter.subprocess, 'run', return_value=failure):
+        with mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=failure):
             with mock.patch('sys.stderr') as stderr:
                 with self.assertRaises(RuntimeError):
-                    copilot_adapter.run_shared_hooks('PreToolUse', {
+                    hook_adapter_common.run_shared_hooks('PreToolUse', {
                         'cwd': str(self.project), 'tool_name': 'Read', 'tool_input': {},
                     })
                 stderr.write.assert_any_call('fixture failure\n')
