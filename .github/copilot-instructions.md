@@ -1,5 +1,8 @@
 # Repository instructions
 
+Keep this file focused on developing the repository. Assistant behavioral
+rules belong in the plugin's hooks, rules, and skills, not duplicated here.
+
 ## Architecture
 
 This repository ships reusable AI-assistant behavior as a plugin for Claude
@@ -32,7 +35,8 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   `git worktree add` and applies the main worktree's `.worktree-setup.json`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
   Missing config is created with generic defaults. Keep repository-specific
-  setup in that JSON, not in the helper.
+  setup in that JSON, not in the helper. Preserve lexical and symlink-resolved
+  path containment checks.
 
 ## Validation commands
 
@@ -80,7 +84,8 @@ done
 
 [`.github/workflows/validate.yml`](workflows/validate.yml) also checks command
 and skill frontmatter and rejects literal U+2014 characters in Python,
-Markdown, JSON, and JavaScript files.
+Markdown, JSON, and JavaScript files. Em-dash detection code and fixtures
+construct the character with `chr(0x2014)` to pass this source check.
 
 ## Hook and rule conventions
 
@@ -143,17 +148,6 @@ Markdown, JSON, and JavaScript files.
 
 - Commands and skills start with YAML frontmatter containing `name` and
   `description`. Keep skill descriptions specific about when they activate.
-- Never write literal em dashes in source, fixtures, documentation, or output.
-  Construct the character as `chr(0x2014)` when testing or implementing its
-  detection. Follow [the documentation-writing skill](../skills/documentation-writing/SKILL.md)
-  for prose conventions.
-- Preserve the [answer-questions skill](../skills/answer-questions/SKILL.md):
-  answer direct questions with reasoning before taking action; do not attach
-  unrequested designs or rewrites. `docs_first_guard.py` requires current
-  source lookups for external API, CLI, and library specifics.
-- Use `/create-worktree` or `node scripts/create-worktree.js <git-worktree-add-args>`
-  when creating worktrees so local setup is applied. Preserve lexical and
-  symlink-resolved path containment checks in the helper.
 - Direct installs copy plugin files into an install cache. Editing this checkout
   alone does not update an installed plugin. Reinstall after plugin-source
   changes and start a fresh session/thread; see
