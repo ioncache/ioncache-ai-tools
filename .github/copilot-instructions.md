@@ -3,18 +3,24 @@
 ## Architecture
 
 This repository ships reusable AI-assistant behavior as a plugin for Claude
-Code and Codex. Python hooks enforce behavior, Markdown commands and skills
-instruct the assistant, and a Node.js helper creates configured git worktrees.
+Code, Codex, and GitHub Copilot CLI. Python hooks enforce behavior, Markdown
+commands and skills instruct the assistant, and a Node.js helper creates
+configured git worktrees.
 Python uses the standard library; JavaScript uses CommonJS and Node built-ins.
 Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
-- Both plugin packages share `hooks/hooks.json`, which wires
+- Claude Code and Codex share `hooks/hooks.json`, which wires
   `UserPromptSubmit`, `PreToolUse`, and `Stop`. `.codex-plugin/plugin.json`
   explicitly points to that file; Claude uses the conventional hooks location.
-  Keep shared metadata in the two plugin manifests consistent. Marketplace
+  Copilot uses `.github/plugin/plugin.json` and `hooks/copilot-hooks.json`.
+  Keep shared metadata in all three plugin manifests consistent. Marketplace
   registration lives in `.claude-plugin/marketplace.json` and
   `.agents/plugins/marketplace.json`, with different schemas.
+- Copilot's adapter runs the shared manifest's scripts, translating
+  native inputs and outputs. Use `userPromptTransformed`, not
+  `userPromptSubmitted`, for reminders: Copilot drops the latter's command
+  output. The adapter preserves transformed prompt content and adds context.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, config
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
   hooks handle question state, documentation reminders, optional graphify
@@ -35,12 +41,19 @@ Run from the repository root:
 ```sh
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
+python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 ```
 
-The Python scripts run in CI; the Node self-test exercises worktree path
+These checks run in CI; the Node self-test exercises worktree setup and path
 containment. Extend the existing assertion-based self-checks for changes to
 their respective behavior.
+
+Run one Copilot adapter test with:
+
+```sh
+python3 hooks/scripts/copilot_adapter_self_check.py CopilotAdapterTests.test_native_shell_rules
+```
 
 For a single existing question-classifier test, select one zero-based fixture
 index instead of running the complete self-check:
@@ -60,7 +73,7 @@ python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py
 for f in hooks/scripts/*.js scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
-         hooks/hooks.json; do
+         .github/plugin/plugin.json hooks/hooks.json hooks/copilot-hooks.json; do
   python3 -m json.tool "$f" > /dev/null || exit 1
 done
 ```
@@ -77,7 +90,13 @@ Markdown, JSON, and JavaScript files.
   A bare top-level `additionalContext` is ignored. Tool decisions similarly
   belong inside `hookSpecificOutput` with `hookEventName: "PreToolUse"`.
   Stop hooks use top-level `decision`/`reason`.
-- Resolve shipped files relative to the script or `${CLAUDE_PLUGIN_ROOT}`.
+- Copilot adapter output uses native `modifiedTransformedPrompt`,
+  `permissionDecision`/`permissionDecisionReason`, or `modifiedArgs`.
+  A rewrite must not include `permissionDecision: "allow"`: preserve normal
+  permission checks. Raw `apply_patch` checks all targets and added lines;
+  deny required rewrites rather than altering patch context.
+- Resolve shipped files relative to the script or the host's plugin-root
+  variable (`${CLAUDE_PLUGIN_ROOT}` or `${COPILOT_PLUGIN_ROOT}`).
   The process working directory is the consuming project, used for project
   config and graphify detection, not the installed plugin directory.
 - Add one `.json` or `.py` file per rule without modifying the engine.
@@ -92,11 +111,14 @@ Markdown, JSON, and JavaScript files.
   concatenated with blank lines. Preserve per-rule error isolation and the
   engine's five-second watchdog.
 - Disable config is read fresh on every invocation. For each tool, resolve
-  `(global disabled + project disabled) - project enabled`, then union both
+  `(global disabled + project disabled) - project enabled`, then union all
   tools' results. Claude uses global/project
   `.claude/ioncache-ai-tools.local.json` with camelCase keys; Codex uses
   `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) with snake_case
   keys and exact project-path tables. See [the config examples](../README.md#disabling-a-rule).
+  Copilot uses `$COPILOT_HOME/ioncache-ai-tools.local.json` (default
+  `~/.copilot/`) and `.github/copilot/ioncache-ai-tools.local.json`, with
+  camelCase keys. Keep self-check config isolated from all three real hosts.
 - Reuse `tokenize_command`, `split_into_simple_commands`, and `skip_wrappers`
   for checks that depend on executable position or related options/targets.
   `normalize_shell_command` is the older text-normalization helper, not a
@@ -110,8 +132,11 @@ Markdown, JSON, and JavaScript files.
   Keep classification centralized and the classifier registered before its
   consumer. Read-only lookups remain allowed. The marker is cleared by a
   subsequent non-question prompt, not by detecting an assistant answer.
-- Final-response punctuation checks use `last_assistant_message`, not
-  transcript parsing. `fix_emdash.py` rewrites edit/write content but denies
+- Claude/Codex final-response checks use `last_assistant_message`. Copilot
+  lacks this field, so its adapter waits for the exact current `agentStop`
+  record in `events.jsonl` before reading the latest root assistant text.
+  Never treat a stale turn or an unreadable transcript as a clean response.
+  `fix_emdash.py` rewrites edit/write content but denies
   Bash input: inserting whitespace could change shell arguments.
 
 ## Prompts, documentation, and local development
@@ -129,11 +154,13 @@ Markdown, JSON, and JavaScript files.
 - Use `/create-worktree` or `node scripts/create-worktree.js <git-worktree-add-args>`
   when creating worktrees so local setup is applied. Preserve lexical and
   symlink-resolved path containment checks in the helper.
-- Both hosts copy plugin files into an install cache. Editing this checkout
+- Direct installs copy plugin files into an install cache. Editing this checkout
   alone does not update an installed plugin. Reinstall after plugin-source
   changes and start a fresh session/thread; see
   [local development](../README.md#local-development) for host-specific commands.
   Rule-disable config is outside that cache and takes effect immediately.
+  Use `copilot --plugin-dir .` to load a live checkout without installing;
+  `copilot plugin install .` refreshes a directly installed local copy.
 - [README.md](../README.md) describes current behavior.
   [Design documents](../docs/superpowers/specs/) and
   [implementation plans](../docs/superpowers/plans/) include historical

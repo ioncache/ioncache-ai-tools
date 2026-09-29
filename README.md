@@ -1,15 +1,17 @@
 # ioncache-ai-tools
 
-Personal AI tools, packaged as an installable plugin for both Claude Code
-and Codex, so they apply everywhere without touching any individual
-project's config.
+Personal AI tools, packaged as an installable plugin for Claude Code,
+Codex, and GitHub Copilot CLI, so they apply everywhere without touching
+any individual project's config.
 
 ## Table of Contents
 
 - [Install](#install)
   - [Claude Code](#claude-code)
   - [Codex](#codex)
+  - [GitHub Copilot CLI](#github-copilot-cli)
 - [Hooks](#hooks)
+  - [Copilot hook compatibility](#copilot-hook-compatibility)
 - [Rules](#rules)
   - [Disabling a rule](#disabling-a-rule)
 - [Commands](#commands)
@@ -18,6 +20,7 @@ project's config.
 - [Local development](#local-development)
   - [Claude Code](#claude-code-1)
   - [Codex](#codex-1)
+  - [GitHub Copilot CLI](#github-copilot-cli-1)
 - [Known limitations and security considerations](#known-limitations-and-security-considerations)
 
 ## Install
@@ -75,6 +78,45 @@ codex plugin remove ioncache-ai-tools --marketplace ioncache-ai-tools
 codex plugin marketplace remove ioncache-ai-tools
 ```
 
+### GitHub Copilot CLI
+
+Requires Python 3.11+, Node.js, Git, and macOS or Linux. Use a current
+Copilot CLI with `userPromptTransformed` hook support (verified with 1.0.89).
+This is a CLI plugin, not a Copilot cloud-agent or VS Code extension.
+
+```bash
+copilot plugin install ioncache/ioncache-ai-tools
+```
+
+The plugin is installed in your user configuration and applies across
+projects. Start a new session after installing or updating it.
+
+Alternatively, use the existing marketplace, which Copilot can read from
+`.claude-plugin/marketplace.json`:
+
+```bash
+copilot plugin marketplace add ioncache/ioncache-ai-tools
+copilot plugin install ioncache-ai-tools@ioncache-ai-tools
+```
+
+**Update:**
+
+```bash
+copilot plugin update ioncache-ai-tools
+```
+
+**Remove:**
+
+```bash
+copilot plugin uninstall ioncache-ai-tools
+```
+
+If you registered the marketplace, remove it after uninstalling the plugin:
+
+```bash
+copilot plugin marketplace remove ioncache-ai-tools
+```
+
 ## Hooks
 
 | Hook | Lifecycle event | What it does |
@@ -87,6 +129,47 @@ codex plugin marketplace remove ioncache-ai-tools
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
+
+### Copilot hook compatibility
+
+Claude Code and Codex use `hooks/hooks.json` directly. Copilot's
+`.github/plugin/plugin.json` points to `hooks/copilot-hooks.json`, whose
+`copilot_adapter.py` entrypoint runs the same scripts in the shared
+manifest's order. Rules, skills, and command prompts stay shared.
+
+| Copilot event | Shared behavior |
+| --- | --- |
+| `userPromptTransformed` | Runs the `UserPromptSubmit` hooks and appends their reminders to the transformed prompt, preserving its existing content |
+| `preToolUse` | Translates native tool names/arguments, runs the `PreToolUse` hooks, and returns native denial or argument-rewrite output |
+| `agentStop` | Reads the current final response from Copilot's transcript, then runs the shared `Stop` hook |
+| `sessionEnd` | Removes that Copilot session's pending-question marker |
+
+Copilot drops command-hook output from `userPromptSubmitted`, so simply
+installing the Claude hook manifest would lose all prompt reminders.
+The adapter uses `userPromptTransformed` instead.
+
+Native `create` and `edit` calls retain the em-dash auto-fix, without
+granting permissions that the user's normal policy would deny. Raw
+`apply_patch` calls check every file target, including rename destinations.
+They deny em-dashes in added text rather than rewriting the patch; context
+and removed lines are left untouched. Bash remains deny-only.
+
+Copilot's `agentStop` payload lacks `last_assistant_message`, and its
+transcript is written asynchronously. The adapter waits up to two seconds
+for the matching stop-invocation record before checking the latest root
+assistant response. It ignores subagent messages and previous turns.
+An unavailable or malformed transcript reports an error rather than being
+treated as a clean response; Copilot's stop-hook error behavior is fail-open.
+This transcript dependency is specific to Copilot. Claude and Codex still
+use their supplied `last_assistant_message`.
+
+Copilot markers have a `copilot-` session prefix. As with the other hosts,
+recognized questions block mutations until a subsequent non-question
+prompt; read-only lookups remain available.
+
+See the [Copilot hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)
+and [plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
+for the host contracts.
 
 ## Rules
 
@@ -108,6 +191,7 @@ system, prefer that for anything security-critical:
 
 - Claude Code: [`permissions.deny`](https://code.claude.com/docs/en/permissions)
 - Codex: [`execpolicy` rules](https://learn.chatgpt.com/docs/agent-configuration/rules)
+- Copilot CLI: [tool permissions](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
 
 One file per rule, in `hooks/rules/`, loaded by `rule_engine.py`. Adding a
 rule never touches engine code. Three shapes:
@@ -136,8 +220,8 @@ rule never touches engine code. Three shapes:
 
 ### Disabling a rule
 
-Add config to either tool's own files, whichever CLI you use, no repo file,
-no environment variable.
+Add config in the harness-specific locations below, whichever CLI you use.
+Rule toggles are file-based, not environment variables.
 
 - Global config is the baseline; project-level config only overrides it
   for one project (in either direction: a project can disable a rule
@@ -179,11 +263,24 @@ the stdlib `tomllib` parser (3.11+ required); on an older Python, the
 disabled-rules lookup logs the failure to stderr and falls back to none
 disabled, same as any other malformed Codex config.
 
+**Copilot CLI:** `ioncache-ai-tools.local.json` in `~/.copilot/` (or
+`$COPILOT_HOME/`) for global settings, and
+`<project>/.github/copilot/ioncache-ai-tools.local.json` for project overrides:
+
+```json
+{ "disabledRules": ["never_kill_without_asking"] }
+```
+
+Project settings can also use `enabledRules` to override a global disable,
+just like Claude Code. These are plugin-owned config files, separate from
+Copilot's native `settings.json`. The project file is gitignored in this
+repository; consuming repositories should ignore it too if they use it.
+
 - A rule's id is its filename minus the extension.
 - Resolution per tool: start from that tool's global config, add anything
   the project config disables, then remove anything the project config
-  enables. Both tools' results are then unioned, disabling a rule in
-  either one disables it.
+  enables. All three tools' results are then unioned, disabling a rule in
+  any one disables it for every host.
 - No global-scope `enabledRules`/`enabled_rules`: with nothing disabled
   globally, every rule already runs, so a global enable list would have
   nothing to override.
@@ -205,8 +302,8 @@ disabled, same as any other malformed Codex config.
 
 Lives at a repo's root. `/create-worktree` reads it from the main worktree and
 applies it to every new worktree. A repo without one gets the file written with
-generic defaults on the first run (the Claude Code local-config symlinks below,
-nothing else), so it is always there to extend.
+generic defaults on the first run (the local-config and graphify symlinks
+below, nothing else), so it is always there to extend.
 
 ```json
 {
@@ -216,7 +313,10 @@ nothing else), so it is always there to extend.
     ".claude/settings.local.json",
     ".claude/hooks",
     "CLAUDE.local.md",
-    ".claude/hookify.*.local.md"
+    ".claude/hookify.*.local.md",
+    ".github/copilot/settings.local.json",
+    ".github/copilot/ioncache-ai-tools.local.json",
+    ".graphifyignore"
   ],
   "commands": ["ln -s ~/envs/app.env \"${worktreePath}/apps/app/.env\"", "npm install"]
 }
@@ -259,13 +359,23 @@ Before pushing, run the self-checks:
 ```bash
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
+python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
+node scripts/create-worktree.js --self-test
 ```
 
-Both run in CI (see `.github/workflows/validate.yml`). The second covers
-`classify_question.py` and `block_pending_question.py`, using a fixture of
+These checks run in CI (see `.github/workflows/validate.yml`). The second
+covers `classify_question.py` and `block_pending_question.py`, using a fixture of
 real messages pulled from actual session history rather than invented
 ones, real usage turned out to have shapes (unpunctuated questions,
 "do"-led imperatives) invented examples missed.
+
+The Copilot checks exercise the real adapter subprocess with isolated
+configuration, native payloads, multi-file patches, prompt state, and
+transcript timing. Run one test with:
+
+```bash
+python3 hooks/scripts/copilot_adapter_self_check.py CopilotAdapterTests.test_native_shell_rules
+```
 
 Then test against the working copy directly.
 
@@ -279,7 +389,7 @@ Then test against the working copy directly.
 Claude Code copies the plugin's files into its own cache at install time and
 never re-reads the live source directory afterward, even across session
 restarts. After any change (`hooks/hooks.json`, the scripts under
-`hooks/scripts/`, the rules under `hooks/rules/`, or either manifest),
+`hooks/scripts/`, the rules under `hooks/rules/`, or a manifest),
 reinstall to force a fresh copy, then start a new session:
 
 ```text
@@ -303,13 +413,35 @@ codex plugin remove ioncache-ai-tools@ioncache-ai-tools
 codex plugin add ioncache-ai-tools@ioncache-ai-tools
 ```
 
+### GitHub Copilot CLI
+
+Load the checkout for one session without installing it:
+
+```bash
+copilot --plugin-dir .
+```
+
+Or install the working copy into the user plugin cache:
+
+```bash
+copilot plugin install .
+copilot plugin list
+copilot skill list
+```
+
+Re-run `copilot plugin install .` after changing a directly installed local
+plugin, then start a new session. `--plugin-dir` reads the source directly
+when a session starts. Copilot discovers both `skills/` and `commands/`
+through its manifest; commands are also available as skills.
+
 ## Known limitations and security considerations
 
 ### Disable-config isn't tamper-proof
 
 - The per-rule disable config (see [Disabling a rule](#disabling-a-rule))
-  is a plain file, `.claude/ioncache-ai-tools.local.json` or Codex's
-  `config.toml`, that an agent normally has Edit/Write access to.
+  is a plain file, such as `.claude/ioncache-ai-tools.local.json`, Codex's
+  `config.toml`, or `.github/copilot/ioncache-ai-tools.local.json`, that an
+  agent normally has Edit/Write access to.
 - An agent could add a rule's id to `disabledRules`/`disabled_rules`
   itself, defeating a rule meant to guard its own actions (e.g.
   `never_kill_without_asking`).
