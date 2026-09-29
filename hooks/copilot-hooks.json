@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "hooks": {
+    "userPromptTransformed": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" userPromptTransformed",
+        "timeoutSec": 30
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" preToolUse",
+        "timeoutSec": 30
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" agentStop",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" sessionEnd",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

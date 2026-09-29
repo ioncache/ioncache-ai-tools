@@ -6,6 +6,8 @@
     ".claude/hooks",
     "CLAUDE.local.md",
     ".claude/hookify.*.local.md",
+    ".github/copilot/settings.local.json",
+    ".github/copilot/ioncache-ai-tools.local.json",
     ".graphifyignore"
   ],
   "commands": []

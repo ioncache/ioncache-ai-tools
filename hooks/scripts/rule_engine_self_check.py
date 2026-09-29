@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+from unittest import mock
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -557,4 +558,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    with tempfile.TemporaryDirectory(prefix='rule-engine-copilot-config-') as copilot_home:
+        with mock.patch.dict(os.environ, {'COPILOT_HOME': copilot_home}):
+            main()

@@ -17,7 +17,7 @@ jobs:
         run: |
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
                    .codex-plugin/plugin.json .agents/plugins/marketplace.json \
-                   hooks/hooks.json; do
+                   .github/plugin/plugin.json hooks/hooks.json hooks/copilot-hooks.json; do
             python3 -c "import json; json.load(open('$f')); print('$f OK')"
           done
 
@@ -38,6 +38,12 @@ jobs:
 
       - name: Run pending-question self-check
         run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
+
+      - name: Run Copilot adapter self-check
+        run: python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
+
+      - name: Run worktree self-test
+        run: node scripts/create-worktree.js --self-test
 
       - name: Check command/skill frontmatter
         run: |
