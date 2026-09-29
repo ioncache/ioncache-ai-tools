@@ -24,6 +24,7 @@ except ImportError:
 
 RULES_DIRNAME = 'rules'
 CLAUDE_LOCAL_CONFIG = os.path.join('.claude', 'ioncache-ai-tools.local.json')
+COPILOT_LOCAL_CONFIG = os.path.join('.github', 'copilot', 'ioncache-ai-tools.local.json')
 DEFAULT_CODEX_HOME = os.path.join(os.path.expanduser('~'), '.codex')
 HANG_TIMEOUT_SECONDS = 5
 
@@ -358,7 +359,23 @@ def _as_rule_list(value):
     return value if isinstance(value, list) else []
 
 
-def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_path=None):
+def _json_disabled_rule_ids(global_path, project_path):
+    disabled = set()
+    for config_path, is_project in ((global_path, False), (project_path, True)):
+        if not os.path.exists(config_path):
+            continue
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            disabled.update(_as_rule_list(config.get('disabledRules')))
+            if is_project:
+                disabled -= set(_as_rule_list(config.get('enabledRules')))
+        except Exception as err:
+            print(f'rule-engine: failed to read {config_path}: {err}', file=sys.stderr)
+    return disabled
+
+
+def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_path=None, copilot_global_path=None):
     """Global config sets the baseline; project-level config overrides it
     per rule, in either direction. A project can force-disable a rule the
     global config leaves enabled (add it to that scope's disabledRules), or
@@ -372,27 +389,19 @@ def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_pa
         codex_config_path = os.path.join(codex_home, 'config.toml')
     if claude_global_path is None:
         claude_global_path = os.path.join(os.path.expanduser('~'), CLAUDE_LOCAL_CONFIG)
+    if copilot_global_path is None:
+        copilot_home = os.environ.get('COPILOT_HOME') or os.path.expanduser('~/.copilot')
+        copilot_global_path = os.path.join(copilot_home, 'ioncache-ai-tools.local.json')
 
     disabled = set()
 
-    # Claude Code: two separate files, one per scope.
-    claude_project_path = os.path.join(project_root, CLAUDE_LOCAL_CONFIG)
-    claude_disabled = set()
-    if os.path.exists(claude_global_path):
-        try:
-            with open(claude_global_path, 'r', encoding='utf-8') as f:
-                claude_disabled.update(_as_rule_list(json.load(f).get('disabledRules')))
-        except Exception as err:
-            print(f'rule-engine: failed to read {claude_global_path}: {err}', file=sys.stderr)
-    if os.path.exists(claude_project_path):
-        try:
-            with open(claude_project_path, 'r', encoding='utf-8') as f:
-                project_config = json.load(f)
-            claude_disabled.update(_as_rule_list(project_config.get('disabledRules')))
-            claude_disabled -= set(_as_rule_list(project_config.get('enabledRules')))
-        except Exception as err:
-            print(f'rule-engine: failed to read {claude_project_path}: {err}', file=sys.stderr)
-    disabled.update(claude_disabled)
+    # Claude Code and Copilot: separate files for global and project scope.
+    disabled.update(_json_disabled_rule_ids(
+        claude_global_path, os.path.join(project_root, CLAUDE_LOCAL_CONFIG),
+    ))
+    disabled.update(_json_disabled_rule_ids(
+        copilot_global_path, os.path.join(project_root, COPILOT_LOCAL_CONFIG),
+    ))
 
     # Codex: one file, both scopes live in it as different tables.
     if tomllib is None and os.path.exists(codex_config_path):

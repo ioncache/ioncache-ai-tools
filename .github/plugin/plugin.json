@@ -1,0 +1,12 @@
+{
+  "name": "ioncache-ai-tools",
+  "version": "1.3.0",
+  "description": "Personal AI tools.",
+  "author": {
+    "name": "Mark Jubenville"
+  },
+  "license": "MIT",
+  "skills": "./skills",
+  "commands": "./commands",
+  "hooks": "./hooks/copilot-hooks.json"
+}

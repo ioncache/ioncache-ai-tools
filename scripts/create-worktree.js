@@ -35,6 +35,8 @@ const DEFAULT_SETUP = {
     '.claude/hooks',
     'CLAUDE.local.md',
     '.claude/hookify.*.local.md',
+    '.github/copilot/settings.local.json',
+    '.github/copilot/ioncache-ai-tools.local.json',
     '.graphifyignore'
   ],
   commands: []
@@ -261,6 +263,19 @@ function selfTest() {
   const fsRoot = path.parse(tmp).root
   const relFromFsRoot = path.relative(fsRoot, tmp)
   assert.doesNotThrow(() => resolveWithinRoot(fsRoot, relFromFsRoot), 'a real child of the filesystem root should not be rejected as escaping it')
+
+  const copilotFiles = [
+    '.github/copilot/settings.local.json',
+    '.github/copilot/ioncache-ai-tools.local.json'
+  ]
+  fs.mkdirSync(path.join(root, '.github/copilot'), { recursive: true })
+  for (const rel of copilotFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
+  const worktree = fs.mkdtempSync(path.join(tmp, 'worktree-'))
+  applySetup(root, worktree)
+  for (const rel of copilotFiles) {
+    assert(fs.lstatSync(path.join(worktree, rel)).isSymbolicLink())
+    assert.strictEqual(fs.realpathSync(path.join(worktree, rel)), fs.realpathSync(path.join(root, rel)))
+  }
 
   fs.rmSync(tmp, { recursive: true, force: true })
   console.log('create-worktree self-test passed')
