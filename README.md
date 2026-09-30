@@ -259,6 +259,97 @@ rule never touches engine code. Three shapes:
 | `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
 | `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
 
+### Authoring rules
+
+Use a JSON rule for a fixed reminder or a field-pattern denial. Use a Python
+rule when the policy needs a conditional decision or an input rewrite.
+For example, a project that requires a release checklist could add
+`hooks/rules/release-checklist.json`:
+
+```json
+{
+  "event": "UserPromptSubmit",
+  "matcher": {"type": "always"},
+  "action": "inject",
+  "message": "Use the project's release checklist when preparing a release."
+}
+```
+
+Python rules receive the shared hook payload, not native adapter arguments.
+`UserPromptSubmit` supplies `prompt`; `PreToolUse` supplies `tool_name` and
+`tool_input`. Optional `TOOL_NAMES` restricts which tools reach `matches()`.
+Return a boolean from `matches(hook_input)` and an action dictionary or
+`None` from `check(hook_input)`. Do not return the final hook output envelope
+or print protocol output from a rule.
+
+| Result from `check()` | Event | Policy meaning |
+| --- | --- | --- |
+| `None` | Either | This rule has no action; it does not grant permission. |
+| `{"action": "inject", "message": "..."}` | `UserPromptSubmit` | Add guidance to the prompt. |
+| `{"action": "deny", "message": "..."}` | `PreToolUse` | Reject the tool call with a reason. |
+| `{"action": "rewrite", "updatedInput": {...}}` | `PreToolUse` | Substitute the complete tool input; an optional `systemMessage` explains the change. |
+
+For example, a project that disallows writing blank files could add
+`hooks/rules/no-blank-write.py`:
+
+```python
+EVENT = 'PreToolUse'
+TOOL_NAMES = ['Write']
+
+
+def matches(hook_input):
+    """Apply the content requirement to every Write request."""
+    return True
+
+
+def check(hook_input):
+    """Reject empty or whitespace-only content; otherwise take no action."""
+    if not hook_input['tool_input']['content'].strip():
+        return {'action': 'deny', 'message': 'Supply nonblank file content.'}
+    return None
+```
+
+This example rejects `content: "  "` but takes no action for
+`content: "Release notes"`. Its scope is `Write`, not `Edit` or native patches.
+Native patch targets reach rules as synthetic `Edit` inputs, containing
+added text rather than the complete resulting file. See
+[patch handling](#codex-hook-compatibility) before writing policies that need
+whole-file content.
+
+Rules run in filename order. Any denial wins over rewrites. Otherwise only
+the first rewrite is returned, with a warning if multiple rules request one.
+Rewrites are not chained: each rule receives the original request.
+Prompt reminders are joined with blank lines. Use
+[rule-disable configuration](#disabling-a-rule) to opt out of a policy;
+disabled Python rules are not imported.
+
+### Evaluation and failure contract
+
+The shared entry point accepts an event argument (`PreToolUse` or
+`UserPromptSubmit`) and a JSON object on stdin. Rules come from the plugin's
+bundled `hooks/rules/` directory; project configuration is resolved from the
+process working directory. Adapters translate native requests and responses
+as described in [Codex compatibility](#codex-hook-compatibility) and
+[Copilot compatibility](#copilot-hook-compatibility).
+
+For a valid hook payload:
+
+| Outcome | Engine response |
+| --- | --- |
+| Rules produce a denial, rewrite, or reminder | Exit 0 with the corresponding JSON result on stdout. A policy denial is not an engine failure. |
+| Directory is readable but empty, no enabled rules apply, or no rule requests an action | Exit 0 with no stdout; normal host permissions still apply. |
+| An individual rule fails to load, match, or check | Log the rule failure to stderr and continue evaluating the remaining rules. |
+| Rules directory is missing, is not a directory, or cannot be listed | Log the discovery failure to stderr and exit 2, with no successful result. |
+| An unhandled engine error occurs or the five-second watchdog expires | Log to stderr and exit 2. |
+
+An unavailable rule directory is an installation or filesystem failure, not
+an instruction to disable enforcement. Restore access to the bundled rules
+or repair the plugin installation before retrying. To intentionally disable
+a rule, use [configuration](#disabling-a-rule), not removal of the directory.
+When calling `load_rules_for_event()` or `run_hook()` directly, discovery
+errors propagate as exceptions; `main()` translates them into the CLI
+failure response.
+
 ### Disabling a rule
 
 Add config in the harness-specific locations below, whichever CLI you use.

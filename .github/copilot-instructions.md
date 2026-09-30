@@ -128,8 +128,13 @@ construct the character with `chr(0x2014)` to pass this source check.
   Python modules. A deny beats every rewrite; otherwise only the first rewrite
   is applied, with a warning for multiple rewrites. Prompt injections are
   concatenated with blank lines. Preserve per-rule error isolation and the
-  engine's five-second watchdog. Engine-wide errors and watchdog expiry log
-  and exit 2. Shared adapter execution has an internal deadline before the
+  engine's five-second watchdog. Missing, non-directory, or unlistable rule
+  paths are discovery failures, not empty rule sets. Discovery exceptions
+  propagate to `main()`, which logs and exits 2; a readable empty directory
+  or no enabled rules for an event remains valid. Engine-wide errors and
+  watchdog expiry also log and exit 2. See the
+  [rule-author and failure contracts](../README.md#authoring-rules).
+  Shared adapter execution has an internal deadline before the
   native hook timeout (20 seconds for prompt/tool hooks, five for Stop).
 - Disable config is read fresh on every invocation. For each tool, resolve
   `(global disabled + project disabled) - project enabled`, then union all

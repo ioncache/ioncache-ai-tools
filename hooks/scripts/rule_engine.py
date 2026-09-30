@@ -298,8 +298,8 @@ def _validated_result(result, rule_name):
     try/except resolve_action already runs in, means a malformed result
     from one rule degrades to "no action from this rule" instead of
     raising inside merge_pre_tool_use/merge_user_prompt_submit, outside
-    any per-rule boundary, where it would silently drop every other
-    rule's valid results too (main()'s broad except swallows it).
+    any per-rule boundary, where it would prevent every other rule's
+    valid results from being returned.
     """
     if result is None:
         return None
@@ -454,9 +454,21 @@ def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_pa
 
 
 def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
+    """Return enabled rules for an event in filename order.
+
+    Use this to evaluate a rule directory for ``PreToolUse`` or
+    ``UserPromptSubmit``. For example, to omit a rule for one evaluation:
+    ``load_rules_for_event('hooks/rules', 'PreToolUse', {'fix_emdash'})``.
+    Disabled IDs are filenames without extensions; disabled Python rules
+    are not imported. Other Python rule files may execute module-level code.
+
+    An empty directory or no enabled rules for the event returns an empty
+    list. An individual invalid rule is logged and skipped. An unavailable
+    directory raises OSError, including FileNotFoundError,
+    NotADirectoryError, or PermissionError; callers must not treat that as
+    a successful evaluation with no applicable rules.
+    """
     disabled_rule_ids = disabled_rule_ids or set()
-    if not os.path.isdir(rules_dir):
-        return []
     rules = []
     for name in sorted(os.listdir(rules_dir)):
         if not (name.endswith('.json') or name.endswith('.py')):
@@ -494,6 +506,19 @@ def run_patch_rules(rules, hook_input):
 
 
 def run_hook(override_rules_dir=None):
+    """Evaluate a shared hook request, returning a decision or no action.
+
+    Supply the event as the first command-line argument and a JSON object
+    on stdin. Prompt requests use ``prompt``; tool requests use
+    ``tool_name`` and ``tool_input``. None means no rule action, not an
+    explicit permission grant. Diagnostics go to stderr.
+
+    Rules default to the bundled directory. Pass ``override_rules_dir``
+    when evaluating a separate rule directory, such as a test fixture.
+    Configuration is resolved for the process working directory.
+    Discovery errors propagate to the caller; individual rule errors
+    remain isolated. Invalid JSON currently returns None.
+    """
     event = sys.argv[1] if len(sys.argv) > 1 else None
     try:
         hook_input = json.loads(sys.stdin.read())
@@ -503,11 +528,7 @@ def run_hook(override_rules_dir=None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     rules_dir = override_rules_dir or os.path.join(script_dir, '..', RULES_DIRNAME)
     disabled_rule_ids = get_disabled_rule_ids(os.getcwd())
-    try:
-        rules = load_rules_for_event(rules_dir, event, disabled_rule_ids)
-    except Exception as err:
-        print(f'rule-engine: failed to load rules from {rules_dir}: {err}', file=sys.stderr)
-        rules = []
+    rules = load_rules_for_event(rules_dir, event, disabled_rule_ids)
 
     if event == 'PreToolUse' and hook_input.get('tool_name') == 'apply_patch':
         return run_patch_rules(rules, hook_input)
@@ -525,6 +546,15 @@ def _handle_alarm(signum, frame):
 
 
 def main():
+    """Serve one shared hook request over stdin/stdout, then exit.
+
+    Call as ``python3 hooks/scripts/rule_engine.py PreToolUse`` with a
+    JSON payload on stdin, or use ``UserPromptSubmit`` for reminders.
+    A policy denial is a successful evaluation: exit 0 with a JSON
+    decision. No action produces no stdout. Unhandled engine failures,
+    including rule-discovery failures, and watchdog expiry log to stderr
+    and exit 2 rather than reporting successful evaluation.
+    """
     signal.signal(signal.SIGALRM, _handle_alarm)
     signal.alarm(HANG_TIMEOUT_SECONDS)
     try:
