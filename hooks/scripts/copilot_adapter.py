@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from hook_adapter_common import PATCH_REWRITE_REASON, patch_inputs, run_shared_hooks
+from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 
 TRANSCRIPT_WAIT_SECONDS = 2
 
@@ -48,7 +48,7 @@ def normalized_tools(data):
         patch = args if isinstance(args, str) else args.get('input')
         if not isinstance(patch, str):
             raise ValueError('apply_patch input must be a patch string')
-        return [('Edit', item) for item in patch_inputs(patch)]
+        return [('apply_patch', {'command': patch})]
     if not isinstance(args, dict):
         raise ValueError(f'{name} toolArgs must be an object')
     if name in ('bash', 'powershell'):

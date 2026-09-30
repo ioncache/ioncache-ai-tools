@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 
-from hook_adapter_common import PATCH_REWRITE_REASON, patch_inputs, run_shared_hooks
+from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 
 
 def prompt_submit(data):
@@ -25,7 +25,7 @@ def prompt_submit(data):
     }
 
 
-def normalized_inputs(data):
+def pre_tool_use(data):
     name = data.get('tool_name')
     if not isinstance(name, str) or not name:
         raise ValueError('missing or invalid Codex tool_name')
@@ -33,31 +33,22 @@ def normalized_inputs(data):
     if name in ('Bash', 'apply_patch'):
         if not isinstance(args, dict) or not isinstance(args.get('command'), str):
             raise ValueError(f'{name} tool_input.command must be a string')
-    if name != 'apply_patch':
-        return [data]
-    return [
-        {**data, 'tool_name': 'Edit', 'tool_input': item}
-        for item in patch_inputs(args['command'])
-    ]
-
-
-def pre_tool_use(data):
     rewrite = None
-    for hook_input in normalized_inputs(data):
-        for output in run_shared_hooks('PreToolUse', hook_input):
-            decision = output.get('hookSpecificOutput', {})
-            if decision.get('permissionDecision') == 'deny':
-                return output
-            if 'updatedInput' in decision and rewrite is None:
-                rewrite = output
-    if rewrite is not None and data['tool_name'] == 'apply_patch':
-        return {
-            'hookSpecificOutput': {
+    for output in run_shared_hooks('PreToolUse', data):
+        decision = output.get('hookSpecificOutput', {})
+        if decision.get('permissionDecision') == 'deny':
+            return output
+        if 'updatedInput' in decision and rewrite is None:
+            rewrite = output
+    if rewrite is not None:
+        if name == 'apply_patch':
+            return {'hookSpecificOutput': {
                 'hookEventName': 'PreToolUse',
                 'permissionDecision': 'deny',
                 'permissionDecisionReason': PATCH_REWRITE_REASON,
-            },
-        }
+            }}
+        # Codex requires allow with updatedInput, unlike Claude's rewrite-only protocol.
+        rewrite['hookSpecificOutput']['permissionDecision'] = 'allow'
     return rewrite
 
 

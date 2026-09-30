@@ -1,11 +1,11 @@
-"""Denies creating a worktree by any path other than /create-worktree.
+"""Denies creating a worktree outside the create-worktree skill's helper.
 
 Raw `git worktree add` skips whatever per-project setup a repo defines (see
 ../../scripts/create-worktree.js and .worktree-setup.json): untracked local
 config, generated caches, post-create commands. So does oh-my-zsh's stock
-`gwta` alias for it. The /create-worktree command is the only permitted
+`gwta` alias for it. The create-worktree skill's helper is the only permitted
 path. This rule only matches the assistant's own tool calls; the git call
-that /create-worktree runs internally never passes through PreToolUse. A
+that the helper runs internally never passes through PreToolUse. A
 shell function or alias defined on one machine cannot be recognised here: a
 hook only sees the command text, so wrappers like that have to be removed
 from the shell, not denied by name.
@@ -29,8 +29,8 @@ TOOL_NAMES = ['Bash']
 ACTION = 'deny'
 MESSAGE = (
     'Creating a worktree with raw git or `gwta` is not allowed: it skips '
-    'the per-project worktree setup. Use the `/create-worktree <same args>` '
-    "command instead, it wraps the git call and applies the repo's "
+    'the per-project worktree setup. Load this plugin\'s `create-worktree` '
+    "skill and pass the same arguments to its helper; it applies the repo's "
     '.worktree-setup.json, writing a default one first if the repo has none.'
 )
 

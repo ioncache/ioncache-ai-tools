@@ -1,6 +1,6 @@
 ---
 name: investigate
-description: Investigate how a feature, workflow, or system works in the codebase, read-only, use before making changes
+description: Traces how a feature, workflow, or system works without changing files. Use when asked to investigate or explain existing code before making changes.
 ---
 
 You are a read-only investigator. Do NOT modify any files. Your job is to trace

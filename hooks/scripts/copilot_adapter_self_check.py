@@ -81,7 +81,7 @@ class CopilotAdapterTests(unittest.TestCase):
             other = json.loads((ROOT / path).read_text())
             self.assertEqual(manifest['name'], other['name'])
             self.assertEqual(manifest['version'], other['version'])
-        self.assertEqual((ROOT / manifest['commands']).resolve(), ROOT / 'commands')
+        self.assertNotIn('commands', manifest)
         self.assertEqual((ROOT / manifest['skills']).resolve(), ROOT / 'skills')
         hooks = json.loads((ROOT / manifest['hooks']).read_text())
         self.assertEqual(hooks['version'], 1)
@@ -172,6 +172,16 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(output['permissionDecision'], 'deny')
         self.assertNotIn('modifiedArgs', output)
 
+    def test_large_patch_checks_last_target_within_hook_budget(self):
+        patch = '*** Begin Patch\n' + ''.join(
+            f'*** Add File: safe-{index}.txt\n+x\n' for index in range(1000)
+        ) + '*** Delete File: yarn.lock\n*** End Patch'
+        started = time.monotonic()
+        output = self.tool('apply_patch', patch)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(output['permissionDecision'], 'deny')
+        self.assertIn('lockfile', output['permissionDecisionReason'])
+
     def test_copilot_config_overrides_and_cross_host_union(self):
         global_path = self.home / '.copilot/ioncache-ai-tools.local.json'
         local_path = self.project / '.github/copilot/ioncache-ai-tools.local.json'
@@ -258,6 +268,24 @@ class CopilotAdapterTests(unittest.TestCase):
                         'cwd': str(self.project), 'tool_name': 'Read', 'tool_input': {},
                     })
                 stderr.write.assert_any_call('fixture failure\n')
+
+    def test_shared_deadline_expires_before_native_timeout(self):
+        with (
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 21]),
+            mock.patch.object(hook_adapter_common.subprocess, 'run') as run,
+            self.assertRaisesRegex(TimeoutError, 'internal deadline'),
+        ):
+            hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
+        run.assert_not_called()
+
+    def test_shared_deadline_reduces_remaining_handler_budget(self):
+        result = subprocess.CompletedProcess(['python3', 'hook.py'], 0, '', '')
+        with (
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 19]),
+            mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
+        ):
+            hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1])
 
 
 if __name__ == '__main__':
