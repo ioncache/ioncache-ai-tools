@@ -124,9 +124,8 @@ copilot plugin marketplace remove ioncache-ai-tools
 | ---- | ---------------- | ------------- |
 | `graphify_context.js` | UserPromptSubmit | When the project has a graphify knowledge graph, tells the agent to use `graphify query` instead of grep/Read/find |
 | `docs_first_guard.py` | UserPromptSubmit | Unconditionally reminds the model to verify library/API/tool/service specifics via a real lookup instead of training data |
-| `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question |
-| `require_answer_questions_skill.py` | UserPromptSubmit | Reuses `classify_question.py`'s marker; tells the assistant to apply the `answer-questions` skill when the prompt was a question |
-| `block_pending_question.py` | PreToolUse | Denies mutating tools until a pending question is answered |
+| `classify_question.py` | UserPromptSubmit | Flags any prompt containing a question and emits the `answer-questions` skill reminder in the same invocation |
+| `block_pending_question.py` | PreToolUse | Denies recognized mutations while the latest user prompt is classified as a question; a subsequent non-question prompt clears it |
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
@@ -139,16 +138,18 @@ The Codex adapter and Copilot adapter share `hook_adapter_common.py` for
 ordered execution of the shared manifest and patch parsing. Rules remain
 in one place.
 
-Codex launches matching hooks concurrently. Its manifest registers one
+Claude and Codex launch matching hooks concurrently. Question classification
+and its skill reminder share one handler, so neither host depends on the
+ordering of separate prompt hooks. Codex's manifest registers one
 adapter command for `UserPromptSubmit`, which runs the shared scripts in
-order and combines their additional context. The question classifier
-therefore finishes before the skill reminder reads its marker.
+order and combines their additional context.
 
 Codex reports file changes as `apply_patch`, with the patch in
 `tool_input.command`, even when a hook matcher uses `Edit` or `Write`.
-The adapter checks each patch target as an edit, including additions,
-deletions, and both ends of renames. This applies pending-question and
-lockfile guards to native Codex patches.
+The adapter passes the patch to the shared hooks once. The question guard
+recognizes it as a mutation; the engine checks each target as an edit,
+including additions, deletions, and both ends of renames. Rules and config
+are loaded once per patch, not once per target.
 
 Only added lines are checked for em-dashes. A required rewrite becomes a
 denial asking the agent to correct the patch; context and removed lines
@@ -158,7 +159,14 @@ directly with Codex's `last_assistant_message`.
 
 Adapter failures log to stderr and exit with code 2, which blocks the
 prompt or tool call. The shared engine still isolates individual rule
-errors; these hooks are guardrails, not a security boundary.
+errors. Engine-wide failures and its five-second watchdog log and exit 2.
+The adapters also bound shared tool-hook execution to 20 seconds, below
+the native 30-second timeout; these hooks are guardrails, not a security boundary.
+
+Claude text rewrites return `updatedInput` without granting permission.
+Copilot returns only `modifiedArgs`. The Codex adapter adds the `allow`
+field only when its rewrite protocol requires it; patch changes that
+would need rewriting are denied instead.
 
 After updating the installed plugin, review and trust the changed hooks
 in `/hooks`, then start a new thread. See the
@@ -168,7 +176,7 @@ in `/hooks`, then start a new thread. See the
 
 Copilot's `.github/plugin/plugin.json` points to `hooks/copilot-hooks.json`, whose
 `copilot_adapter.py` entrypoint runs the same scripts in the shared
-manifest's order. Rules, skills, and command prompts stay shared.
+manifest's order. Rules and skills stay shared.
 
 | Copilot event | Shared behavior |
 | --- | --- |
@@ -247,7 +255,7 @@ rule never touches engine code. Three shapes:
 | `no-manual-lockfile-edit` | Pattern | PreToolUse | Denies editing `package-lock.json`/`yarn.lock`/`pnpm-lock.yaml` via Edit/Write/MultiEdit |
 | `no_manual_lockfile_edit_bash` | Scripted | PreToolUse | Denies mutating a lockfile from Bash (redirection, `sed -i`, `tee`, `perl -i`) |
 | `fix_emdash` | Scripted | PreToolUse | Rewrites em-dashes to `, ` in Write/Edit/MultiEdit input; denies (asks for a manual fix) in Bash, since the rewrite can split one shell argument into two |
-| `block_raw_worktree_add` | Scripted | PreToolUse | Denies creating a worktree by raw git or oh-my-zsh's `gwta` alias; points to `/create-worktree` instead |
+| `block_raw_worktree_add` | Scripted | PreToolUse | Denies creating a worktree by raw git or oh-my-zsh's `gwta` alias; points to the `create-worktree` skill instead |
 | `scope-exactly-what-asked` | Always-on | UserPromptSubmit | Reminds to do exactly what was asked, nothing more |
 | `verify-state-before-claiming` | Always-on | UserPromptSubmit | Reminds to verify current status before stating it, never from memory |
 
@@ -323,17 +331,23 @@ repository; consuming repositories should ignore it too if they use it.
 
 ## Commands
 
-| Command | Description |
+These workflows ship as native `skills/<name>/SKILL.md` files on every
+host, not legacy command files that Codex may ignore or partially migrate.
+Ask the assistant to use the named skill. Claude also exposes plugin skills
+as `/ioncache-ai-tools:<name>`; in Codex, use `/skills` or the `$` skill
+picker. In Copilot, ask to load the named skill explicitly.
+
+| Workflow skill | Description |
 | ------- | ------------ |
-| `/verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
-| `/review-code` | Full-pass review: necessity, contracts, standards, correctness |
-| `/investigate` | Read-only trace of how a feature or system works |
-| `/triage-errors` | Fix a batch of failures by root cause, not one by one |
-| `/create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
+| `verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
+| `review-code` | Full-pass review: necessity, contracts, standards, correctness |
+| `investigate` | Read-only trace of how a feature or system works |
+| `triage-errors` | Fix a batch of failures by root cause, not one by one |
+| `create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
 
 ### `.worktree-setup.json`
 
-Lives at a repo's root. `/create-worktree` reads it from the main worktree and
+Lives at a repo's root. The `create-worktree` skill reads it from the main worktree and
 applies it to every new worktree. A repo without one gets the file written with
 generic defaults on the first run (the local-config and graphify symlinks
 below, nothing else), so it is always there to extend.
@@ -344,6 +358,7 @@ below, nothing else), so it is always there to extend.
   "afterCopy": [{ "path": "generated-cache/.root", "content": "${worktreePath}\n" }],
   "symlinks": [
     ".claude/settings.local.json",
+    ".claude/ioncache-ai-tools.local.json",
     ".claude/hooks",
     "CLAUDE.local.md",
     ".claude/hookify.*.local.md",
@@ -361,6 +376,9 @@ below, nothing else), so it is always there to extend.
   `${mainRoot}` in `content` are replaced with the absolute paths.
 - `symlinks` - paths, or single-segment `*` glob patterns, symlinked from the
   main worktree into the new one. Missing sources are skipped.
+- Copy, generated-file, and symlink paths must stay within their respective
+  roots. Existing dangling symlinks are rejected, including intermediate
+  path components, rather than followed by a later write.
 - `commands` - shell commands run in the new worktree, in order, after
   copies and symlinks, with the same `${worktreePath}`/`${mainRoot}`
   substitution (quote the placeholders, paths can contain spaces). The
@@ -429,16 +447,14 @@ Then test against the working copy directly.
 /plugin install ioncache-ai-tools@ioncache-ai-tools
 ```
 
-Claude Code copies the plugin's files into its own cache at install time and
-never re-reads the live source directory afterward, even across session
-restarts. After any change (`hooks/hooks.json`, the scripts under
-`hooks/scripts/`, the rules under `hooks/rules/`, or a manifest),
-reinstall to force a fresh copy, then start a new session:
+For this relative-path plugin in a marketplace added from a local directory,
+current Claude Code loads the source in place. After editing it, start a new
+session or run `/reload-plugins`; no reinstall or version bump is needed.
+You can also launch `claude --plugin-dir .` to load the checkout directly.
 
-```text
-/plugin uninstall ioncache-ai-tools@ioncache-ai-tools
-/plugin install ioncache-ai-tools@ioncache-ai-tools
-```
+Remote marketplace installations use cached copies instead. Update those
+through the plugin manager and reload or restart. See
+[Claude's loading reference](https://code.claude.com/docs/en/plugins/loading#in-place-and-copied-plugins).
 
 ### Codex
 
@@ -447,7 +463,7 @@ codex plugin marketplace add <local path to repo>
 codex plugin add ioncache-ai-tools@ioncache-ai-tools
 ```
 
-Codex has the identical caching behavior: it copies the plugin into
+Codex copies the plugin into
 `~/.codex/plugins/cache/` at install time and never re-reads the live source
 afterward. After any change, reinstall to force a fresh copy:
 
@@ -474,8 +490,8 @@ copilot skill list
 
 Re-run `copilot plugin install .` after changing a directly installed local
 plugin, then start a new session. `--plugin-dir` reads the source directly
-when a session starts. Copilot discovers both `skills/` and `commands/`
-through its manifest; commands are also available as skills.
+when a session starts. Copilot discovers all behavior and workflow skills
+through the manifest's `skills/` path.
 
 ## Known limitations and security considerations
 

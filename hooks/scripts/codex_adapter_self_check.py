@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import threading
+import time
 import unittest
 from unittest import mock
 import uuid
@@ -90,24 +90,10 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertTrue(entries[0]['command'].endswith(event))
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
-        reminder_finished = threading.Event()
-        run_entry = self.run_entry
-
-        def reminder_before_classifier(entry, payload):
-            # Force the ordering Codex can choose instead of relying on a lucky race.
-            if 'classify_question.py' in entry['command']:
-                self.assertTrue(reminder_finished.wait(timeout=5))
-            try:
-                return run_entry(entry, payload)
-            finally:
-                if 'require_answer_questions_skill.py' in entry['command']:
-                    reminder_finished.set()
-
-        with mock.patch.object(self, 'run_entry', side_effect=reminder_before_classifier):
-            text = self.prompt('why is this different')
-        self.assertIn('ioncache-ai-tools:answer-questions', text)
+        text = self.prompt('why is this different')
+        self.assertIn('answer-questions skill', text)
         self.assertTrue(self.marker.exists())
-        self.assertNotIn('ioncache-ai-tools:answer-questions', self.prompt('Implement the change'))
+        self.assertNotIn('answer-questions skill', self.prompt('Implement the change'))
         self.assertFalse(self.marker.exists())
 
     def test_prompt_preserves_all_reminders_and_consumer_cwd(self):
@@ -173,6 +159,55 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIn('lockfile', output['permissionDecisionReason'])
         self.assertNotIn('updatedInput', output)
 
+    def test_large_patch_checks_last_target_within_hook_budget(self):
+        patch = '*** Begin Patch\n' + ''.join(
+            f'*** Add File: safe-{index}.txt\n+x\n' for index in range(1000)
+        ) + '*** Delete File: yarn.lock\n*** End Patch'
+        started = time.monotonic()
+        output = self.tool('apply_patch', {'command': patch})
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(output['permissionDecision'], 'deny')
+        self.assertIn('lockfile', output['permissionDecisionReason'])
+
+    def test_workflows_ship_as_native_skills(self):
+        for name in ('create-worktree', 'investigate', 'review-code', 'triage-errors', 'verify-unresolved-pr-comments'):
+            with self.subTest(name=name):
+                path = ROOT / 'skills' / name / 'SKILL.md'
+                self.assertTrue(path.is_file())
+                text = path.read_text()
+                self.assertIn(f'name: {name}\n', text)
+                self.assertNotIn('$ARGUMENTS', text)
+                self.assertNotIn('!`', text)
+        worktree_skill = (ROOT / 'skills/create-worktree/SKILL.md').read_text()
+        self.assertIn('"', worktree_skill)
+        self.assertIn('../../scripts/create-worktree.js', worktree_skill)
+
+    def test_worktree_skill_example_quotes_installed_helper_path(self):
+        install = self.root / 'plugin with spaces'
+        install.symlink_to(ROOT, target_is_directory=True)
+        skill = (install / 'skills/create-worktree/SKILL.md').read_text()
+        command = next(line for line in skill.splitlines() if line.startswith('node '))
+        helper = (install / 'skills/create-worktree' / '../../scripts/create-worktree.js').absolute()
+        command = command.replace('/absolute/plugin root/scripts/create-worktree.js', str(helper))
+        env = {**self.env, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
+        git = [
+            'git', '-c', 'init.templateDir=', '-c', 'user.name=Self-check',
+            '-c', 'user.email=self-check@example.invalid', '-c', 'commit.gpgsign=false',
+        ]
+        for args in (['init', '-q'], ['commit', '--allow-empty', '-qm', 'fixture']):
+            subprocess.run(git + args, cwd=self.project, env=env, check=True, capture_output=True)
+        config = self.project / '.claude/ioncache-ai-tools.local.json'
+        config.parent.mkdir()
+        config.write_text('{"enabledRules":["never_kill_without_asking"]}\n')
+        result = subprocess.run(
+            ['bash', '-c', command], cwd=self.project, env=env,
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        copied_config = self.root / 'feature worktree/.claude/ioncache-ai-tools.local.json'
+        self.assertTrue(copied_config.is_symlink())
+        self.assertEqual(copied_config.read_text(), config.read_text())
+
     def test_safe_calls_do_not_override_permissions(self):
         for name, args in (
             ('apply_patch', {'command': CLEAN_PATCH}),
@@ -181,6 +216,28 @@ class CodexAdapterTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertEqual(self.invoke('PreToolUse', tool_name=name, tool_input=args), [{}])
+
+    def test_patch_rewrite_from_any_shared_hook_is_denied(self):
+        rewrite = {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'updatedInput': {'command': CLEAN_PATCH},
+        }}
+        with mock.patch.object(codex_adapter, 'run_shared_hooks', return_value=[rewrite]):
+            output = codex_adapter.pre_tool_use({
+                **self.payload, 'tool_name': 'apply_patch', 'tool_input': {'command': CLEAN_PATCH},
+            })
+        self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertNotIn('updatedInput', output['hookSpecificOutput'])
+
+    def test_codex_non_patch_rewrite_uses_required_protocol(self):
+        rewrite = {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'updatedInput': {'command': 'echo rewritten'},
+        }}
+        with mock.patch.object(codex_adapter, 'run_shared_hooks', return_value=[rewrite]):
+            output = codex_adapter.pre_tool_use({
+                **self.payload, 'tool_name': 'Bash', 'tool_input': {'command': 'echo original'},
+            })
+        self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'allow')
+        self.assertEqual(output['hookSpecificOutput']['updatedInput'], {'command': 'echo rewritten'})
 
     def test_native_shell_rules(self):
         for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json', f'echo a{EM_DASH}b'):

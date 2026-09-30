@@ -1,6 +1,6 @@
 ---
 name: verify-unresolved-pr-comments
-description: Analyze unresolved review comments and PR-level feedback on the active PR and return a triage chart with severity, fix recommendation, suggestion validity, and required action. Read-only, do not edit files, resolve threads, post replies, or run tests.
+description: Analyzes unresolved review comments and PR-level feedback on the active PR without making changes. Use when asked to triage review feedback into severity, validity, and required actions; do not edit files, resolve threads, post replies, or run tests.
 ---
 
 Follow these steps exactly and in order. Do not substitute your own approach,

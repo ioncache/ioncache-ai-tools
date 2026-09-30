@@ -305,6 +305,13 @@ MUTATION_FIXTURES = [
         '2>/dev/null is a common read-only idiom for suppressing stderr noise, not a mutation',
     ),
     ('Bash', {'command': 'echo "a > b"'}, False, 'a > inside a quoted argument is not a redirect'),
+    (
+        'Bash',
+        {'command': 'true &&\ngh api graphql -f "query=mutation { m }"'},
+        True,
+        'a multiline GraphQL mutation is still a separate command',
+    ),
+    ('apply_patch', {'command': '*** Begin Patch\n*** Add File: x\n+y\n*** End Patch'}, True, 'native patches mutate files'),
 ]
 
 
@@ -342,6 +349,13 @@ def main():
         hook_output = output.get('hookSpecificOutput') or {}
         if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
             failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
+        if 'answer-questions' not in hook_output.get('additionalContext', ''):
+            failures.append('classification must emit its own skill reminder without another racing hook')
+        manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
+        manifest = json.loads(manifest_path.read_text())
+        commands = [hook['command'] for group in manifest['hooks']['UserPromptSubmit'] for hook in group['hooks']]
+        if any('require_answer_questions_skill.py' in command for command in commands):
+            failures.append('a separate marker reader can race Claude prompt classification')
     finally:
         flag_path.unlink(missing_ok=True)
 

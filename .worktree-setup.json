@@ -3,6 +3,7 @@
   "afterCopy": [],
   "symlinks": [
     ".claude/settings.local.json",
+    ".claude/ioncache-ai-tools.local.json",
     ".claude/hooks",
     "CLAUDE.local.md",
     ".claude/hookify.*.local.md",

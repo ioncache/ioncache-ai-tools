@@ -4,6 +4,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 PATCH_REWRITE_REASON = (
@@ -17,15 +18,19 @@ def run_shared_hooks(event, hook_input):
     """Use the shared manifest as the sole source of hook order and commands."""
     manifest = json.loads((PLUGIN_ROOT / 'hooks' / 'hooks.json').read_text())
     outputs = []
+    deadline = time.monotonic() + (5 if event == 'Stop' else 20)
     for group in manifest['hooks'].get(event, []):
         for hook in group['hooks']:
             command = [
                 arg.replace('${CLAUDE_PLUGIN_ROOT}', str(PLUGIN_ROOT))
                 for arg in shlex.split(hook['command'])
             ]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f'{event} hooks exceeded their internal deadline')
             result = subprocess.run(
                 command, input=json.dumps(hook_input), capture_output=True,
-                text=True, cwd=hook_input['cwd'], timeout=hook.get('timeout', 5),
+                text=True, cwd=hook_input['cwd'], timeout=min(hook.get('timeout', 5), remaining),
             )
             if result.stderr:
                 print(result.stderr, file=sys.stderr, end='')

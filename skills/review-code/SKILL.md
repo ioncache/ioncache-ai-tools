@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Review code for correctness, security, performance, and code quality
+description: Reviews code for correctness, security, performance, and code quality. Use when asked to review a file, branch, pull request, or repository.
 ---
 
 If a specific file, set of files, or scope was provided when this command was
