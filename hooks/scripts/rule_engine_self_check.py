@@ -42,7 +42,96 @@ never_kill_without_asking = _load_module(
 )
 
 
+def invoke_engine(event, hook_input):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with (
+        mock.patch.object(sys, 'argv', ['rule_engine.py', event]),
+        mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(hook_input))),
+        mock.patch.object(rule_engine.signal, 'signal'),
+        mock.patch.object(rule_engine.signal, 'alarm'),
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stderr),
+    ):
+        try:
+            rule_engine.main()
+        except SystemExit as stopped:
+            return stopped.code, stdout.getvalue(), stderr.getvalue()
+    raise AssertionError('the engine entry point must exit explicitly')
+
+
+def check_discovery_failures(rules_dir):
+    file_path = os.path.join(rules_dir, 'not-a-directory')
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.write('fixture')
+    cases = (
+        (rules_dir, mock.patch.object(
+            rule_engine.os, 'listdir', side_effect=PermissionError(13, 'Permission denied', rules_dir),
+        )),
+        (os.path.join(rules_dir, 'missing'), contextlib.nullcontext()),
+        (file_path, contextlib.nullcontext()),
+    )
+    requests = (
+        ('UserPromptSubmit', {'prompt': 'Continue'}),
+        ('PreToolUse', {'tool_name': 'Read', 'tool_input': {'file_path': 'safe.txt'}}),
+        ('PreToolUse', {'tool_name': 'apply_patch', 'tool_input': {
+            'command': '*** Begin Patch\n*** Add File: safe.txt\n+safe\n*** End Patch',
+        }}),
+    )
+    for path, failure in cases:
+        for event, payload in requests:
+            with mock.patch.object(rule_engine, 'RULES_DIRNAME', path), failure:
+                code, stdout, stderr = invoke_engine(event, payload)
+            assert code == 2, f'{event}: unavailable rules at {path} must fail, got exit {code}'
+            assert stdout == '', 'discovery failures must not emit a successful hook result'
+            assert 'evaluation failed' in stderr and path in stderr, stderr
+
+
+def check_discovery_results(rules_dir):
+    payload = {'tool_name': 'Read', 'tool_input': {}}
+    assert invoke_engine('PreToolUse', payload) == (0, '', '')
+    rule_path = os.path.join(rules_dir, 'deny.json')
+    with open(rule_path, 'w', encoding='utf-8') as file:
+        json.dump({
+            'event': 'PreToolUse', 'matcher': {'type': 'always'},
+            'action': 'deny', 'message': 'fixture denial',
+        }, file)
+    assert invoke_engine('UserPromptSubmit', {'prompt': 'continue'}) == (0, '', '')
+    config_dir = os.path.join(os.getcwd(), '.claude')
+    os.mkdir(config_dir)
+    config_path = os.path.join(config_dir, 'ioncache-ai-tools.local.json')
+    with open(config_path, 'w', encoding='utf-8') as file:
+        json.dump({'disabledRules': ['deny']}, file)
+    assert invoke_engine('PreToolUse', payload) == (0, '', '')
+    os.unlink(config_path)
+    with open(os.path.join(rules_dir, 'broken.json'), 'w', encoding='utf-8') as file:
+        file.write('{invalid json')
+    with open(os.path.join(rules_dir, 'broken.py'), 'w', encoding='utf-8') as file:
+        file.write("raise RuntimeError('fixture import failure')\n")
+    code, stdout, stderr = invoke_engine('PreToolUse', payload)
+    assert code == 0, stderr
+    decision = json.loads(stdout)['hookSpecificOutput']
+    assert decision['permissionDecision'] == 'deny'
+    assert decision['permissionDecisionReason'] == 'fixture denial'
+    assert 'broken.json' in stderr and 'broken.py' in stderr, stderr
+
+
+def check_rule_discovery():
+    with tempfile.TemporaryDirectory(prefix='rule-engine-discovery-') as temp:
+        rules_dir = os.path.join(temp, 'rules')
+        os.mkdir(rules_dir)
+        with (
+            contextlib.chdir(temp),
+            mock.patch.dict(os.environ, {'HOME': temp, 'CODEX_HOME': temp, 'COPILOT_HOME': temp}),
+            mock.patch.object(rule_engine, 'RULES_DIRNAME', rules_dir),
+        ):
+            assert invoke_engine('PreToolUse', {'tool_name': 'Read', 'tool_input': {}}) == (0, '', '')
+            check_discovery_failures(rules_dir)
+            check_discovery_results(rules_dir)
+
+
 def main():
+    check_rule_discovery()
+
     # match_rule: always
     assert match_rule({'matcher': {'type': 'always'}}, {}) is True, 'always matcher should always match'
 
@@ -165,9 +254,6 @@ def main():
     user_prompt_rules = load_rules_for_event(tmp_dir, 'UserPromptSubmit')
     assert len(user_prompt_rules) == 1, 'should load only the UserPromptSubmit rule'
     shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    # load_rules_for_event: missing directory returns empty list, never throws
-    assert load_rules_for_event(os.path.join(tmp_dir, 'does-not-exist'), 'PreToolUse') == []
 
     # load_rules_for_event: a bad rule file is skipped, valid siblings still load
     bad_rules_dir = tempfile.mkdtemp(prefix='rule-engine-bad-')
