@@ -17,6 +17,8 @@ import shlex
 import signal
 import sys
 
+from hook_adapter_common import PATCH_REWRITE_REASON, patch_inputs
+
 try:
     import tomllib
 except ImportError:
@@ -116,6 +118,14 @@ CONTROL_OPERATORS = {';', '&&', '||', '|', '&', '(', ')', '\n'}
 # turns `printf 'a\ngit commit\nb'` into three "commands", one of which
 # looks exactly like a real commit.
 SHELL_PUNCTUATION = '();<>|&\n'
+SHELL_FRAGMENTS = re.compile(r"""('(?:[^']*)'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S])|([();<>|&\n]+)""")
+SHELL_OPERATORS = re.compile(r'\(\(|\)\)|&>>|<<<|<<-|&&|\|\||>>|<<|>&|<&|<>|>\||&>|[();<>|&\n]')
+
+
+def _space_shell_operators(match):
+    if match[1] is not None:
+        return match[0]
+    return ' ' + ' '.join(SHELL_OPERATORS.findall(match[2])) + ' '
 
 
 def tokenize_command(command):
@@ -145,6 +155,9 @@ def tokenize_command(command):
     a case this narrow.
     """
     command = command.replace('\\\n', '')
+    # shlex groups adjacent punctuation; separate actual operators before
+    # lexing, while leaving quoted and escaped fragments untouched.
+    command = SHELL_FRAGMENTS.sub(_space_shell_operators, command)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=SHELL_PUNCTUATION)
     lexer.whitespace_split = True
     lexer.whitespace = ' \t\r'
@@ -259,7 +272,6 @@ def merge_pre_tool_use(results):
         return {
             'hookSpecificOutput': {
                 'hookEventName': 'PreToolUse',
-                'permissionDecision': 'allow',
                 'updatedInput': rewrite.get('updatedInput'),
             },
             'systemMessage': rewrite.get('systemMessage'),
@@ -356,7 +368,33 @@ def load_rule_file(rules_dir, name):
 
 
 def _as_rule_list(value):
-    return value if isinstance(value, list) else []
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError('rule IDs must be a list of strings')
+    return value
+
+
+def _config_table(config, key):
+    value = config.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f'config section {key!r} must be a table')
+    return value
+
+
+def _codex_disabled_rule_ids(config_path, project_root):
+    try:
+        with open(config_path, 'rb') as file:
+            config = tomllib.load(file)
+        global_section = _config_table(config, 'ioncache-ai-tools')
+        project = _config_table(_config_table(config, 'projects'), project_root)
+        local_section = _config_table(project, 'ioncache-ai-tools')
+        disabled = set(_as_rule_list(global_section.get('disabled_rules')))
+        disabled.update(_as_rule_list(local_section.get('disabled_rules')))
+        return disabled - set(_as_rule_list(local_section.get('enabled_rules')))
+    except (OSError, ValueError, TypeError) as err:
+        print(f'rule-engine: failed to read {config_path}: {err}', file=sys.stderr)
+        return set()
 
 
 def _json_disabled_rule_ids(global_path, project_path):
@@ -410,18 +448,7 @@ def get_disabled_rule_ids(project_root, codex_config_path=None, claude_global_pa
             file=sys.stderr,
         )
     elif os.path.exists(codex_config_path):
-        try:
-            with open(codex_config_path, 'rb') as f:
-                codex_config = tomllib.load(f)
-        except Exception as err:
-            print(f'rule-engine: failed to read {codex_config_path}: {err}', file=sys.stderr)
-            codex_config = None
-        if codex_config is not None:
-            codex_disabled = set(_as_rule_list(codex_config.get('ioncache-ai-tools', {}).get('disabled_rules')))
-            project_section = codex_config.get('projects', {}).get(project_root, {}).get('ioncache-ai-tools', {})
-            codex_disabled.update(_as_rule_list(project_section.get('disabled_rules')))
-            codex_disabled -= set(_as_rule_list(project_section.get('enabled_rules')))
-            disabled.update(codex_disabled)
+        disabled.update(_codex_disabled_rule_ids(codex_config_path, project_root))
 
     return disabled
 
@@ -450,6 +477,22 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
     return rules
 
 
+def run_patch_rules(rules, hook_input):
+    rewrite_needed = False
+    patch = hook_input['tool_input']['command']
+    for item in patch_inputs(patch):
+        output = run_rules(rules, 'PreToolUse', {
+            **hook_input, 'tool_name': 'Edit', 'tool_input': item,
+        })
+        decision = (output or {}).get('hookSpecificOutput', {})
+        if decision.get('permissionDecision') == 'deny':
+            return output
+        rewrite_needed |= 'updatedInput' in decision
+    if rewrite_needed:
+        return merge_pre_tool_use([{'action': 'deny', 'message': PATCH_REWRITE_REASON}])
+    return None
+
+
 def run_hook(override_rules_dir=None):
     event = sys.argv[1] if len(sys.argv) > 1 else None
     try:
@@ -466,6 +509,8 @@ def run_hook(override_rules_dir=None):
         print(f'rule-engine: failed to load rules from {rules_dir}: {err}', file=sys.stderr)
         rules = []
 
+    if event == 'PreToolUse' and hook_input.get('tool_name') == 'apply_patch':
+        return run_patch_rules(rules, hook_input)
     return run_rules(rules, event, hook_input)
 
 
@@ -475,7 +520,8 @@ def _handle_alarm(signum, frame):
     # since nothing else forces exit. This fires regardless of what
     # run_hook() is doing, including inside a blocking C call, unlike a
     # single-threaded async watchdog that can't preempt synchronous work.
-    sys.exit(0)
+    print('rule-engine: evaluation exceeded the five-second deadline', file=sys.stderr)
+    sys.exit(2)
 
 
 def main():
@@ -485,8 +531,9 @@ def main():
         output = run_hook()
         if output:
             print(json.dumps(output))
-    except Exception:
-        pass
+    except Exception as err:
+        print(f'rule-engine: evaluation failed: {err}', file=sys.stderr)
+        sys.exit(2)
     finally:
         signal.alarm(0)
     sys.exit(0)

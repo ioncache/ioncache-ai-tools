@@ -30,7 +30,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
-ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
 
 # Bash commands that change state - git/gh mutations, filesystem writes,
 # package installs, and arbitrary-code interpreters that can do any of the

@@ -32,6 +32,7 @@ const DEFAULT_SETUP = {
   afterCopy: [],
   symlinks: [
     '.claude/settings.local.json',
+    '.claude/ioncache-ai-tools.local.json',
     '.claude/hooks',
     'CLAUDE.local.md',
     '.claude/hookify.*.local.md',
@@ -129,22 +130,30 @@ function runSetupCommands({ config, worktreePath, expand, applied }) {
  * Confirms `absPath`'s real, symlink-resolved location stays within
  * `resolvedRoot`. A lexically-safe path (no literal `..`) can still land
  * outside root if a symlink anywhere along it redirects there, so this
- * resolves the nearest EXISTING ancestor (the target itself may not exist
- * yet, e.g. a destination being created) with `fs.realpathSync`, which
- * follows every symlink in that chain, and checks the result.
+ * resolves the nearest existing entry, including dangling symlinks.
+ * Dangling links are rejected because a later write could create their
+ * targets outside the validated directory.
  *
  * @param {string} resolvedRoot - Root directory, already path.resolve'd
  * @param {string} absPath - Absolute path to check
  * @param {string} rel - Original relative path, for the error message
- * @throws {Error} If a symlink redirects the real path outside root
+ * @returns {void}
+ * @throws {Error} If a symlink is dangling or redirects the real path outside root,
+ * or the filesystem cannot be inspected
+ *
+ * @example
+ * assertRealPathWithinRoot('/repo', '/repo/cache/file', 'cache/file')
  */
 function assertRealPathWithinRoot(resolvedRoot, absPath, rel) {
   const realRoot = fs.realpathSync(resolvedRoot)
   let existing = absPath
-  while (!fs.existsSync(existing)) {
+  while (!fs.lstatSync(existing, { throwIfNoEntry: false })) {
     const parent = path.dirname(existing)
     if (parent === existing) break
     existing = parent
+  }
+  if (!fs.existsSync(existing)) {
+    throw new Error(`.worktree-setup.json path contains a dangling symlink (${resolvedRoot}): ${rel}`)
   }
   const real = fs.realpathSync(existing)
   const relative = path.relative(realRoot, real)
@@ -257,6 +266,18 @@ function selfTest() {
   assert.throws(() => resolveWithinRoot(root, 'escape-link/x'), /escapes its root/, 'source path via a symlinked ancestor should be rejected')
   assert.throws(() => resolveWithinRoot(root, 'escape-link/new-file.txt'), /escapes its root/, 'destination path via a symlinked ancestor should be rejected, even though the file itself does not exist yet')
 
+  const missingTarget = path.join(outside, 'not-created.txt')
+  fs.symlinkSync(missingTarget, path.join(root, 'dangling-link'))
+  fs.writeFileSync(path.join(root, SETUP_FILE), JSON.stringify({
+    afterCopy: [{ path: 'dangling-link', content: 'must not escape' }]
+  }))
+  assert.throws(() => applySetup(root, root), /symlink/, 'a dangling link must not redirect an afterCopy write')
+  assert(!fs.existsSync(missingTarget), 'the outside target must remain absent')
+  fs.unlinkSync(path.join(root, SETUP_FILE))
+  fs.symlinkSync(path.join(outside, 'missing-directory'), path.join(root, 'dangling-directory'))
+  assert.throws(() => resolveWithinRoot(root, 'dangling-directory/file'), /symlink/)
+  assert(!fs.existsSync(path.join(outside, 'missing-directory')))
+
   // Filesystem-root regression: a root that already ends with path.sep
   // (e.g. "/" on POSIX) made a naive `startsWith(realRoot + path.sep)`
   // check require a doubled separator, wrongly rejecting every real child.
@@ -264,15 +285,17 @@ function selfTest() {
   const relFromFsRoot = path.relative(fsRoot, tmp)
   assert.doesNotThrow(() => resolveWithinRoot(fsRoot, relFromFsRoot), 'a real child of the filesystem root should not be rejected as escaping it')
 
-  const copilotFiles = [
+  const configFiles = [
+    '.claude/ioncache-ai-tools.local.json',
     '.github/copilot/settings.local.json',
     '.github/copilot/ioncache-ai-tools.local.json'
   ]
   fs.mkdirSync(path.join(root, '.github/copilot'), { recursive: true })
-  for (const rel of copilotFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true })
+  for (const rel of configFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
   const worktree = fs.mkdtempSync(path.join(tmp, 'worktree-'))
   applySetup(root, worktree)
-  for (const rel of copilotFiles) {
+  for (const rel of configFiles) {
     assert(fs.lstatSync(path.join(worktree, rel)).isSymbolicLink())
     assert.strictEqual(fs.realpathSync(path.join(worktree, rel)), fs.realpathSync(path.join(root, rel)))
   }

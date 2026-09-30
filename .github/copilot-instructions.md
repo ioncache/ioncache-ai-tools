@@ -7,7 +7,7 @@ rules belong in the plugin's hooks, rules, and skills, not duplicated here.
 
 This repository ships reusable AI-assistant behavior as a plugin for Claude
 Code, Codex, and GitHub Copilot CLI. Python hooks enforce behavior, Markdown
-commands and skills instruct the assistant, and a Node.js helper creates
+skills instruct the assistant, and a Node.js helper creates
 configured git worktrees.
 Python uses the standard library; JavaScript uses CommonJS and Node built-ins.
 Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
@@ -25,19 +25,22 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   native inputs and outputs. Use `userPromptTransformed`, not
   `userPromptSubmitted`, for reminders: Copilot drops the latter's command
   output. The adapter preserves transformed prompt content and adds context.
-- Codex launches matching hooks concurrently. Register one adapter command
-  per prompt/tool event so question classification precedes its consumer.
-  Normalize `apply_patch` from `tool_input.command`, checking every target
-  and added line. Deny required rewrites instead of altering patch context.
+- Claude and Codex launch matching hooks concurrently. Emit classification
+  and its skill reminder from one handler, not a separate marker reader.
+  Codex registers one adapter per prompt/tool event. Both adapters pass
+  `apply_patch` to the shared hooks once using `tool_input.command`; the
+  engine checks all targets and added lines with one rules/config load.
+  Deny required rewrites instead of altering patch context.
   Adapter errors exit 2 to block; safe calls leave permissions unchanged.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, config
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
   hooks handle question state, documentation reminders, optional graphify
   context, and final-response punctuation.
-- `commands/*.md` are slash-command prompts. `skills/*/SKILL.md` are reusable
-  instructions with activation descriptions. Their examples describe behavior
+- `skills/*/SKILL.md` contains both workflow and behavior instructions with
+  activation descriptions. Do not rely on legacy `commands/` migration:
+  Codex may ignore templates or large commands. Their examples describe behavior
   for consuming projects, not necessarily this plugin's implementation stack.
-- `/create-worktree` invokes `scripts/create-worktree.js`, which wraps
+- The `create-worktree` skill invokes `scripts/create-worktree.js`, which wraps
   `git worktree add` and applies the main worktree's `.worktree-setup.json`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
   Missing config is created with generic defaults. Keep repository-specific
@@ -90,8 +93,8 @@ for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
 done
 ```
 
-[`.github/workflows/validate.yml`](workflows/validate.yml) also checks command
-and skill frontmatter and rejects literal U+2014 characters in Python,
+[`.github/workflows/validate.yml`](workflows/validate.yml) also checks skill
+frontmatter and rejects literal U+2014 characters in Python,
 Markdown, JSON, and JavaScript files. Em-dash detection code and fixtures
 construct the character with `chr(0x2014)` to pass this source check.
 
@@ -108,6 +111,9 @@ construct the character with `chr(0x2014)` to pass this source check.
   A rewrite must not include `permissionDecision: "allow"`: preserve normal
   permission checks. Raw `apply_patch` checks all targets and added lines;
   deny required rewrites rather than altering patch context.
+- Shared text rewrites emit `updatedInput` without a permission decision,
+  preserving Claude's normal approval flow. Only the Codex adapter adds the
+  `allow` field required by its rewrite protocol.
 - Resolve shipped files relative to the script or the host's plugin-root
   variable (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, or `${COPILOT_PLUGIN_ROOT}`).
   The process working directory is the consuming project, used for project
@@ -122,7 +128,9 @@ construct the character with `chr(0x2014)` to pass this source check.
   Python modules. A deny beats every rewrite; otherwise only the first rewrite
   is applied, with a warning for multiple rewrites. Prompt injections are
   concatenated with blank lines. Preserve per-rule error isolation and the
-  engine's five-second watchdog.
+  engine's five-second watchdog. Engine-wide errors and watchdog expiry log
+  and exit 2. Shared adapter execution has an internal deadline before the
+  native hook timeout (20 seconds for prompt/tool hooks, five for Stop).
 - Disable config is read fresh on every invocation. For each tool, resolve
   `(global disabled + project disabled) - project enabled`, then union all
   tools' results. Claude uses global/project
@@ -138,12 +146,11 @@ construct the character with `chr(0x2014)` to pass this source check.
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an
   exhaustive shell interpreter.
-- Question gating spans three scripts: `classify_question.py` writes
-  `/tmp/.ioncache-pending-question-{session_id}`;
-  `require_answer_questions_skill.py` reads it to request the skill;
+- Question gating spans two scripts: `classify_question.py` writes
+  `/tmp/.ioncache-pending-question-{session_id}` and requests the skill;
   `block_pending_question.py` denies recognized mutations while it exists.
-  Keep classification centralized and the classifier registered before its
-  consumer. Read-only lookups remain allowed. The marker is cleared by a
+  Keep classification and its reminder together. Read-only lookups remain
+  allowed. The marker is cleared by a
   subsequent non-question prompt, not by detecting an assistant answer.
 - Claude/Codex final-response checks use `last_assistant_message`. Copilot
   lacks this field, so its adapter waits for the exact current `agentStop`
@@ -154,11 +161,12 @@ construct the character with `chr(0x2014)` to pass this source check.
 
 ## Prompts, documentation, and local development
 
-- Commands and skills start with YAML frontmatter containing `name` and
+- Skills start with YAML frontmatter containing `name` and
   `description`. Keep skill descriptions specific about when they activate.
-- Direct installs copy plugin files into an install cache. Editing this checkout
-  alone does not update an installed plugin. Reinstall after plugin-source
-  changes and start a fresh session/thread; see
+- Claude relative-path plugins from local-directory marketplaces load in place;
+  restart or `/reload-plugins` after source changes. Remote installs are cached.
+  Codex and direct Copilot installs use caches; refresh those installed copies
+  and start a fresh session/thread after source changes. See
   [local development](../README.md#local-development) for host-specific commands.
   Rule-disable config is outside that cache and takes effect immediately.
   Use `copilot --plugin-dir .` to load a live checkout without installing;

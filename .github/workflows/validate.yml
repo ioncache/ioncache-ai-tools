@@ -25,13 +25,15 @@ jobs:
       - name: Check hook script syntax
         run: |
           for f in hooks/scripts/*.py hooks/rules/*.py; do
-            python3 -m py_compile "$f" && echo "$f OK"
+            python3 -m py_compile "$f" || exit 1
+            echo "$f OK"
           done
 
       - name: Check JS hook script syntax
         run: |
           for f in hooks/scripts/*.js scripts/*.js; do
-            node --check "$f" && echo "$f OK"
+            node --check "$f" || exit 1
+            echo "$f OK"
           done
 
       - name: Run rule-engine self-check
@@ -49,9 +51,9 @@ jobs:
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
 
-      - name: Check command/skill frontmatter
+      - name: Check skill frontmatter
         run: |
-          for f in commands/*.md skills/*/SKILL.md; do
+          for f in skills/*/SKILL.md; do
             head -1 "$f" | grep -q '^---$' || { echo "missing frontmatter: $f"; exit 1; }
             grep -q '^name:' "$f" || { echo "missing name: $f"; exit 1; }
             grep -q '^description:' "$f" || { echo "missing description: $f"; exit 1; }

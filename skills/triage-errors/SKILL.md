@@ -1,6 +1,6 @@
 ---
 name: triage-errors
-description: Systematically triage and fix errors after a large change, use when you have many test failures or lint errors to work through
+description: Groups and fixes errors by root cause after a large change. Use when many test failures or lint errors need systematic triage.
 ---
 
 You are fixing a batch of errors systematically. Do not fix them one at a time

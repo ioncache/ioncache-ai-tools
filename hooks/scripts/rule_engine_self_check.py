@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from unittest import mock
@@ -105,7 +106,7 @@ def main():
     rewrite_only = merge_pre_tool_use(
         [{'action': 'rewrite', 'updatedInput': {'command': 'fixed'}, 'systemMessage': 'msg'}]
     )
-    assert rewrite_only['hookSpecificOutput']['permissionDecision'] == 'allow'
+    assert 'permissionDecision' not in rewrite_only['hookSpecificOutput']
     assert rewrite_only['hookSpecificOutput']['updatedInput'] == {'command': 'fixed'}
     assert rewrite_only['systemMessage'] == 'msg'
 
@@ -224,6 +225,12 @@ def main():
         ('ls /tmp/kill', False, 'a path argument to an unrelated command, not an invocation (prior false-positive regression)'),
         ('true; /bin/kill -9 12345', True, 'a path-qualified invocation as the second command in a chain'),
         ('sleep 1 && kill -9 12345', True, 'a bare invocation as the second command in a chain'),
+        ('true &&\nkill 123', True, 'a newline after a control operator'),
+        ('true;\nkill 123', True, 'a newline after a semicolon'),
+        ('true\n\nkill 123', True, 'blank lines between commands'),
+        ('true &&(kill 123)', True, 'adjacent control operators'),
+        ('echo "&&\nkill 123"', False, 'quoted multiline text is not a command'),
+        ("echo '&&\n' kill 123", False, 'a quoted operator is not a separator'),
         ('echo "(kill -9 12345)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
         ('timeout 5 kill -9 12345', True, 'a timeout wrapper around the invocation'),
         ('nohup kill -9 12345', True, 'a no-argument wrapper around the invocation'),
@@ -274,6 +281,9 @@ def main():
             'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never_kill_without_asking)',
         ),
         ('npm install', False, 'an unrelated Bash command'),
+        (f'true &&\nsed -i s/a/b/ {lockfile_name}', True, 'multiline in-place edit'),
+        (f'true;\ntee {lockfile_name}', True, 'newline after semicolon'),
+        (f'echo "&&\nsed -i s/a/b/ {lockfile_name}"', False, 'quoted multiline text'),
         (f'timeout 5 sed -i s/a/b/ {lockfile_name}', True, 'a timeout wrapper around an in-place sed targeting a lockfile'),
         (f'perl -pi -e s/a/b/ {lockfile_name}', True, "perl's combined -pi in-place flag"),
         (f'sed -Ei s/a/b/ {lockfile_name}', True, "GNU sed's combined -Ei in-place flag"),
@@ -434,6 +444,34 @@ def main():
         assert captured_stderr.getvalue(), 'a malformed Codex TOML parse failure should be logged, not silently swallowed'
         shutil.rmtree(malformed_codex_dir, ignore_errors=True)
 
+        with tempfile.TemporaryDirectory(prefix='rule-engine-codex-shapes-') as temp:
+            temp = os.path.realpath(temp)
+            config_path = os.path.join(temp, 'config.toml')
+            env = {
+                **os.environ, 'HOME': temp, 'CODEX_HOME': temp,
+                'COPILOT_HOME': os.path.join(temp, 'copilot'),
+                'PYTHONDONTWRITEBYTECODE': '1',
+            }
+            shapes = [
+                'ioncache-ai-tools = "invalid"\n',
+                'projects = []\n',
+                f'[projects]\n"{temp}" = "invalid"\n',
+                f'[projects."{temp}"]\nioncache-ai-tools = false\n',
+                '[ioncache-ai-tools]\ndisabled_rules = [[]]\n',
+                '[ioncache-ai-tools]\ndisabled_rules = [1]\n',
+                f'[projects."{temp}".ioncache-ai-tools]\nenabled_rules = [{{}}]\n',
+            ]
+            for shape in shapes:
+                write_text(config_path, shape)
+                result = subprocess.run(
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'rule_engine.py'), 'PreToolUse'],
+                    input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'kill 123'}}),
+                    cwd=temp, env=env, text=True, capture_output=True, check=True,
+                )
+                assert result.stderr, f'invalid config shape must be logged: {shape}'
+                output = json.loads(result.stdout)
+                assert output['hookSpecificOutput']['permissionDecision'] == 'deny', shape
+
         # get_disabled_rule_ids: a top-level Codex table disables a rule globally, with no project section at all
         codex_global_dir = tempfile.mkdtemp(prefix='rule-engine-codex-global-')
         codex_global_path = os.path.join(codex_global_dir, 'config.toml')
@@ -553,6 +591,25 @@ def main():
     load_rules_for_event(sentinel_rules_dir, 'PreToolUse', set())
     assert os.path.exists(sentinel_path), 'an enabled .py rule should still be imported normally'
     shutil.rmtree(sentinel_rules_dir, ignore_errors=True)
+
+    for action, expected_message in (
+        (lambda: rule_engine._handle_alarm(None, None), 'deadline'),
+        (rule_engine.main, 'evaluation failed'),
+    ):
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(rule_engine, 'run_hook', side_effect=RuntimeError('fixture failure')),
+            mock.patch.object(rule_engine.signal, 'signal'),
+            mock.patch.object(rule_engine.signal, 'alarm'),
+            contextlib.redirect_stderr(stderr),
+        ):
+            try:
+                action()
+            except SystemExit as stopped:
+                assert stopped.code == 2
+            else:
+                raise AssertionError('engine-wide failures must block rather than return success')
+        assert expected_message in stderr.getvalue()
 
     print('All rule-engine self-checks passed.')
 

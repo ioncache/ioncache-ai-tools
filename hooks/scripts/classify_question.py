@@ -70,7 +70,9 @@ def main():
                             "blocked until your next reply, but read-only lookups "
                             "(Read, Grep, Glob, WebFetch, WebSearch, read-only "
                             "Bash) stay available, use them if answering well "
-                            "requires checking something first."
+                            "requires checking something first.\n\n"
+                            "Before writing any other output, load and apply "
+                            "this plugin's answer-questions skill to the response."
                         ),
                     }
                 }
