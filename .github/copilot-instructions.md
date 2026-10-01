@@ -40,6 +40,9 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
   for consuming projects, not necessarily this plugin's implementation stack.
+- `scripts/review_ledger.py` persists per-run review history and snapshots;
+  `review_loop_state.py` validates transitions by replay. The loop skill owns
+  agent coordination. Keep ledger checks mechanical, not semantic judgments.
 - The `create-worktree` skill invokes `scripts/create-worktree.js`, which wraps
   `git worktree add` and applies the main worktree's `.worktree-setup.json`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
@@ -57,6 +60,7 @@ python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
+python3 scripts/review_ledger_self_check.py
 ```
 
 These checks run in CI; the Node self-test exercises worktree setup and path
@@ -83,7 +87,7 @@ PY
 Syntax and manifest checks used by CI:
 
 ```sh
-python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py
+python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py scripts/*.py
 for f in hooks/scripts/*.js scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
