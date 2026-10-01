@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,7 @@ from unittest import mock
 import claim_evidence
 import copilot_adapter
 from evidence_review import check_review, inventory, publication_commands
-from evidence_source import check_native_read, read_page, source_snapshot, source_unit, unit_bounds
+from evidence_source import check_native_read, digest, read_page, source_snapshot, source_unit, unit_bounds
 from evidence_store import EvidenceStore, record_page, reference_key
 
 
@@ -221,6 +222,84 @@ class ClaimEvidenceTests(unittest.TestCase):
         claim_evidence.run_hook('PreCompact', other_context)
         with EvidenceStore(self.data) as store:
             self.assertIsNone(store.get('coverage', reference_key(ref)))
+
+    def approved_request(self):
+        ref = self.deliver()
+        request = self.request()
+        self.assertIn('checkpoint required', str(self.hook('PreToolUse', **request)))
+        prepared = inventory(request, self.root)
+        with EvidenceStore(self.data) as store:
+            path = store.request_path(prepared['fingerprint'])
+        self.prepare(path)
+        review_path = path.with_suffix('.review.json')
+        review_path.write_text(json.dumps(self.review(prepared, ref)))
+        options = claim_evidence.parser().parse_args(['approve', str(path), '--review', str(review_path)])
+        receipt = claim_evidence.approval_candidate(options, self.root)[2]
+        self.helper(f'approve "{path}" --review "{review_path}"', {'stdout': receipt})
+        self.assertIsNone(self.hook('PreToolUse', **request))
+        return request, ref, path
+
+    def test_failed_reset_cleanup_cannot_restore_receipts(self):
+        for failure in (OSError('cleanup failed'), SystemExit(2)):
+            with self.subTest(failure=type(failure).__name__):
+                self.hook('SessionStart')
+                request, ref, path = self.approved_request()
+                with (
+                    mock.patch.object(Path, 'unlink', side_effect=failure),
+                    self.assertRaises(type(failure)),
+                ):
+                    self.hook('SessionStart')
+                self.assertTrue(path.exists())
+                with EvidenceStore(self.data) as store:
+                    self.assertIsNone(store.get('coverage', reference_key(ref)))
+                    self.assertIsNone(store.get('approvals', inventory(request, self.root)['fingerprint']))
+                    self.assertEqual(store.connection.execute('SELECT COUNT(*) FROM records').fetchone()[0], 0)
+                denied = self.hook('PreToolUse', **request)
+                self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+                self.assertIn('checkpoint required', str(denied))
+
+    def test_reset_keeps_writer_lock_through_cleanup(self):
+        request, _, path = self.approved_request()
+        database = path.parent.parent / f'{digest(self.data["session_id"])}.sqlite3'
+        original_unlink = Path.unlink
+
+        def check_lock_then_unlink(target):
+            connection = sqlite3.connect(database, timeout=0)
+            try:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'locked'):
+                    connection.execute('BEGIN IMMEDIATE')
+            finally:
+                connection.close()
+            original_unlink(target)
+
+        with mock.patch.object(Path, 'unlink', autospec=True, side_effect=check_lock_then_unlink) as unlink:
+            self.hook('PreCompact')
+        self.assertTrue(unlink.called)
+        self.assertFalse(path.exists())
+        self.assertIn('checkpoint required', str(self.hook('PreToolUse', **request)))
+        self.approved_request()
+
+    def test_reset_survives_process_exit_during_cleanup(self):
+        request, ref, path = self.approved_request()
+        code = (
+            'import json, os, sys\n'
+            'from pathlib import Path\n'
+            'from unittest import mock\n'
+            'import claim_evidence\n'
+            'with mock.patch.object(Path, "unlink", side_effect=lambda: os._exit(23)):\n'
+            '    claim_evidence.run_hook("SessionStart", json.loads(sys.argv[1]))\n'
+        )
+        result = subprocess.run(
+            [sys.executable, '-c', code, json.dumps(self.data)],
+            cwd=self.root, env={**os.environ, 'PYTHONPATH': str(claim_evidence.HELPER.parent)},
+            text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertTrue(path.exists())
+        with EvidenceStore(self.data) as store:
+            self.assertIsNone(store.get('coverage', reference_key(ref)))
+            self.assertIsNone(store.get('approvals', inventory(request, self.root)['fingerprint']))
+        self.assertIn('checkpoint required', str(self.hook('PreToolUse', **request)))
 
     def test_stop_requests_one_correction_without_infinite_loop(self):
         self.assertEqual(self.hook('Stop', last_assistant_message='Unchecked')['decision'], 'block')

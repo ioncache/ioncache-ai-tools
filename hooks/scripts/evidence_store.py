@@ -76,7 +76,10 @@ class EvidenceStore:
         )
 
     def reset(self):
+        # Keep new requests out of cleanup after committing receipt invalidation.
+        self.connection.execute('PRAGMA locking_mode = EXCLUSIVE').fetchone()
         self.connection.execute('DELETE FROM records')
+        self.connection.commit()
         if self.requests.exists():
             self.validate_requests()
             for path in self.requests.iterdir():

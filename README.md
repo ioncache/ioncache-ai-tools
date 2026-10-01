@@ -210,9 +210,12 @@ and supplied agent identity. Exact artifact fingerprints include target-file
 state and file-backed publication text. Source hashes are rechecked at approval
 and retry. Compaction, startup/resume, session end, and subagent-start events
 clear receipts and captured request/review JSON across that session, including
-other working directories and agents. Disabling the
-guard also clears them on the next event. Empty database files and directories
-remain; an abrupt exit can leave private state until a lifecycle reset.
+other working directories and agents. Receipt invalidation commits before
+request-file cleanup, with the database lock retained until the store closes.
+Failed or interrupted cleanup can leave request files but cannot restore the
+cleared receipts. Disabling the guard also clears them on the next event.
+Empty database files and directories remain; an abrupt exit can leave private
+state until a lifecycle reset.
 
 Claude uses serialized `PostToolBatch` output, not its earlier structured
 `PostToolUse` output, to account for delivered pages. Codex and Copilot adapters
