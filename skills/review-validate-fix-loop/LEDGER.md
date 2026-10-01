@@ -1,8 +1,10 @@
 # Ledger protocol
 
 Resolve `../../scripts/review_ledger.py` relative to the skill directory.
-Run from the consuming worktree. All helper results are JSON on stdout;
-errors use stderr and exit 2. Use actual absolute paths, quoted in the shell.
+Invoke the helper by its absolute path, quoted in the shell, from any directory
+within the consuming worktree. Ledger arguments can be absolute or relative to
+the worktree root, never the invocation directory. All helper results are JSON
+on stdout; errors use stderr and exit 2.
 
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" init \

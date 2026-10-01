@@ -30,11 +30,13 @@ def strings(value):
 
 
 def positive(value):
+    """Reject booleans as limits even though Python treats them as integers."""
     require(type(value) is int and value > 0, "Limits must be positive integers")
     return value
 
 
 def fields(value, names):
+    """Require an exact field set so misspelled or unsupported inputs cannot be ignored."""
     require(isinstance(value, dict) and set(value) == set(names.split()),
             f"Expected fields: {names}")
 
@@ -44,23 +46,27 @@ def phase(state, *allowed):
 
 
 def current_loop(state):
+    """Return the mutable latest loop; phases without a started review must fail."""
     require(bool(state["loops"]), "No review has started")
     return state["loops"][-1]
 
 
 def current_cycle(state):
+    """Return the mutable latest cycle without silently creating or consuming one."""
     loop = current_loop(state)
     require(bool(loop["cycles"]), "No fixing cycle has started")
     return loop["cycles"][-1]
 
 
 def actionable(finding):
+    """Keep uncertainty and unverified fixes open unless explicitly disposed of."""
     return finding["validation"] != "invalid" and finding["disposition"] in {
         "open", "fix_applied", "fix_failed",
     }
 
 
 def unresolved(state):
+    """Return IDs that still block progress, including pending and uncertain findings."""
     return [key for key, value in state["findings"].items() if actionable(value)]
 
 
@@ -69,6 +75,7 @@ def evidence(event):
 
 
 def checks_valid(checks):
+    """Require explicit check evidence while preserving failed or unavailable results."""
     require(isinstance(checks, list) and bool(checks), "Verification must be recorded")
     for check in checks:
         fields(check, "name result evidence")
@@ -79,10 +86,12 @@ def checks_valid(checks):
 
 
 def checks_pass(checks):
+    """Accept only passed or justified inapplicable checks after structural validation."""
     return all(item["result"] in ("passed", "not_applicable") for item in checks)
 
 
 def review_valid(event):
+    """Reject partial passes; worker completion alone is not review coverage."""
     passes = event["passes"]
     require(isinstance(passes, list) and bool(passes), "Review coverage is required")
     for item in passes:
@@ -93,6 +102,7 @@ def review_valid(event):
 
 
 def start_review(state, event):
+    """Consume outer capacity before review work so interruption cannot refund it."""
     phase(state, "ready_review")
     require(len(state["loops"]) < state["limits"]["outer"], "Outer limit reached")
     state["loops"].append({"number": len(state["loops"]) + 1,
@@ -101,6 +111,7 @@ def start_review(state, event):
 
 
 def review_done(state, event):
+    """Preserve completed review evidence for validation, without accepting findings."""
     phase(state, "reviewing")
     review_valid(event)
     checks_valid(event["checks"])
@@ -110,6 +121,11 @@ def review_done(state, event):
 
 
 def finding(state, event):
+    """Retain repeated observations without reopening an existing disposition.
+
+    A new behavior key receives a stable run-scoped ID and pending validation.
+    Reopening an existing key requires a separate, evidenced decision.
+    """
     phase(state, "reviewing", "validating", "reviewing_fixes", "validating_fixes")
     for key in ("key", "summary"):
         text(event[key])
@@ -131,6 +147,11 @@ def finding(state, event):
 
 
 def decision(state, event):
+    """Record judgment history while keeping validity distinct from disposition.
+
+    Verified resolution requires an applied fix in the current reviewed cycle
+    and passing checks. The coordinator remains responsible for evidence truth.
+    """
     phase(state, "validating", "validating_fixes")
     require(event["id"] in state["findings"], "Unknown finding")
     evidence(event)
@@ -155,6 +176,11 @@ def decision(state, event):
 
 
 def start_fix(state, event):
+    """Consume inner capacity for a declared batch of validated actionable findings.
+
+    The previous focused review must be advanced before another batch starts.
+    Pending validation and unreviewed applied fixes cannot be bypassed.
+    """
     phase(state, "validating", "validating_fixes")
     loop = current_loop(state)
     if state["phase"] == "validating_fixes":
@@ -177,6 +203,7 @@ def start_fix(state, event):
 
 
 def fix_done(state, event):
+    """Record every attempted outcome as unverified until focused review completes."""
     phase(state, "fixing")
     cycle = current_cycle(state)
     results = event["results"]
@@ -195,6 +222,7 @@ def fix_done(state, event):
 
 
 def fixes_reviewed(state, event):
+    """Require completed focused passes before validating correction outcomes."""
     phase(state, "reviewing_fixes")
     review_valid(event)
     current_cycle(state)["review"] = copy.deepcopy(event)
@@ -202,11 +230,17 @@ def fixes_reviewed(state, event):
 
 
 def finish(state, outcome, reason):
+    """Record an outcome without discarding the phase or consumed allowances."""
     state["outcome"] = outcome
     state["stop_reason"] = reason
 
 
 def advance(state, event):
+    """Choose inner retry, outer confirmation, or termination from validated evidence.
+
+    Inner exhaustion stops the whole run. Even a clean focused review needs
+    another full review before completion; accepted risks remain exceptions.
+    """
     phase(state, "validating", "validating_fixes")
     require(not any(item["validation"] == "pending" for item in state["findings"].values()),
             "Pending validation prevents advancing")
@@ -238,12 +272,14 @@ def advance(state, event):
 
 
 def stop(state, event):
+    """Allow explicit incomplete outcomes, never shortcut completion or limit checks."""
     require(event["outcome"] in ("blocked", "interrupted", "failed", "stalled"),
             "Use advance for completion and limits")
     finish(state, event["outcome"], event["reason"])
 
 
 def resume(state, event):
+    """Reopen only blocked or interrupted work without refunding consumed capacity."""
     require(state["outcome"] in ("blocked", "interrupted"), "Run is not resumable")
     state["outcome"] = "running"
     state["stop_reason"] = None
@@ -282,7 +318,12 @@ EVENTS = {
 
 
 def apply_event(state, event):
-    """Apply a fully recorded event to derived state, or raise LedgerError."""
+    """Apply a fully recorded event to derived state, or raise LedgerError.
+
+    Stop and resume preserve the prior evidence snapshot to prevent stale
+    reviews from becoming current. Discard derived state if a handler fails;
+    handlers may mutate it before rejecting an event.
+    """
     require(isinstance(event, dict), "Event must be an object")
     kind = event.get("type")
     require(isinstance(kind, str) and kind in EVENTS, "Unknown event type")
@@ -304,7 +345,11 @@ def apply_event(state, event):
 
 
 def replay(ledger, snapshot_check=None):
-    """Derive current findings, loop counters and outcome from validated history."""
+    """Derive current findings, loop counters and outcome from validated history.
+
+    The optional callback checks each snapshot transition before its event
+    mutates state. File-backed callers supply it to validate saved evidence.
+    """
     fields(ledger, "schema run_id root objective scope base limits initial snapshots events")
     require(type(ledger["schema"]) is int and ledger["schema"] == 1,
             "Unsupported ledger schema")

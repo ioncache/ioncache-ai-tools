@@ -33,6 +33,7 @@ from review_loop_state import (
 
 
 def encode(value):
+    """Use canonical JSON bytes so snapshot IDs survive process restarts."""
     return (json.dumps(value, sort_keys=True, ensure_ascii=True, indent=2) + "\n").encode()
 
 
@@ -41,16 +42,23 @@ def digest(data):
 
 
 def git(root, args):
+    """Return raw Git output; surface failures instead of treating them as no data."""
     result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
     require(result.returncode == 0, result.stderr.decode(errors="replace").strip())
     return result.stdout
 
 
 def worktree():
+    """Anchor storage at the canonical Git root, independent of launch directory."""
     return Path(os.fsdecode(git(Path.cwd(), ["rev-parse", "--show-toplevel"])).strip()).resolve()
 
 
 def safe_path(root, relative):
+    """Reject absolute paths, parent traversal, Git metadata, and symlink components.
+
+    Missing components are allowed for new storage or fix targets. This check
+    does not isolate the path from concurrent filesystem changes.
+    """
     parts = Path(relative).parts
     require(parts and not Path(relative).is_absolute() and
             all(part not in (".", "..", ".git") for part in parts), "Unsafe relative path")
@@ -82,6 +90,7 @@ def atomic_write(path, data):
 
 
 def store_blob(folder, content):
+    """Return a content ID, saving bytes or verifying the existing object matches."""
     key = digest(content)
     objects = safe_path(folder, "objects")
     objects.mkdir(exist_ok=True, mode=0o700)
@@ -94,6 +103,11 @@ def store_blob(folder, content):
 
 
 def file_entry(root, name, folder):
+    """Describe content and mode without following symlinks; omit deleted files.
+
+    A folder enables blob storage; otherwise only hashes are calculated.
+    Unsupported file types raise LedgerError rather than leaving coverage gaps.
+    """
     path = root / name
     if path.parent != root:
         safe_path(root, str(path.parent.relative_to(root)))
@@ -135,11 +149,13 @@ def snapshot(root, folder=None):
 
 
 def changed(before, after):
+    """Include additions, deletions, content, and mode changes in fix-scope checks."""
     return sorted(name for name in before["files"].keys() | after["files"].keys()
                   if before["files"].get(name) != after["files"].get(name))
 
 
 def validate_snapshots(ledger, folder):
+    """Reject malformed manifests or corrupt blobs before trusting saved evidence."""
     for key, item in ledger["snapshots"].items():
         require(key == digest(encode(item)), "Snapshot checksum mismatch")
         fields(item, "head index files")
@@ -155,6 +171,7 @@ def validate_snapshots(ledger, folder):
 
 
 def load(path):
+    """Return validated history and replayed state, not yet checked for ownership."""
     ledger = json.loads(path.read_bytes())
     state = replay(ledger, check_snapshot_transition)
     require(ledger["run_id"] == path.parent.name, "Run ID does not match ledger directory")
@@ -163,7 +180,8 @@ def load(path):
 
 
 def ledger_path(root, argument):
-    candidate = Path(os.path.abspath(argument))
+    """Resolve run paths against root without admitting foreign or symlinked storage."""
+    candidate = Path(os.path.abspath(root / argument))
     base = safe_path(root, ".review-loop")
     require(candidate.parent.parent == base and candidate.name == "REVIEW_LEDGER.json",
             "Ledger must be .review-loop/<run-id>/REVIEW_LEDGER.json in this worktree")
@@ -175,6 +193,7 @@ def ensure_owner(ledger, root):
 
 
 def assert_available(base):
+    """Prevent a second run from authorizing work while a resumable run still exists."""
     for folder in base.iterdir():
         if folder.name == ".lock":
             continue
@@ -205,6 +224,7 @@ def init(args, root):
 
 
 def create_ledger(args, root, folder):
+    """Persist a stable baseline and return its absolute ledger path and initial state."""
     initial = snapshot(root, folder)
     require(initial == snapshot(root), "Worktree changed during initial snapshot")
     key = digest(encode(initial))
@@ -220,6 +240,11 @@ def create_ledger(args, root, folder):
 
 
 def check_snapshot_transition(ledger, state, event):
+    """Reject drift not allowed by the event's phase and declared fix files.
+
+    Fix completion and fixing resumption must preserve HEAD and index metadata.
+    Both append and replay use this check so saved history obeys the same rules.
+    """
     before = ledger["snapshots"][state["snapshot"]]
     after = ledger["snapshots"][event["snapshot"]]
     kind = event["type"]
@@ -245,6 +270,11 @@ def check_snapshot_transition(ledger, state, event):
 
 
 def append(args, root):
+    """Persist one stdin event only at its expected revision and allowed snapshot.
+
+    The caller must hold the worktree lock. Rejected events can leave snapshot
+    blobs, but only successful validation replaces the canonical ledger.
+    """
     path = ledger_path(root, args.ledger)
     ledger, state = load(path)
     ensure_owner(ledger, root)
@@ -272,6 +302,7 @@ def append(args, root):
 
 
 def status(args, root):
+    """Report saved decisions and live drift without accepting drift as new evidence."""
     path = ledger_path(root, args.ledger)
     ledger, state = load(path)
     ensure_owner(ledger, root)
@@ -284,6 +315,7 @@ def status(args, root):
 
 
 def blob(folder, entry):
+    """Represent an absent diff side as empty bytes; load present sides from storage."""
     return b"" if entry is None else safe_path(folder, f"objects/{entry['blob']}").read_bytes()
 
 
@@ -309,6 +341,7 @@ def diff(args, root):
 
 
 def parser():
+    """Require run intent and explicit write revisions at the CLI boundary."""
     cli = argparse.ArgumentParser(description=__doc__)
     commands = cli.add_subparsers(dest="command", required=True)
     create = commands.add_parser("init", help="Start a new run in the current worktree")
@@ -319,7 +352,7 @@ def parser():
     create.add_argument("--max-fix-cycles", type=int, default=3)
     for name in ("apply", "status", "diff"):
         command = commands.add_parser(name)
-        command.add_argument("ledger")
+        command.add_argument("ledger", help="Absolute path or path relative to the worktree root")
         if name == "apply":
             command.add_argument("--revision", required=True, type=int)
         if name == "diff":
@@ -329,6 +362,7 @@ def parser():
 
 
 def main():
+    """Lock ledger mutations and keep JSON results separate from failure diagnostics."""
     args = parser().parse_args()
     try:
         root = worktree()

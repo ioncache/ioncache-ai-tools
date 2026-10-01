@@ -21,9 +21,11 @@ CHECKS = [{"name": "fixture check", "result": "passed", "evidence": "Fixture ass
 
 class ReviewLedgerTests(unittest.TestCase):
     def setUp(self):
+        """Isolate Git configuration and files so fixtures cannot affect a real project."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        self.cwd = self.root
         self.env = {**os.environ, "HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": os.devnull, "PYTHONDONTWRITEBYTECODE": "1"}
         for key in list(self.env):
@@ -43,7 +45,12 @@ class ReviewLedgerTests(unittest.TestCase):
                               check=True, capture_output=True).stdout
 
     def cli(self, args, event=None, ok=True):
-        result = subprocess.run([sys.executable, str(HELPER), *args], cwd=self.root,
+        """Use a fresh process so assertions depend on persisted state, not memory.
+
+        Successful calls return decoded JSON; expected failures return stderr
+        only after checking exit 2 and an empty protocol stream.
+        """
+        result = subprocess.run([sys.executable, str(HELPER), *args], cwd=self.cwd,
                                 env=self.env, text=True, input=json.dumps(event),
                                 capture_output=True)
         if not ok:
@@ -55,6 +62,7 @@ class ReviewLedgerTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def init(self, *args):
+        """Retain the helper's run path so later calls exercise the same durable ledger."""
         self.state = self.cli(["init", "--objective", "Correct fixture behavior",
                                "--scope", "repository", *args])
         self.ledger = self.state["ledger"]
@@ -64,11 +72,13 @@ class ReviewLedgerTests(unittest.TestCase):
                 "reason": "Supported by fixture evidence", **values}
 
     def send(self, kind, **values):
+        """Advance the fixture revision only after the CLI accepts an event."""
         self.state = self.cli(["apply", self.ledger, "--revision",
                                str(self.state["revision"])], self.event(kind, **values))
         return self.state
 
     def reject(self, kind, **values):
+        """Require an explicit protocol failure without advancing fixture state."""
         return self.cli(["apply", self.ledger, "--revision",
                          str(self.state["revision"])], self.event(kind, **values), ok=False)
 
@@ -85,13 +95,71 @@ class ReviewLedgerTests(unittest.TestCase):
                   severity="High", evidence=["Compared fixture against its requirement"])
 
     def fix(self, result="applied"):
+        """Give every attempt distinct file bytes so applied-fix checks see a real delta."""
         self.send("start_fix", findings=["F001"], files=["app.txt"])
         (self.root / "app.txt").write_text(f"fixed {self.state['revision']}\n")
         self.send("fix_done", results={"F001": {"result": result, "evidence": "Edited fixture"}},
                   checks=CHECKS)
         self.send("fixes_reviewed", passes=PASSES)
 
+    def test_ledger_commands_from_subdirectories(self):
+        """Changing the launch directory must not select a different run."""
+        nested = self.root / "source folder"
+        nested.mkdir()
+        self.init()
+        before = self.state["snapshot"]
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        for directory in (self.root, nested):
+            self.cwd = directory
+            for ledger in (self.ledger, str(Path(self.ledger).relative_to(self.root))):
+                with self.subTest(directory=directory, ledger=ledger):
+                    report = self.cli(["status", ledger])
+                    self.assertEqual(report["ledger"], self.ledger)
+                    self.assertEqual(report["revision"], self.state["revision"])
+                    self.assertFalse(report["drift"])
+                    self.state = self.cli(
+                        ["apply", ledger, "--revision", str(self.state["revision"])],
+                        self.event("stop", outcome="interrupted"))
+                    self.assertEqual(self.state["outcome"], "interrupted")
+                    self.state = self.cli(
+                        ["apply", ledger, "--revision", str(self.state["revision"])],
+                        self.event("resume"))
+                    self.assertEqual(self.state["outcome"], "running")
+                    differences = self.cli(["diff", ledger, "--from", before])
+                    self.assertEqual(len(differences), 1)
+                    self.assertEqual(differences[0]["file"], "app.txt")
+                    self.assertIn("-before", differences[0]["diff"])
+                    self.assertIn("+fixed", differences[0]["diff"])
+
+    def test_ledger_paths_reject_outside_worktree(self):
+        """Root-relative lookup must not admit traversal or another worktree."""
+        nested = self.root / "source"
+        nested.mkdir()
+        self.init()
+        relative = Path(self.ledger).relative_to(self.root)
+        self.cwd = nested
+        for ledger in (str(Path("..") / relative),
+                       str(self.root.parent / relative), str(nested / relative)):
+            with self.subTest(ledger=ledger):
+                error = self.cli(["status", ledger], ok=False)
+                self.assertIn("Ledger must be", error)
+
+    def test_ledger_paths_reject_symlink_run(self):
+        """A valid-looking storage path cannot alias a run through a symlink."""
+        self.init()
+        alias = self.root / ".review-loop" / "alias"
+        alias.symlink_to(Path(self.ledger).parent)
+        for ledger in (alias / "REVIEW_LEDGER.json",
+                       alias.relative_to(self.root) / "REVIEW_LEDGER.json"):
+            with self.subTest(ledger=ledger):
+                error = self.cli(["status", str(ledger)], ok=False)
+                self.assertIn("Symlink not allowed", error)
+
     def test_verified_fix_then_final_full_review(self):
+        """Completion needs both verified correction and a subsequent whole-scope review."""
         self.init()
         self.review()
         self.finding()
@@ -108,6 +176,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["findings"]["F001"]["disposition"], "fixed")
 
     def test_inner_limit_stops_whole_run(self):
+        """Unused outer allowance cannot bypass an exhausted correction sub-loop."""
         self.init("--max-fix-cycles", "1", "--max-loops", "5")
         self.review()
         self.finding()
@@ -121,6 +190,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["findings"]["F001"]["disposition"], "fix_failed")
 
     def test_inner_retries_do_not_start_an_outer_review(self):
+        """Repeated correction attempts belong to the review that found the issue."""
         self.init()
         self.review()
         self.finding()
@@ -134,6 +204,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"][0]["cycles"]), 2)
 
     def test_outer_limit_cannot_claim_final_confirmation(self):
+        """A focused review alone cannot certify the entire scope after the last loop."""
         self.init("--max-loops", "1")
         self.review()
         self.finding()
@@ -145,6 +216,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertIn("Final full-scope", self.state["stop_reason"])
 
     def test_no_fixes_and_accepted_uncertainty(self):
+        """Accepting uncertainty leaves a reported exception, not a clean result."""
         self.init()
         self.review()
         self.finding()
@@ -155,6 +227,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["loops"][0]["cycles"], [])
 
     def test_duplicate_suppression_and_reopening(self):
+        """Repeated observations preserve suppression until an explicit new decision."""
         self.init()
         self.review()
         self.finding()
@@ -168,6 +241,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("advance")
 
     def test_failed_review_and_unverified_fix_are_not_clean(self):
+        """Worker failure or failed checks must not become successful review evidence."""
         self.init()
         self.send("start_review")
         self.reject("review_done", passes=[{**PASSES[0], "result": "failed"}], checks=CHECKS)
@@ -186,6 +260,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("advance")
 
     def test_new_regression_validated_within_inner_cycle(self):
+        """A correction regression must be adjudicated before another fix begins."""
         self.init()
         self.review()
         self.finding()
@@ -201,6 +276,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"][0]["cycles"]), 2)
 
     def test_resume_and_external_drift(self):
+        """Resumption keeps allowance use; changed evidence requires a counted review."""
         self.init()
         self.send("start_review")
         self.send("stop", outcome="interrupted")
@@ -214,6 +290,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"]), 2)
 
     def test_interrupted_fix_resumes_without_refunding_cycle(self):
+        """Declared partial edits remain recoverable without granting a free fix attempt."""
         self.init()
         self.review()
         self.finding()
@@ -228,6 +305,7 @@ class ReviewLedgerTests(unittest.TestCase):
                   checks=CHECKS)
 
     def test_stop_cannot_launder_stale_review(self):
+        """Stopping after external edits must not relabel an old review as current."""
         self.init()
         self.send("start_review")
         (self.root / "app.txt").write_text("changed\n")
@@ -239,6 +317,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"]), 2)
 
     def test_run_isolation_and_active_writer_exclusion(self):
+        """Runs share neither findings nor active write authority, even in one worktree."""
         self.init()
         first = self.ledger
         self.cli(["init", "--objective", "Other review", "--scope", "repository"], ok=False)
@@ -250,6 +329,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.cli(["status", first])["outcome"], "completed")
 
     def test_revision_and_reason_are_required(self):
+        """Stale writers and unexplained decisions cannot update durable history."""
         self.init()
         self.send("start_review")
         self.cli(["apply", self.ledger, "--revision", "0"], self.event("stop", outcome="failed"),
@@ -258,6 +338,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("stop", outcome="completed")
 
     def test_snapshots_capture_dirty_untracked_deleted_and_symlink(self):
+        """Coverage follows Git enumeration without reading ignored or symlink targets."""
         (self.root / "new file.txt").write_text("untracked\n")
         (self.root / "ignored.txt").write_text("excluded\n")
         (self.root / "link").symlink_to("missing-target")
@@ -272,6 +353,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(any(name.startswith(".review-loop/") for name in files))
 
     def test_unplanned_edits_and_index_changes_rejected(self):
+        """A declared correction cannot legitimize unrelated files or staging changes."""
         self.init()
         self.review()
         self.finding()
@@ -287,6 +369,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("fix_done", results=results, checks=CHECKS)
 
     def test_snapshot_diff_and_corrupt_object(self):
+        """Saved deltas must remain inspectable, and damaged evidence must fail loudly."""
         self.init()
         before = self.state["snapshot"]
         self.review()
@@ -301,6 +384,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.cli(["status", self.ledger], ok=False)
 
     def test_atomic_failure_preserves_previous_ledger(self):
+        """A failed replacement must leave the last durable record and no pending file."""
         path = self.root / "record.json"
         path.write_bytes(b"old")
         with patch("review_ledger.os.replace", side_effect=OSError("fixture failure")):
@@ -310,6 +394,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob(".pending-*")))
 
     def test_invalid_limits_and_storage_symlinks(self):
+        """Invalid initialization must not enable unbounded work or redirected storage."""
         self.cli(["init", "--objective", "Fixture", "--scope", "repository",
                   "--max-loops", "0"], ok=False)
         (self.root / ".review-loop").rename(self.root / "storage")
@@ -317,6 +402,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.cli(["init", "--objective", "Fixture", "--scope", "repository"], ok=False)
 
     def test_applied_fix_requires_actual_edits(self):
+        """An agent's applied verdict is insufficient when the snapshot has no delta."""
         self.init()
         self.review()
         self.finding()
@@ -326,6 +412,7 @@ class ReviewLedgerTests(unittest.TestCase):
                     checks=CHECKS)
 
     def test_malformed_event_and_ledger_are_explicit_failures(self):
+        """Bad input or damaged history must surface as errors, not empty clean runs."""
         self.init()
         self.cli(["apply", self.ledger, "--revision", "0"], ["not an event"], ok=False)
         self.reject("start_review", unexpected=True)
@@ -334,6 +421,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.cli(["status", self.ledger], ok=False)
 
     def test_symlink_fix_declaration_and_parent_are_rejected(self):
+        """Declared targets cannot escape through symlinks or parent traversal."""
         (self.root / "link").symlink_to("app.txt")
         self.init()
         self.review()
@@ -343,6 +431,10 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("start_fix", findings=["F001"], files=["../outside"])
 
     def test_unsupported_file_initialization_does_not_leave_a_run(self):
+        """Failed capture must not leave a resumable run.
+
+        Replace a tracked file because Git may omit untracked special files.
+        """
         (self.root / "app.txt").unlink()
         os.mkfifo(self.root / "app.txt")
         self.cli(["init", "--objective", "Fixture", "--scope", "repository"], ok=False)
@@ -350,6 +442,7 @@ class ReviewLedgerTests(unittest.TestCase):
                          [self.root / ".review-loop" / ".lock"])
 
     def test_lock_blocks_concurrent_updates(self):
+        """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()
         with (self.root / ".review-loop" / ".lock").open("a") as handle:
             review_ledger.fcntl.flock(handle, review_ledger.fcntl.LOCK_EX)
@@ -357,11 +450,13 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("start_review")
 
     def test_unpopulated_submodule_is_explicitly_unsupported(self):
+        """Index gitlinks must fail even when no submodule directory can be inspected."""
         with patch("review_ledger.git", return_value=b"160000 abc 0\tvendor\0"):
             with self.assertRaisesRegex(review_ledger.LedgerError, "Submodules"):
                 review_ledger.snapshot(self.root)
 
     def test_replay_rejects_mismatched_evidence_snapshot(self):
+        """Loading history must enforce snapshot rules, not merely validate event shapes."""
         self.init()
         self.review()
         self.finding()
@@ -374,6 +469,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.cli(["status", self.ledger], ok=False)
 
     def test_executable_regression_and_persistent_final_report(self):
+        """A durable success report must survive a real failing-then-passing correction."""
         app = self.root / "boundary.py"
         app.write_text("def allowed(value):\n    return value > 0\n")
         self.init()
