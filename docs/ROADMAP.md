@@ -13,6 +13,21 @@
 
 ## Next
 
+### Review workflow
+
+The Phase 1
+[`review-validate-fix-loop` skill](review-validate-fix-loop-design.md)
+reuses `review-code`, validates findings before fixing them, and tracks
+decisions and progress in a durable per-run `REVIEW_LEDGER`. It includes
+autonomous decisions, subagents, nested fix/review-fixes cycles, separate
+outer and inner loop limits, and invocation-only parameters. Exhausting
+the inner limit with actionable issues stops the whole run. Cost budgeting
+is required follow-up work; per-phase model and effort options are deferred.
+The skill and ledger helper are implemented. Supervised cross-harness
+evaluation remains separate from automated ledger checks.
+
+### Rule candidates
+
 The highest-value, least-ambiguous candidates, each with enough detail to
 implement directly:
 
@@ -97,6 +112,7 @@ repo's own multi-line commit style.
 
 ## Open
 
-Not decided yet which "Next" item to build first, or whether to instead
-spend that effort upgrading `/review-code` with the multi-pass review
-methodology the PR-review-method group above describes.
+The [review-loop delivery phases](review-validate-fix-loop-design.md#delivery-phases)
+separate initial implementation choices, required cost-budget follow-up,
+and optional enhancements. Priority relative to the rule candidates above
+remains undecided.

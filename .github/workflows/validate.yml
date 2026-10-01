@@ -24,7 +24,7 @@ jobs:
 
       - name: Check hook script syntax
         run: |
-          for f in hooks/scripts/*.py hooks/rules/*.py; do
+          for f in hooks/scripts/*.py hooks/rules/*.py scripts/*.py; do
             python3 -m py_compile "$f" || exit 1
             echo "$f OK"
           done
@@ -50,6 +50,9 @@ jobs:
 
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
+
+      - name: Run review-ledger self-check
+        run: python3 scripts/review_ledger_self_check.py
 
       - name: Check skill frontmatter
         run: |
