@@ -11,6 +11,7 @@ any individual project's config.
   - [Codex](#codex)
   - [GitHub Copilot CLI](#github-copilot-cli)
 - [Hooks](#hooks)
+  - [Claim evidence guard](#claim-evidence-guard)
   - [Codex hook compatibility](#codex-hook-compatibility)
   - [Copilot hook compatibility](#copilot-hook-compatibility)
 - [Rules](#rules)
@@ -129,6 +130,122 @@ copilot plugin marketplace remove ioncache-ai-tools
 | `rule_engine.py PreToolUse` | PreToolUse | Runs every `hooks/rules/*` rule registered for this event (deny or rewrite) |
 | `rule_engine.py UserPromptSubmit` | UserPromptSubmit | Runs every `hooks/rules/*` rule registered for this event (injects reminders) |
 | `block_emdash_turn.py` | Stop | Blocks the turn if the reply contains an em-dash |
+| `claim_evidence.py` | Prompt, tool, lifecycle, and Stop events | Enforces read boundaries, tracks complete reader output, and requires exact-artifact review checkpoints |
+
+### Claim evidence guard
+
+This guard separates source delivery from semantic review. It mechanically
+checks complete, current source coverage and a review record for the exact
+outgoing content. It does not prove that a statement follows from its evidence.
+Load the [claim-evidence skill](skills/claim-evidence/SKILL.md) for the workflow
+and review JSON format.
+
+The guard is enabled by default. Supported edits require a checkpoint even
+when they contain only code: every outgoing line must be classified as
+behavioral or non-behavioral. This deliberately avoids guessing which lines
+contain comments or documentation in an arbitrary language. A reviewer must
+justify non-behavior classifications; the hook cannot establish their truth.
+Use the normal [disable configuration](#disabling-a-rule) with ID
+`claim-evidence` to disable the whole guard, including reminders and Stop checks.
+This ID belongs to a standalone hook, not a file in `hooks/rules/`.
+
+| Read case | Policy |
+| --- | --- |
+| At most 400 physical lines | Native read requests must omit ranges, including an explicit start at line 1 |
+| More than 400 lines, supported Python syntax | Ranges must exactly match parser-produced units or the entire file |
+| Other languages or unsupported syntax | Whole-file evidence reads; no guessed or brace-counted units |
+| Search, diff, native file read, or arbitrary shell output | Discovery only; no ledger coverage |
+| Bounded evidence-reader pages | Coverage only after every page from the same snapshot is delivered intact |
+
+A physical line ends at LF; a final nonempty unterminated sequence also counts.
+CRLF does not add another line. Python units include complete function,
+async-function, and class nodes, including decorators, plus complete top-level
+statements. Nested callables can be read independently but do not establish
+coverage for their enclosing function. Lambdas are covered through their
+enclosing supported unit. A conditional or loop inside a function is not an
+independent unit. Bare-CR Python source requires a whole-file read.
+
+Resolve `hooks/scripts/claim_evidence.py` from the installed plugin, not the
+consuming project. Its `units` command reports exact unit IDs and a source hash.
+`read` defaults to the entire file, including files larger than a host's display
+limit. `--unit START:END` selects a parser-defined unit; `--page N --sha256 HASH`
+continues a logical read without trusting a guessed range. Each page contains
+at most 2,000 source characters. Read and inventory inputs are UTF-8 text,
+limited to 4 MiB; oversized or binary sources fail explicitly. A readable
+empty file has zero lines and one empty delivery page.
+
+The first unsupported-by-a-checkpoint edit is denied and its normalized
+request is captured in a private JSON file. `prepare REQUEST.json` inventories
+all outgoing content and returns paged output, with a hash and page count.
+Complete every inventory page before reviewing it. `approve REQUEST.json
+--review REQUEST.review.json` submits the classifications and evidence.
+Approval is recorded only after the matching helper response arrives intact.
+Running these commands outside an active host grants neither coverage nor
+approval. Review files beside captured requests are exempt from edit gates,
+including native patches, so preparing a review does not recursively require
+another review.
+
+Every inventory line must be classified exactly once. Behavioral claims quote
+outgoing text and identify complete source units, current hashes, decisive
+lines, and a supporting rationale. Non-behavior classifications require a
+rationale and no claims. Metadata records a reviewer identity, but does not
+authenticate an independent reviewer or automatically run one. Use a separate
+reviewer where practical. For changed behavior, make the code-only edit,
+reread the resulting code, then add prose.
+
+Supported write surfaces are `Write`, `Edit`, `MultiEdit`, and `apply_patch`,
+including their translated Copilot equivalents. The shell gate recognizes
+direct `git commit` and `gh pr create`/`new`/`edit`/`comment` calls. It checks
+literal message text, message/body files, and the staged diff for commits.
+Commit forms must use explicit messages and the existing index, not automatic
+staging, path selection, message reuse, or an editor. PR creation requires an
+explicit title and body. Chained commands, shell expansion, stdin bodies, and
+generated or interactive text are rejected. Some uncommon options, metadata-only
+PR edits, and special characters in literal arguments are conservatively
+rejected; this is not an exhaustive shell interpreter.
+
+Coverage and approvals live in a private SQLite ledger under
+`~/.cache/ioncache-ai-tools/claim-evidence/`, scoped by session, working directory,
+and supplied agent identity. Exact artifact fingerprints include target-file
+state and file-backed publication text. Source hashes are rechecked at approval
+and retry. Compaction, startup/resume, session end, and subagent-start events
+clear receipts and captured request/review JSON across that session, including
+other working directories and agents. Disabling the
+guard also clears them on the next event. Empty database files and directories
+remain; an abrupt exit can leave private state until a lifecycle reset.
+
+Claude uses serialized `PostToolBatch` output, not its earlier structured
+`PostToolUse` output, to account for delivered pages. Codex and Copilot adapters
+use their model-facing post-tool output. Missing hooks and unrecognized or
+truncated output cannot grant a receipt. Claude installations
+need `PostToolBatch` support. Source reads by other tools are intentionally not
+credited, even if complete; using the helper first avoids duplicate reads.
+
+Known limits and costs:
+
+- Stop requests one correction for an unreviewed final answer, then permits
+  completion. It does not buffer chat or retract already displayed prose.
+- Claim-to-source mapping, non-behavior classifications, dependency coverage,
+  and semantic correctness remain reviewer responsibilities. Current local
+  source is not proof of deployed behavior, a PR's remote state, or historical
+  intent. External API and decision-record verification remains a skill step.
+- Unknown tools, shell scripts, aliases, API publications, tool-output rewrites
+  by other hooks, and later host-side truncation are outside the guarantee.
+  Checks cover the pre-tool snapshot, not concurrent changes made after it.
+  Hooks can fail open on host timeouts or fail to load; this is not a security
+  boundary or an authenticated audit log.
+- Agent isolation depends on host-supplied identity. Copilot tool payloads
+  need not carry it; its adapter clears coverage at reported subagent start
+  and stop. Unreported or overlapping subagents cannot be reliably isolated.
+- There is no automatic language-server or code-graph integration, semantic
+  review service, buffered host wrapper, or automatic pre-PR branch-wide prose
+  scan. Commit inventory includes staged changes; PR inventory covers outgoing
+  title/body text.
+- Source tokens scale with distinct required units and rereads after
+  invalidation. Each 2,000-character page takes a helper call. Every supported
+  edit adds inventory delivery and review, including non-behavioral edits.
+  Hashing/parsing occurs locally; no parser dependency or network service is
+  installed. There is no parser cache in this implementation.
 
 ### Codex hook compatibility
 
@@ -154,8 +271,8 @@ are loaded once per patch, not once per target.
 Only added lines are checked for em-dashes. A required rewrite becomes a
 denial asking the agent to correct the patch; context and removed lines
 are never rewritten. Safe calls return no permission override. Bash
-keeps the shared shell checks, and `Stop` still calls the existing script
-directly with Codex's `last_assistant_message`.
+keeps the shared shell checks. `Stop` runs the shared punctuation and evidence
+checks through the adapter with Codex's `last_assistant_message`.
 
 Adapter failures log to stderr and exit with code 2, which blocks the
 prompt or tool call. The shared engine still isolates individual rule
@@ -182,8 +299,10 @@ manifest's order. Rules and skills stay shared.
 | --- | --- |
 | `userPromptTransformed` | Runs the `UserPromptSubmit` hooks and appends their reminders to the transformed prompt, preserving its existing content |
 | `preToolUse` | Translates native tool names/arguments, runs the `PreToolUse` hooks, and returns native denial or argument-rewrite output |
+| `postToolUse` | Supplies model-facing tool output to the evidence ledger and returns receipt or failure guidance |
 | `agentStop` | Reads the current final response from Copilot's transcript, then runs the shared `Stop` hook |
-| `sessionEnd` | Removes that Copilot session's pending-question marker |
+| `sessionStart`, `preCompact`, `subagentStart`, `subagentStop` | Invalidates evidence receipts and captured review requests |
+| `sessionEnd` | Clears evidence state and removes that Copilot session's pending-question marker |
 
 Copilot drops command-hook output from `userPromptSubmitted`, so simply
 installing the Claude hook manifest would lose all prompt reminders.
@@ -531,6 +650,7 @@ repo you did not write.
 | `unit-tests` *(opinionated, Vitest)* | BDD `describe`/`it`, AAAR comments |
 | `jsdoc` *(opinionated, JS/TS)* | Required tags, typedef rules, no inline `Object` |
 | `security` *(opinionated, Fastify/MongoDB examples)* | Validate at the edge, sanitize input, secrets in env |
+| `claim-evidence` | Complete-source reads, claim-to-evidence review records, and exact-artifact checkpoints |
 
 ## Local development
 
@@ -541,6 +661,7 @@ python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
+python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 ```

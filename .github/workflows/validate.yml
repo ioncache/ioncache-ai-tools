@@ -48,6 +48,9 @@ jobs:
       - name: Run Codex adapter self-check
         run: python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 
+      - name: Run claim-evidence self-check
+        run: python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
+
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
 

@@ -29,11 +29,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/block_emdash_turn.py\"",
-            "timeout": 5
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" Stop",
+            "timeout": 10
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" PostToolUse", "timeout": 30}]}
+    ],
+    "PreCompact": [
+      {"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" PreCompact", "timeout": 10}]}
+    ],
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" SessionStart", "timeout": 10}]}
+    ],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" SessionEnd", "timeout": 3}]}
+    ],
+    "SubagentStart": [
+      {"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/scripts/codex_adapter.py\" SubagentStart", "timeout": 10}]}
     ]
   }
 }
