@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .worktrees/
+.review-loop/
 .claude/*.local.json
 .claude/*.local.md
 .github/copilot/*.local.json

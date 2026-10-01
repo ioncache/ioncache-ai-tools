@@ -431,10 +431,48 @@ picker. In Copilot, ask to load the named skill explicitly.
 | Workflow skill | Description |
 | ------- | ------------ |
 | `verify-unresolved-pr-comments` | Triage table of unresolved PR review feedback. Read-only |
-| `review-code` | Full-pass review: necessity, contracts, standards, correctness |
+| `review-code` | Read-only review with independent standards passes and cross-cutting correctness |
+| `review-validate-fix-loop` | Autonomous nested review/fix loops with a per-run ledger, finite limits, resumption, and reports |
 | `investigate` | Read-only trace of how a feature or system works |
 | `triage-errors` | Fix a batch of failures by root cause, not one by one |
 | `create-worktree` | Wraps the git worktree command and applies the repo's `.worktree-setup.json` (untracked local config, generated caches, post-create commands); writes the file with generic defaults on first use |
+
+### Review and fix loops
+
+Explicitly request `review-validate-fix-loop` with a target (`repository`,
+`branch`, PR reference, or paths), optional `--max-loops N` and
+`--max-fix-cycles N`, or `--resume .review-loop/<run-id>/REVIEW_LEDGER.json`.
+Both limits default to 3. With no target, the skill uses the active PR or
+branch changes, including local edits. Parameters apply to one run; there
+is no permanent configuration or per-phase model/effort selection.
+
+The coordinator reviews, validates, fixes, and independently reviews fixes.
+Fix/review-fixes repeats inside the current outer loop. If the inner limit
+leaves actionable issues, the entire run stops. Full-scope confirmation
+after corrections consumes another outer loop; exhausting the outer limit
+before that confirmation is incomplete, not success.
+
+Decisions are autonomous and include reasons and evidence. Accepted valid
+or uncertain issues remain visible as exceptions. Normal permissions still
+apply; the loop does not authorize commits, pushes, PR comments, or deployment.
+Standalone `review-code` remains read-only.
+
+Each run stores its own `.review-loop/<run-id>/REVIEW_LEDGER.json`, with
+snapshot objects alongside it. Iterations share that history; another run
+does not inherit it, and resumption across sessions preserves it. The Python
+helper checks state transitions, counters, file snapshots, and expected
+revisions. It does not prove that agent judgments are correct.
+
+Only one running/resumable run is allowed per worktree. Snapshot files may
+contain source; do not commit or upload run artifacts. Ignored files and
+external systems are not snapshotted. Submodules/special files are unsupported,
+and symlink paths cannot be declared as fix targets. Errors are explicit,
+not clean reviews. Host-agent orchestration is best effort, not a hard guard.
+
+See the [workflow](skills/review-validate-fix-loop/WORKFLOW.md),
+[ledger CLI protocol](skills/review-validate-fix-loop/LEDGER.md), and
+[phased design](docs/review-validate-fix-loop-design.md). Cost budgeting is
+required Phase 2 work; Phase 1 measures neither spending nor tokens.
 
 ### `.worktree-setup.json`
 
@@ -504,6 +542,7 @@ python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
+python3 scripts/review_ledger_self_check.py
 ```
 
 These checks run in CI (see `.github/workflows/validate.yml`). The second
