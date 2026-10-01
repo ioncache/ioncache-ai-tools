@@ -28,6 +28,21 @@
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" sessionEnd",
         "timeoutSec": 5
       }
+    ],
+    "postToolUse": [
+      {"type": "command", "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" postToolUse", "timeoutSec": 30}
+    ],
+    "preCompact": [
+      {"type": "command", "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" preCompact", "timeoutSec": 10}
+    ],
+    "sessionStart": [
+      {"type": "command", "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" sessionStart", "timeoutSec": 10}
+    ],
+    "subagentStart": [
+      {"type": "command", "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" subagentStart", "timeoutSec": 10}
+    ],
+    "subagentStop": [
+      {"type": "command", "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" subagentStop", "timeoutSec": 10}
     ]
   }
 }
