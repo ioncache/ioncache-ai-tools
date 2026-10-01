@@ -14,7 +14,7 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
 - Claude Code uses `hooks/hooks.json`, which wires `UserPromptSubmit`,
-  `PreToolUse`, and `Stop`. Codex uses `.codex-plugin/plugin.json` and
+  tool, coverage, lifecycle, and `Stop` events. Codex uses `.codex-plugin/plugin.json` and
   `hooks/codex-hooks.json`; Copilot uses `.github/plugin/plugin.json` and
   `hooks/copilot-hooks.json`. Their adapters share `hook_adapter_common.py`
   for ordered execution of the shared manifest and patch parsing.
@@ -36,6 +36,12 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
   hooks handle question state, documentation reminders, optional graphify
   context, and final-response punctuation.
+- `claim_evidence.py` is a stateful hook, not an engine rule. It shares
+  disable ID `claim-evidence` across hosts. Only intact helper output grants
+  source or inventory coverage: Claude uses `PostToolBatch`; the adapters
+  use model-facing post-tool results. Approval requires all inventory pages,
+  complete source evidence, and a delivered approval receipt. Source units,
+  review validation, and private transactional storage live in `evidence_*.py`.
 - `skills/*/SKILL.md` contains both workflow and behavior instructions with
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
@@ -59,6 +65,7 @@ python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
+python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 ```

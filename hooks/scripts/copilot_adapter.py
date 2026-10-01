@@ -20,6 +20,7 @@ def shared_input(data):
         'session_id': f'copilot-{session_id}',
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),
+        'agent_id': data.get('agentId'),
     }
 
 
@@ -53,10 +54,22 @@ def normalized_tools(data):
         raise ValueError(f'{name} toolArgs must be an object')
     if name in ('bash', 'powershell'):
         return [('Bash', args)]
+    if name == 'view' or (name == 'str_replace_editor' and args.get('command') == 'view'):
+        normalized = {'file_path': args['path']}
+        if args.get('view_range') is not None:
+            start, end = args['view_range']
+            normalized['offset'] = start
+            if end != -1:
+                normalized['limit'] = end - start + 1
+        return [('Read', normalized)]
     if name == 'create' or (name == 'str_replace_editor' and args.get('command') == 'create'):
         return [('Write', {'file_path': args['path'], 'content': args['file_text']})]
     if name == 'edit' or (name == 'str_replace_editor' and args.get('command') in ('str_replace', 'insert')):
-        return [('Edit', {'file_path': args['path'], 'new_string': args.get('new_str', '')})]
+        return [('Edit', {
+            'file_path': args['path'], 'new_string': args.get('new_str', ''),
+            'old_string': args.get('old_str', ''),
+            **{key: args[key] for key in ('insert_line', 'replace_all', 'command') if key in args},
+        })]
     return [(name, args)]
 
 
@@ -131,13 +144,35 @@ def run_hook(event, data):
         return transform_prompt(data)
     if event == 'preToolUse':
         return pre_tool_use(data)
+    if event == 'postToolUse':
+        messages = []
+        for name, args in normalized_tools(data):
+            for output in run_shared_hooks('PostToolUse', {
+                **hook_input, 'tool_name': name, 'tool_input': args,
+                'tool_response': data['toolResult'], 'evidence_model_output': True,
+            }):
+                context = output.get('hookSpecificOutput', {}).get('additionalContext')
+                if context:
+                    messages.append(context)
+        return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
         outputs = run_shared_hooks('Stop', {
             **hook_input, 'last_assistant_message': final_response(data),
         })
+        for output in outputs:
+            if output.get('systemMessage'):
+                print(output['systemMessage'], file=sys.stderr)
         return next((output for output in outputs if output.get('decision') == 'block'), None)
     if event == 'sessionEnd':
         Path(f'/tmp/.ioncache-pending-question-{hook_input["session_id"]}').unlink(missing_ok=True)
+        run_shared_hooks('SessionEnd', hook_input)
+        return None
+    if event in ('sessionStart', 'preCompact', 'subagentStart', 'subagentStop'):
+        shared_event = {
+            'sessionStart': 'SessionStart', 'preCompact': 'PreCompact',
+            'subagentStart': 'SubagentStart', 'subagentStop': 'SubagentStart',
+        }[event]
+        run_shared_hooks(shared_event, hook_input)
         return None
     raise ValueError(f'unsupported Copilot event: {event}')
 
