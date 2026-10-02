@@ -60,11 +60,15 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 | Questions first | Blocks edits after a question until a subsequent non-question prompt |
 | Documentation first | Reminds the agent to verify external API and tool details |
 | Scope and current state | Reminds the agent to do only the requested work and check status before claiming it |
-| Process termination | Requires permission before recognized process-kill commands |
+| Process termination | Blocks recognized process-kill commands until the rule is disabled |
 | Lockfiles | Blocks direct edits; use the package manager |
 | Worktrees | Directs creation through the setup-aware `create-worktree` skill |
 | Punctuation | Fixes or rejects em-dashes |
 | Graphify | Prefers an existing project knowledge graph for discovery |
+
+While a question is pending, GraphQL calls with `operationName`, body files,
+duplicate queries, or unrecognized options are blocked. Use one inline query.
+Patches with ambiguous file-header whitespace are rejected.
 
 ### Claim evidence guard
 

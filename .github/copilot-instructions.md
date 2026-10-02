@@ -157,6 +157,8 @@ construct the character with `chr(0x2014)` to pass this source check.
   camelCase keys. Keep self-check config isolated from all three real hosts.
 - Reuse `tokenize_command`, `split_into_simple_commands`, and `skip_wrappers`
   for checks that depend on executable position or related options/targets.
+  Use `is_shell_operator` for punctuation comparisons: decoded shell words
+  can contain the same characters without being operators.
   `normalize_shell_command` is the older text-normalization helper, not a
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an

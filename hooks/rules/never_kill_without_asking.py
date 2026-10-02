@@ -1,29 +1,8 @@
-"""Denies kill/pkill/killall unless the user has explicitly said yes
-first, even for the assistant's own leftover process.
+"""Blocks recognized process-kill commands while enabled.
 
-A regex-based version of this rule (matching a boundary-anchored
-`(kill|pkill|killall)` against the raw or backslash/quote-normalized
-command text) went through several rounds of bypass fixes and each one
-opened a new false positive or false negative: a path prefix added to
-catch `/bin/kill` also matched `ls /tmp/kill` (an argument, not an
-invocation); a boundary character list added to catch redirection
-missed the next one; quote-stripping added to catch `'kill'` exposed
-operator characters that were safely inside the quotes. None of that is
-fixable by patching the regex further, a flat-text match fundamentally
-can't tell "this word is the command being run" from "this word is
-somewhere in the text". Real command tokenization (Python's shlex, which
-JS has no equivalent of) can, so this rule is scripted rather than a
-declarative regex pattern.
-
-Scope, by design: this guards against common invocation forms (a bare
-call, a path-qualified call, a wrapper like `timeout`/`nohup`), not every
-way `kill` could be smuggled past it. A deliberately obfuscated form (a
-kill payload inside a `bash -c`/`sh -c` string, a raw newline splitting
-one command into two) is a known, accepted gap: the point of this rule
-is to stop the agent from casually killing a process on its own
-judgment, not to withstand deliberate evasion, and chasing every such
-form trades a simple, readable check for one that's never actually
-complete either.
+Chat approval does not override this rule; allowing these commands requires
+disabling it in rule settings. Checks cover common direct, path-qualified,
+and wrapped invocations, not deliberately indirect shell scripts.
 """
 import os
 import sys
@@ -37,12 +16,9 @@ EVENT = 'PreToolUse'
 TOOL_NAMES = ['Bash']
 ACTION = 'deny'
 MESSAGE = (
-    'Killing a process is not a decision an agent makes on its own, even '
-    "for what looks like the agent's own leftover process. Never run "
-    'kill/pkill/killall without asking the user first, and wait for an '
-    'explicit yes. If this is genuinely getting in your way, disable this '
-    'rule via .claude/ioncache-ai-tools.local.json or Codex config (see '
-    "README's Disabling a rule section)."
+    'This rule blocks recognized kill/pkill/killall commands, even after chat approval. '
+    'The user must disable never_kill_without_asking in their rule settings to permit them '
+    '(see README: Disabling a rule).'
 )
 
 

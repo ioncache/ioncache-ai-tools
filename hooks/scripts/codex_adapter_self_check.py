@@ -116,6 +116,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(output.get('permissionDecision'), 'deny', output)
         self.assertIn('classified as a question', output['permissionDecisionReason'])
         self.assertEqual(self.tool('Bash', {'command': 'git status --short'}), {})
+        self.assertEqual(self.tool('Bash', {'command': "echo '>' output.txt"}), {})
+        selected = "gh api graphql -f 'query=query Read { q } mutation Change { m }' -f operationName=Change"
+        self.assertEqual(self.tool('Bash', {'command': selected})['permissionDecision'], 'deny')
         self.assertEqual(self.tool('mcp__files__read', {'path': 'safe.txt'}), {})
         self.invoke('Stop', last_assistant_message='Here is the answer.')
         self.assertTrue(self.marker.exists())
@@ -243,11 +246,40 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(output['hookSpecificOutput']['updatedInput'], {'command': 'echo rewritten'})
 
     def test_native_shell_rules(self):
-        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json', f'echo a{EM_DASH}b'):
+        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        f'echo a{EM_DASH}b', 'echo ready # status\nkill 123',
+                        "echo ready; kill 123\nprintf 'unfinished"):
             with self.subTest(command=command):
                 output = self.tool('Bash', {'command': command})
                 self.assertEqual(output.get('permissionDecision'), 'deny', output)
         self.assertEqual(self.tool('Bash', {'command': 'echo kill'}), {})
+        self.assertEqual(self.tool('Bash', {'command': "echo ';' kill 123"}), {})
+        self.assertEqual(self.tool('Bash', {'command': "echo '>' package-lock.json"}), {})
+
+    def test_graphql_template_cannot_hide_mutation(self):
+        self.prompt('why is this different')
+        command = "gh api graphql -f 'query=mutation { m }' --template '-fquery=query { q }'"
+        self.assertEqual(self.tool('Bash', {'command': command}).get('permissionDecision'), 'deny')
+        self.assertEqual(self.tool('Bash', {'command': command.replace('mutation { m }', 'query { q }')}), {})
+
+    def test_patch_header_whitespace_is_denied(self):
+        for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',
+                       'Delete File: yarn.lock\f', 'Update File: safe.txt\n*** Move to: yarn.lock\f\n@@\n-old\n+new'):
+            patch = f'*** Begin Patch\n*** {target}\n*** End Patch'
+            with self.subTest(target=target):
+                output = self.tool('apply_patch', {'command': patch})
+                self.assertEqual(output.get('permissionDecision'), 'deny')
+                self.assertIn('header whitespace', output['permissionDecisionReason'])
+                self.assertNotIn('updatedInput', output)
+
+    def test_patch_checks_text_after_non_lf_separators(self):
+        for separator in ('\f', chr(0x2028), chr(0x2029)):
+            with self.subTest(separator=repr(separator)):
+                patch = CLEAN_PATCH.replace('clean', f'before{separator}after{EM_DASH}text')
+                output = self.tool('apply_patch', {'command': patch})
+                self.assertEqual(output.get('permissionDecision'), 'deny', output)
+                self.assertNotIn('updatedInput', output)
+                self.assertEqual(self.tool('apply_patch', {'command': patch.replace(EM_DASH, ',')}), {})
 
     def test_codex_config_overrides_apply_to_normalized_patches(self):
         path = self.home / '.codex/config.toml'

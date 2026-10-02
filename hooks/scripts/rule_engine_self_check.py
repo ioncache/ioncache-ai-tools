@@ -129,8 +129,30 @@ def check_rule_discovery():
             check_discovery_results(rules_dir)
 
 
+def check_shell_tokens():
+    operators = {';', '&&', '||', '|', '&', '(', ')', '((', '))', '\n',
+                 '>', '>>', '<', '<<', '<<<', '<<-', '>&', '<&', '<>', '>|', '&>', '&>>'}
+    for operator in operators:
+        for quoted in (f"'{operator}'", f'"{operator}"'):
+            tokens = rule_engine.tokenize_command(f'echo {quoted}{operator}next')
+            assert tokens == ['echo', operator, operator, 'next'], tokens
+            assert not rule_engine.is_shell_operator(tokens[1], operators), (quoted, tokens)
+            assert rule_engine.is_shell_operator(tokens[2], operators), (quoted, tokens)
+    for command, expected in (
+        ('echo word#part # comment\nnext', ['echo', 'word#part', '\n', 'next']),
+        ("echo ''#part # comment\nnext", ['echo', '#part', '\n', 'next']),
+        (r'echo \#part', ['echo', '#part']),
+        ('''echo "one"'two'\\ three '' ""''', ['echo', 'onetwo three', '', '']),
+        ('echo word#part;next', ['echo', 'word#part', ';', 'next']),
+        ('echo "unterminated', ['echo', '"unterminated']),
+    ):
+        assert rule_engine.tokenize_command(command) == expected, command
+    assert rule_engine.split_into_simple_commands(['echo', ';', 'next']) == [['echo'], ['next']]
+
+
 def main():
     check_rule_discovery()
+    check_shell_tokens()
 
     # match_rule: always
     assert match_rule({'matcher': {'type': 'always'}}, {}) is True, 'always matcher should always match'
@@ -315,6 +337,19 @@ def main():
         ('true;\nkill 123', True, 'a newline after a semicolon'),
         ('true\n\nkill 123', True, 'blank lines between commands'),
         ('true &&(kill 123)', True, 'adjacent control operators'),
+        ('printf ready # status\nkill 123', True, 'a comment must preserve the following command boundary'),
+        ('# header\nkill 123', True, 'a comment before the first command'),
+        ('echo issue#42\nkill 123', True, 'a hash inside a word is not a comment'),
+        ('echo "quoted # text"\nkill 123', True, 'a quoted hash does not hide the next command'),
+        ("echo ready; kill 123\nprintf 'unfinished", True, 'a malformed suffix cannot hide an earlier command'),
+        ('echo ready&&kill 123\nprintf "unfinished', True, 'adjacent operators survive a malformed suffix'),
+        ("echo ';' kill 123\nprintf 'unfinished", False, 'malformed suffixes cannot turn literal separators into operators'),
+        ('echo ready # kill 123', False, 'a guarded word inside a comment'),
+        ("echo ';' kill 123", False, 'a quoted standalone separator is an argument'),
+        (r'echo \; kill 123', False, 'an escaped standalone separator is an argument'),
+        ('echo "&""&" kill 123', False, 'adjacent quoted fragments form one literal argument'),
+        ('echo "\n" kill 123', False, 'a quoted standalone newline is an argument'),
+        ("echo ';'; kill 123", True, 'a literal separator followed by a real separator'),
         ('echo "&&\nkill 123"', False, 'quoted multiline text is not a command'),
         ("echo '&&\n' kill 123", False, 'a quoted operator is not a separator'),
         ('echo "(kill -9 12345)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
@@ -369,6 +404,11 @@ def main():
         ('npm install', False, 'an unrelated Bash command'),
         (f'true &&\nsed -i s/a/b/ {lockfile_name}', True, 'multiline in-place edit'),
         (f'true;\ntee {lockfile_name}', True, 'newline after semicolon'),
+        (f'echo ready # status\nsed -i s/a/b/ {lockfile_name}', True, 'a comment before a lockfile mutation'),
+        (f'echo ">" {lockfile_name}', False, 'a quoted redirect is not a lockfile write'),
+        (f'echo \\> {lockfile_name}', False, 'an escaped redirect is not a lockfile write'),
+        (f'echo ">" > {lockfile_name}', True, 'a real redirect after a quoted argument'),
+        (f"echo ready; printf x>{lockfile_name}\nprintf 'unfinished", True, 'a malformed suffix cannot hide a lockfile redirect'),
         (f'echo "&&\nsed -i s/a/b/ {lockfile_name}"', False, 'quoted multiline text'),
         (f'timeout 5 sed -i s/a/b/ {lockfile_name}', True, 'a timeout wrapper around an in-place sed targeting a lockfile'),
         (f'perl -pi -e s/a/b/ {lockfile_name}', True, "perl's combined -pi in-place flag"),

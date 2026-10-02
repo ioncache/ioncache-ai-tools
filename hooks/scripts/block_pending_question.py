@@ -28,7 +28,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
+from rule_engine import is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
 
@@ -81,15 +81,15 @@ FILE_REDIRECT_OPERATORS = {">", ">>", ">|", "&>", "&>>", "<>"}
 
 
 def _redirects_to_a_file(simple_command):
-    if simple_command and simple_command[0] == "((":
+    if simple_command and is_shell_operator(simple_command[0], {"(("}):
         # Arithmetic evaluation: `>`/`<` are comparison operators here,
         # never a redirect.
         return False
     for i, token in enumerate(simple_command):
-        if token in FILE_REDIRECT_OPERATORS:
+        if is_shell_operator(token, FILE_REDIRECT_OPERATORS):
             if i + 1 < len(simple_command) and simple_command[i + 1] not in NULL_REDIRECT_TARGETS:
                 return True
-        elif token == ">&":
+        elif is_shell_operator(token, {">&"}):
             if i + 1 < len(simple_command):
                 target = simple_command[i + 1]
                 if target != "-" and not target.isdigit() and target not in NULL_REDIRECT_TARGETS:
@@ -113,26 +113,66 @@ def has_file_redirect(command):
     return any(_redirects_to_a_file(sc) for sc in split_into_simple_commands(tokens))
 
 GRAPHQL_FIELD_FLAGS = {"-f", "-F", "--raw-field", "--field"}
+GRAPHQL_VALUE_FLAGS = GRAPHQL_FIELD_FLAGS | {
+    "-H", "--header", "-t", "--template", "-q", "--jq", "-p", "--preview",
+    "--cache", "--hostname", "-X", "--method",
+}
+GRAPHQL_SWITCH_FLAGS = {
+    "-i", "--include", "--paginate", "--slurp", "--silent", "--verbose",
+    "--allow-escape-sequences",
+}
+GRAPHQL_REDIRECT_OPERATORS = FILE_REDIRECT_OPERATORS | {"<", "<<", "<<-", "<<<", ">&", "<&"}
+
+
+def _graphql_option(tokens, index):
+    token = tokens[index]
+    if is_shell_operator(token, GRAPHQL_REDIRECT_OPERATORS):
+        return ("redirect", tokens[index + 1], index + 2) if index + 1 < len(tokens) else None
+    flag, separator, value = token.partition("=")
+    if token[:2] in GRAPHQL_VALUE_FLAGS:
+        flag, value = token[:2], token[2:]
+        separator = bool(value)
+        value = value.removeprefix("=")
+    if flag in GRAPHQL_SWITCH_FLAGS:
+        return flag, value, index + 1
+    if flag not in GRAPHQL_VALUE_FLAGS:
+        return None
+    if not separator:
+        index += 1
+        if index >= len(tokens):
+            return None
+        value = tokens[index]
+    return flag, value, index + 1
 
 
 def _extract_graphql_query_document(simple_command):
-    """Extracts the value of a `query=...` field passed to `gh api
-    graphql` via `-f`/`-F`/`--raw-field`/`--field`, from one simple
-    command's real tokens rather than a regex anchored on one specific
-    shell-quoting style. `-f query='...'` (only the value quoted) and
-    `-f 'query=...'` (the whole `key=value` pair quoted together) are
-    both valid and tokenize to the exact same shape, a regex expecting
-    the literal text `query=` to appear unquoted matched the first form
-    and silently missed the second. Returns None if no such field is
-    found. Takes one simple command, not the whole compound command, so
-    a second `gh api graphql` call chained after a first one (`cmd1 &&
-    cmd2`) is extracted and checked independently rather than the first
-    match in the whole command winning and the second never being seen.
+    """Return an inline document only when no operation selector overrides it.
+
+    A selector can choose a later mutation. Without a full document parser,
+    selected operations remain unverified and must take the blocking path.
+    Unknown options, body files, and duplicate query fields are unverified too.
     """
-    for i, token in enumerate(simple_command):
-        if token in GRAPHQL_FIELD_FLAGS and i + 1 < len(simple_command) and simple_command[i + 1].startswith("query="):
-            return simple_command[i + 1][len("query="):]
-    return None
+    tokens = skip_wrappers(simple_command)[3:]
+    query = None
+    index = 0
+    while index < len(tokens):
+        if (tokens[index].isdigit() and index + 1 < len(tokens)
+                and is_shell_operator(tokens[index + 1], GRAPHQL_REDIRECT_OPERATORS)):
+            index += 1
+        option = _graphql_option(tokens, index)
+        if option is None:
+            return None
+        flag, field, index = option
+        if flag not in GRAPHQL_FIELD_FLAGS:
+            continue
+        name, separator, value = field.partition("=")
+        if separator and name == "operationName":
+            return None
+        if separator and name == "query":
+            if query is not None:
+                return None
+            query = value
+    return query
 
 
 def _strip_ignored_tokens(text):
