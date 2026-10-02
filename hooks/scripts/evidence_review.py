@@ -1,5 +1,6 @@
 """Exact outgoing-artifact inventories and structural claim review checks."""
 from pathlib import Path
+import re
 import subprocess
 
 from evidence_source import digest, encoded, source_snapshot, source_unit
@@ -8,6 +9,25 @@ from hook_adapter_common import patch_inputs
 from rule_engine import is_shell_operator, skip_wrappers, split_into_simple_commands, tokenize_command
 
 EDIT_TOOLS = {'Write', 'Edit', 'MultiEdit', 'apply_patch', 'Answer'}
+
+
+def review_metadata_request(data, store):
+    name, args = data['tool_name'], data['tool_input']
+    if name == 'apply_patch':
+        paths = [item['file_path'] for item in patch_inputs(args['command'])]
+    elif name in ('Write', 'Edit', 'MultiEdit'):
+        paths = [args['file_path']]
+    else:
+        return False
+    for path in paths:
+        destination = (Path(data['cwd']) / path).resolve()
+        if not re.fullmatch(r'[a-f0-9]{64}\.review\.json', destination.name):
+            return False
+        request = destination.with_name(destination.name.replace('.review.json', '.json'))
+        if destination.parent != store.requests or not request.is_file():
+            return False
+    store.validate_requests()
+    return bool(paths)
 
 
 def command_words(tokens):

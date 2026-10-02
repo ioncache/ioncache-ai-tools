@@ -25,9 +25,12 @@ import json
 import os
 import pathlib
 import re
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from evidence_review import review_metadata_request  # noqa: E402
+from evidence_store import EvidenceStore  # noqa: E402
 from rule_engine import is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
@@ -258,6 +261,17 @@ def is_mutating(tool_name, tool_input):
     return False
 
 
+def allows_review_metadata(data):
+    if data.get('tool_name') not in {'Write', 'Edit', 'MultiEdit', 'apply_patch'}:
+        return False
+    try:
+        with EvidenceStore(data) as store:
+            return review_metadata_request(data, store)
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+        print(f'pending-question: evidence review validation failed: {error}', file=sys.stderr)
+        return False
+
+
 def main():
     data = json.load(sys.stdin)
     session_id = data.get("session_id", "unknown")
@@ -269,6 +283,9 @@ def main():
         return
 
     if not is_mutating(tool_name, tool_input):
+        return
+
+    if allows_review_metadata(data):
         return
 
     print(
