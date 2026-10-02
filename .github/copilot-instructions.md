@@ -143,8 +143,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   paths are discovery failures, not empty rule sets. Discovery exceptions
   propagate to `main()`, which logs and exits 2; a readable empty directory
   or no enabled rules for an event remains valid. Engine-wide errors and
-  watchdog expiry also log and exit 2. See the
-  [rule-author and failure contracts](../README.md#authoring-rules).
+  watchdog expiry also log and exit 2.
   Shared adapter execution has an internal deadline before the
   native hook timeout (20 seconds for prompt/tool hooks, five for Stop).
 - Disable config is read fresh on every invocation. For each tool, resolve
