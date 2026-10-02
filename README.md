@@ -57,7 +57,7 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 
 | Guard | Effect |
 | --- | --- |
-| Questions first | Blocks edits after a question until a subsequent non-question prompt |
+| Questions first | Blocks project edits until a non-question prompt; permits private evidence-review records |
 | Documentation first | Reminds the agent to verify external API and tool details |
 | Scope and current state | Reminds the agent to do only the requested work and check status before claiming it |
 | Process termination | Blocks recognized process-kill commands until the rule is disabled |

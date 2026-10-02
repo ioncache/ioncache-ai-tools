@@ -4,16 +4,14 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import signal
 import sqlite3
 import sys
 
-from evidence_review import checked_reference, check_review, guarded_request, inventory
+from evidence_review import checked_reference, check_review, guarded_request, inventory, review_metadata_request
 from evidence_source import PAGE_CHARACTERS, check_native_read, digest, encoded, read_page, source_snapshot, unit_bounds
 from evidence_store import EvidenceStore, record_page, reference_key
-from hook_adapter_common import patch_inputs
 from rule_engine import get_disabled_rule_ids
 
 RULE_ID = 'claim-evidence'
@@ -127,25 +125,6 @@ def checkpoint(prepared, store):
     context = {'cwd': prepared['cwd'], 'store': store}
     for reference in receipt['references']:
         checked_reference(reference, context)
-
-
-def review_metadata_request(data, store):
-    name, args = data['tool_name'], data['tool_input']
-    if name == 'apply_patch':
-        paths = [item['file_path'] for item in patch_inputs(args['command'])]
-    elif name in ('Write', 'Edit', 'MultiEdit'):
-        paths = [args['file_path']]
-    else:
-        return False
-    for path in paths:
-        destination = (Path(data['cwd']) / path).resolve()
-        if not re.fullmatch(r'[a-f0-9]{64}\.review\.json', destination.name):
-            return False
-        request = destination.with_name(destination.name.replace('.review.json', '.json'))
-        if destination.parent != store.requests or not request.is_file():
-            return False
-    store.validate_requests()
-    return bool(paths)
 
 
 def before_tool(data, store):

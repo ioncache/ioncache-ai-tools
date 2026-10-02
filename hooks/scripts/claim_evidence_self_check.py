@@ -19,6 +19,7 @@ import copilot_adapter
 from evidence_review import check_review, inventory, publication_commands
 from evidence_source import check_native_read, digest, read_page, source_snapshot, source_unit, unit_bounds
 from evidence_store import EvidenceStore, record_page, reference_key
+from hook_adapter_common import run_shared_hooks
 
 
 class ClaimEvidenceTests(unittest.TestCase):
@@ -306,6 +307,90 @@ class ClaimEvidenceTests(unittest.TestCase):
         path.with_name('unregistered.review.json').write_text('{}')
         request['tool_input']['file_path'] = str(path.with_name('unregistered.review.json'))
         self.assertIsNotNone(self.hook('PreToolUse', **request))
+
+    def shared_hook(self, event, **fields):
+        outputs = [output for output in run_shared_hooks(event, {**self.data, **fields}) if output]
+        return next((
+            output for output in outputs
+            if output.get('decision') == 'block'
+            or output.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'
+        ), outputs[0] if outputs else None)
+
+    def pending_answer(self):
+        self.data['session_id'] = self.root.name
+        self.hook = self.shared_hook
+        marker = Path(f'/tmp/.ioncache-pending-question-{self.data["session_id"]}')
+        self.addCleanup(lambda: marker.unlink(missing_ok=True))
+        self.hook('UserPromptSubmit', prompt='Why does the handler return 204?')
+        self.assertTrue(marker.exists())
+        text = 'The handler returns 204.'
+        self.assertEqual(self.hook('Stop', last_assistant_message=text)['decision'], 'block')
+        prepared = inventory({'tool_name': 'Answer', 'tool_input': {'text': text}}, self.root)
+        with EvidenceStore(self.data) as store:
+            path = store.request_path(prepared['fingerprint'])
+        return prepared, path, marker
+
+    def test_question_allows_answer_review_without_unblocking_project_edits(self):
+        prepared, path, marker = self.pending_answer()
+        reference = self.deliver()
+        self.prepare(path)
+        review_path = path.with_suffix('.review.json')
+        content = json.dumps(self.review(prepared, reference))
+        requests = (
+            {'tool_name': 'Write', 'tool_input': {'file_path': str(review_path), 'content': content}},
+            {'tool_name': 'Edit', 'tool_input': {'file_path': str(review_path), 'old_string': '{}', 'new_string': content}},
+            {'tool_name': 'MultiEdit', 'tool_input': {'file_path': str(review_path), 'edits': [
+                {'old_string': '{}', 'new_string': content},
+            ]}},
+            {'tool_name': 'apply_patch', 'tool_input': {
+                'command': f'*** Begin Patch\n*** Add File: {review_path}\n+{content}\n*** End Patch',
+            }},
+        )
+        for request in requests:
+            with self.subTest(tool=request['tool_name']):
+                self.assertIsNone(self.hook('PreToolUse', **request))
+        review_path.write_text(content)
+        options = claim_evidence.parser().parse_args(['approve', str(path), '--review', str(review_path)])
+        receipt = claim_evidence.approval_candidate(options, self.root)[2]
+        self.helper(f'approve "{path}" --review "{review_path}"', {'stdout': receipt})
+        self.assertIsNone(self.hook('Stop', last_assistant_message=prepared['artifacts'][0]['text']))
+        self.assertTrue(marker.exists())
+        self.assertIn('classified as a question', str(self.hook('PreToolUse', **self.request())))
+
+    def test_question_review_exemption_rejects_unregistered_and_mixed_targets(self):
+        _, path, _ = self.pending_answer()
+        review_path = path.with_suffix('.review.json')
+        outside = self.root / review_path.name
+        elsewhere = {**self.data, 'session_id': 'another-session'}
+        with EvidenceStore(elsewhere) as store:
+            other_path = store.request_path(path.stem).with_suffix('.review.json')
+            other_path.with_name(path.name).write_text(path.read_text())
+        for target in (outside, other_path, path, path.with_name('b' * 64 + '.review.json')):
+            with self.subTest(target=target):
+                request = {'tool_name': 'Write', 'tool_input': {'file_path': str(target), 'content': '{}'}}
+                self.assertIn('classified as a question', str(self.hook('PreToolUse', **request)))
+        patch = (
+            f'*** Begin Patch\n*** Add File: {review_path}\n+{{}}\n'
+            f'*** Add File: {outside}\n+{{}}\n*** End Patch'
+        )
+        self.assertIn('classified as a question', str(self.hook(
+            'PreToolUse', tool_name='apply_patch', tool_input={'command': patch},
+        )))
+        outside.write_text('{}')
+        review_path.symlink_to(outside)
+        self.assertIn('classified as a question', str(self.hook(
+            'PreToolUse', tool_name='Write', tool_input={'file_path': str(review_path), 'content': '{}'},
+        )))
+
+    def test_question_review_exemption_denies_unsafe_private_directory(self):
+        _, path, _ = self.pending_answer()
+        path.parent.chmod(0o755)
+        with mock.patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+            output = self.hook('PreToolUse', tool_name='Write', tool_input={
+                'file_path': str(path.with_suffix('.review.json')), 'content': '{}',
+            })
+        self.assertIn('classified as a question', str(output))
+        self.assertIn('private', stderr.getvalue())
 
     def test_compaction_and_resume_clear_coverage_and_approvals(self):
         for event in ('PreCompact', 'SessionStart', 'SessionEnd', 'SubagentStart'):
