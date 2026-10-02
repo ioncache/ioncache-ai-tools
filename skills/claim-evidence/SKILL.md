@@ -95,5 +95,4 @@ against current authoritative evidence and decisions against their records.
 Omit or narrow claims whose coverage cannot be established.
 The plugin does not buffer chat. Stop requests one correction, then permits
 completion to avoid loops; it cannot retract already displayed text.
-See [supported surfaces and costs](../../README.md#claim-evidence-guard)
-for unknown-tool, shell-publication, and host limitations.
+See [guard limitations](../../README.md#claim-evidence-guard).
