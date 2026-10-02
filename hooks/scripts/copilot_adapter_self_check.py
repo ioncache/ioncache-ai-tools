@@ -122,21 +122,42 @@ class CopilotAdapterTests(unittest.TestCase):
             ('edit', {'path': 'x', 'old_str': 'a', 'new_str': 'b'}),
             ('apply_patch', '*** Begin Patch\n*** Add File: x\n+y\n*** End Patch'),
             ('bash', {'command': 'git commit -m change'}),
+            ('bash', {'command': "gh api graphql -f 'query=query Read { q } mutation Change { m }' -f operationName=Change"}),
         ]:
             with self.subTest(name=name):
                 self.assertEqual(self.tool(name, args)['permissionDecision'], 'deny')
         self.assertEqual(self.tool('view', {'path': 'x'}), {})
         self.assertEqual(self.tool('bash', {'command': 'git status --short'}), {})
+        self.assertEqual(self.tool('bash', {'command': "echo '>' output.txt"}), {})
         self.prompt('Implement the change')
         self.assertFalse(self.marker.exists())
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
     def test_native_shell_rules(self):
-        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json'):
+        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        'echo ready # status\nkill 123', "echo ready; kill 123\nprintf 'unfinished"):
             with self.subTest(command=command):
                 self.assertEqual(self.tool('bash', {'command': command})['permissionDecision'], 'deny')
         self.assertEqual(self.tool('bash', {'command': 'echo kill'}), {})
+        self.assertEqual(self.tool('bash', {'command': "echo ';' kill 123"}), {})
+        self.assertEqual(self.tool('bash', {'command': "echo '>' package-lock.json"}), {})
         self.assertEqual(self.tool('bash', json.dumps({'command': 'git status'})), {})
+
+    def test_graphql_template_cannot_hide_mutation(self):
+        self.prompt('why is this different')
+        command = "gh api graphql -f 'query=mutation { m }' --template '-fquery=query { q }'"
+        self.assertEqual(self.tool('bash', {'command': command}).get('permissionDecision'), 'deny')
+        self.assertEqual(self.tool('bash', {'command': command.replace('mutation { m }', 'query { q }')}), {})
+
+    def test_patch_header_whitespace_is_denied(self):
+        for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',
+                       'Delete File: yarn.lock\f', 'Update File: safe.txt\n*** Move to: yarn.lock\f\n@@\n-old\n+new'):
+            patch = f'*** Begin Patch\n*** {target}\n*** End Patch'
+            with self.subTest(target=target):
+                output = self.tool('apply_patch', patch)
+                self.assertEqual(output.get('permissionDecision'), 'deny')
+                self.assertIn('header whitespace', output['permissionDecisionReason'])
+                self.assertNotIn('modifiedArgs', output)
 
     def test_edits_and_writes_rewrite_only_new_text_without_granting_permission(self):
         cases = [
@@ -185,6 +206,15 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(output['permissionDecision'], 'deny')
         self.assertIn('lockfile', output['permissionDecisionReason'])
+
+    def test_patch_checks_text_after_non_lf_separators(self):
+        for separator in ('\f', chr(0x2028), chr(0x2029)):
+            with self.subTest(separator=repr(separator)):
+                patch = f'*** Begin Patch\n*** Add File: safe.txt\n+before{separator}after{EM_DASH}text\n*** End Patch'
+                output = self.tool('apply_patch', patch)
+                self.assertEqual(output.get('permissionDecision'), 'deny', output)
+                self.assertNotIn('modifiedArgs', output)
+                self.assertEqual(self.tool('apply_patch', patch.replace(EM_DASH, ',')), {})
 
     def test_copilot_config_overrides_and_cross_host_union(self):
         global_path = self.home / '.copilot/ioncache-ai-tools.local.json'

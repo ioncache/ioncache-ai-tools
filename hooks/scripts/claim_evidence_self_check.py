@@ -118,6 +118,108 @@ class ClaimEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_native_read({'file_path': str(path), 'offset': 402, 'limit': 1}, self.root)
 
+    def test_parenthesized_decorators_require_the_opening_line(self):
+        declarations = (
+            '@(\n    decorator\n)\ndef handler():\n    return 204\n',
+            '@(\n    decorator\n)\nasync def handler():\n    return 204\n',
+            '@(\n    decorator\n)\nclass Handler:\n    pass\n',
+            '@(  # registration\n    factory(\n        "@"\n    )\n)\ndef handler():\n    return 204\n',
+            '@first\n@(\n    left @ right\n)\ndef handler():\n    return 204\n',
+            '@\\\n decorator\ndef handler():\n    return 204\n',
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                self.source.write_text('\n' * 400 + declaration)
+                snapshot = source_snapshot(self.source)
+                end = len(snapshot['lines'])
+                unit = f'401:{end}'
+                self.assertIn(unit, unit_bounds(snapshot))
+                self.assertEqual(source_unit(snapshot, unit)[0], declaration)
+                check_native_read({'file_path': str(self.source), 'offset': 401, 'limit': end - 400}, self.root)
+                with self.assertRaises(ValueError):
+                    check_native_read({'file_path': str(self.source), 'offset': 402, 'limit': end - 401}, self.root)
+                ref = self.deliver(unit)
+                with EvidenceStore(self.data) as store:
+                    self.assertTrue(store.get('coverage', reference_key(ref)))
+
+    def test_nested_decorator_boundary_ignores_matrix_operators_and_strings(self):
+        self.source.write_text(
+            '\n' * 400 + 'value = left @ right\nlabel = "@"\nclass Handler:\n'
+            '    @(\n        decorator\n    )\n    def handle(self):\n        return 204\n'
+        )
+        snapshot = source_snapshot(self.source)
+        self.assertIn('404:408', unit_bounds(snapshot))
+        self.assertTrue(source_unit(snapshot, '404:408')[0].startswith('    @('))
+
+    def test_patch_inventory_preserves_non_lf_characters(self):
+        for separator in ('\f', '\v', '\r', chr(0x85), chr(0x2028), chr(0x2029)):
+            for ending in ('\n', '\r\n'):
+                with self.subTest(separator=repr(separator), ending=repr(ending)):
+                    text = 'Visible label' + separator + 'The handler returns 204.'
+                    patch = ending.join((
+                        '*** Begin Patch', '*** Add File: outgoing.txt', '+' + text, '*** End Patch', '',
+                    ))
+                    prepared = inventory({'tool_name': 'apply_patch', 'tool_input': {'command': patch}}, self.root)
+                    self.assertEqual(prepared['artifacts'][0]['text'], text + '\n')
+                    review = self.review(prepared, self.deliver())
+                    review['classifications'][0]['claims'][0]['text'] = 'The handler returns 204.'
+                    with EvidenceStore(self.data) as store:
+                        self.assertTrue(check_review(review, prepared, {'cwd': self.root, 'store': store}))
+
+    def test_publication_comments_and_literal_operators(self):
+        self.assertTrue(publication_commands('echo ready # status\ngit commit -m change'))
+        self.assertFalse(publication_commands("echo ';' git commit -m change"))
+        command = "gh pr create --title '>' --body ';'"
+        prepared = inventory({'tool_name': 'Bash', 'tool_input': {'command': command}}, self.root)
+        self.assertEqual([item['text'] for item in prepared['artifacts']], [command, '>', ';'])
+
+    def test_malformed_suffix_cannot_hide_publication(self):
+        command = "echo ready; git commit -m change\nprintf 'unfinished"
+        self.assertTrue(publication_commands(command))
+        output = self.hook('PreToolUse', tool_name='Bash', tool_input={'command': command})
+        self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIn('single command', str(output))
+        self.assertFalse(publication_commands("echo ';' git commit -m change\nprintf 'unfinished"))
+
+    def test_patch_inventory_rejects_ambiguous_headers(self):
+        for whitespace in (' ', '\t', '\f', '\v', '\r\r', chr(0x85), chr(0x2028), chr(0x2029)):
+            header = '*** Add File: outgoing.txt'
+            for padded in (header + whitespace, whitespace + header):
+                patch = f'*** Begin Patch\n*** Add File: safe.txt\n+safe\n{padded}\n+claim\n*** End Patch'
+                with self.subTest(header=repr(padded)), self.assertRaisesRegex(ValueError, 'header whitespace'):
+                    inventory({'tool_name': 'apply_patch', 'tool_input': {'command': patch}}, self.root)
+
+    def test_patch_inventory_keeps_context_and_content_whitespace(self):
+        patch = (
+            '*** Begin Patch\n*** Update File: source.py\n@@\n'
+            ' *** Add File: literal.txt\f\n-old\n+  new\f\n*** End Patch'
+        )
+        prepared = inventory({'tool_name': 'apply_patch', 'tool_input': {'command': patch}}, self.root)
+        self.assertEqual(len(prepared['artifacts']), 1)
+        self.assertEqual(prepared['artifacts'][0]['text'], '  new\f\n')
+
+    def test_patch_claim_after_separator_requires_evidence_before_approval(self):
+        patch = '*** Begin Patch\n*** Add File: outgoing.txt\n+Label\fThe handler returns 204.\n*** End Patch'
+        request = {'tool_name': 'apply_patch', 'tool_input': {'command': patch}}
+        self.assertIn('checkpoint required', str(self.hook('PreToolUse', **request)))
+        prepared = inventory(request, self.root)
+        snapshot = source_snapshot(self.source)
+        ref = {'path': str(self.source), 'sha256': snapshot['sha256'], 'unit': 'file', 'lines': [1, 2]}
+        review = self.review(prepared, ref)
+        review['classifications'][0]['claims'][0]['text'] = 'The handler returns 204.'
+        with EvidenceStore(self.data) as store:
+            path = store.request_path(prepared['fingerprint'])
+        self.prepare(path)
+        review_path = path.with_suffix('.review.json')
+        review_path.write_text(json.dumps(review))
+        approval = f'approve "{path}" --review "{review_path}"'
+        self.assertIn('no complete delivered coverage', str(self.helper(approval)))
+        self.deliver()
+        options = claim_evidence.parser().parse_args(shlex.split(approval))
+        receipt = claim_evidence.approval_candidate(options, self.root)[2]
+        self.helper(approval, {'stdout': receipt})
+        self.assertIsNone(self.hook('PreToolUse', **request))
+
     def test_reads_without_post_delivery_never_grant_coverage(self):
         self.helper(f'read "{self.source}"')
         snapshot = source_snapshot(self.source)

@@ -17,7 +17,7 @@ import shlex
 import signal
 import sys
 
-from hook_adapter_common import PATCH_REWRITE_REASON, patch_inputs
+from hook_adapter_common import AmbiguousPatchHeader, PATCH_REWRITE_REASON, patch_inputs
 
 try:
     import tomllib
@@ -111,60 +111,49 @@ def normalize_shell_command(command):
 CONTROL_OPERATORS = {';', '&&', '||', '|', '&', '(', ')', '\n'}
 
 
-# shlex's own punctuation set plus the newline. Newline has to be listed
-# as punctuation rather than split off the raw string beforehand, because
-# only the lexer knows whether a given newline is a separator or an
-# ordinary character inside a quoted argument: pre-splitting the text
-# turns `printf 'a\ngit commit\nb'` into three "commands", one of which
-# looks exactly like a real commit.
-SHELL_PUNCTUATION = '();<>|&\n'
-SHELL_FRAGMENTS = re.compile(r"""('(?:[^']*)'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S])|([();<>|&\n]+)""")
 SHELL_OPERATORS = re.compile(r'\(\(|\)\)|&>>|<<<|<<-|&&|\|\||>>|<<|>&|<&|<>|>\||&>|[();<>|&\n]')
+SHELL_WORD = r"""(?:'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|[^ \t\r\n'"\\();<>|&])+"""
+SHELL_LEXEMES = re.compile(
+    r'(?P<space>[ \t\r]+)|(?P<comment>#[^\n]*)|'
+    rf'(?P<operator>{SHELL_OPERATORS.pattern})|(?P<word>{SHELL_WORD})'
+)
 
 
-def _space_shell_operators(match):
-    if match[1] is not None:
-        return match[0]
-    return ' ' + ' '.join(SHELL_OPERATORS.findall(match[2])) + ' '
+class ShellWord(str):
+    """Keep decoded arguments distinguishable from identically spelled operators."""
+
+
+def is_shell_operator(token, operators):
+    return not isinstance(token, ShellWord) and token in operators
 
 
 def tokenize_command(command):
-    """Splits a Bash command into real shell tokens: quoting and
-    backslash-escaping are resolved the way Bash itself resolves them
-    (shlex's posix mode), and control operators (;, &&, ||, |, &, (, ))
-    come out as their own tokens instead of being glued to an adjacent
-    word (shlex's punctuation_chars mode). A newline is one of those
-    operators, so newline is removed from the lexer's whitespace set and
-    added to its punctuation set. Falls back to a plain whitespace split
-    on unbalanced quoting rather than raising, since a hook must never
-    throw on attacker- or mistake-controlled input; that fallback loses
-    newline separation, which is acceptable for an input already too
-    malformed to lex.
+    """Separate operators before decoding each word with shlex.
 
-    Known, accepted gap: a heredoc body is not opaque to the lexer, so
-    `cat <<EOF` followed by a line reading `git push` yields tokens that
-    look like a real invocation. Closing that means tracking heredoc
-    state, which is a real shell parser rather than a lexer.
-
-    Bash splices a backslash immediately before a newline away entirely
-    (line continuation), joining the two lines before it even starts
-    tokenizing; shlex does not do this on its own; it just escapes the
-    newline character literally into the token, so it's spliced here
-    first. This also splices inside a single-quoted string, where real
-    Bash would keep the backslash-newline literal, an accepted gap for
-    a case this narrow.
+    Comments end before the newline; hashes inside words stay literal.
+    Consumers must use is_shell_operator for punctuation comparisons.
+    Malformed suffixes fall back to whitespace splitting without discarding
+    already-parsed tokens: earlier commands can execute before a syntax error.
+    Heredoc bodies are not opaque, and backslash-newlines inside single quotes
+    are spliced; these remain accepted limits of the common-command guard.
     """
     command = command.replace('\\\n', '')
-    # shlex groups adjacent punctuation; separate actual operators before
-    # lexing, while leaving quoted and escaped fragments untouched.
-    command = SHELL_FRAGMENTS.sub(_space_shell_operators, command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=SHELL_PUNCTUATION)
-    lexer.whitespace_split = True
-    lexer.whitespace = ' \t\r'
-    try:
-        return list(lexer)
-    except ValueError:
-        return command.split()
+    tokens = []
+    position = 0
+    while position < len(command):
+        match = SHELL_LEXEMES.match(command, position)
+        if match is None:
+            return tokens + command[position:].split()
+        if match.lastgroup == 'word':
+            try:
+                word, = shlex.split(match[0], comments=False, posix=True)
+            except ValueError:
+                return tokens + command[position:].split()
+            tokens.append(ShellWord(word))
+        elif match.lastgroup == 'operator':
+            tokens.append(match[0])
+        position = match.end()
+    return tokens
 
 
 def split_into_simple_commands(tokens):
@@ -174,7 +163,7 @@ def split_into_simple_commands(tokens):
     commands = []
     current = []
     for token in tokens:
-        if token in CONTROL_OPERATORS:
+        if is_shell_operator(token, CONTROL_OPERATORS):
             if current:
                 commands.append(current)
             current = []
@@ -492,7 +481,11 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
 def run_patch_rules(rules, hook_input):
     rewrite_needed = False
     patch = hook_input['tool_input']['command']
-    for item in patch_inputs(patch):
+    try:
+        edits = patch_inputs(patch)
+    except AmbiguousPatchHeader as error:
+        return merge_pre_tool_use([{'action': 'deny', 'message': str(error)}])
+    for item in edits:
         output = run_rules(rules, 'PreToolUse', {
             **hook_input, 'tool_name': 'Edit', 'tool_input': item,
         })

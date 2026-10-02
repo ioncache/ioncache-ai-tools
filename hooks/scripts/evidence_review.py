@@ -5,7 +5,7 @@ import subprocess
 from evidence_source import digest, encoded, source_snapshot, source_unit
 from evidence_store import reference_key
 from hook_adapter_common import patch_inputs
-from rule_engine import skip_wrappers, split_into_simple_commands, tokenize_command
+from rule_engine import is_shell_operator, skip_wrappers, split_into_simple_commands, tokenize_command
 
 EDIT_TOOLS = {'Write', 'Edit', 'MultiEdit', 'apply_patch', 'Answer'}
 
@@ -103,7 +103,7 @@ def publication_artifacts(command, cwd):
     if any(character in command for character in ('$', '`')):
         raise ValueError('publication text must be literal; shell expansion cannot be reviewed')
     tokens = found[0]
-    if any(token in {'>', '>>', '<', '<<', '<<<', '>&', '<&'} for token in tokens):
+    if any(is_shell_operator(token, {'>', '>>', '<', '<<', '<<<', '>&', '<&'}) for token in tokens):
         raise ValueError('publication redirection is unsupported; use an explicit message or body file')
     git_commit = Path(tokens[0]).name == 'git'
     prefix = ['commit'] if git_commit else command_words(tokens)[:2]
