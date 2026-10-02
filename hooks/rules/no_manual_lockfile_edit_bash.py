@@ -21,7 +21,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
-from rule_engine import tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
+from rule_engine import is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
 
 LOCKFILE_NAMES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
 
@@ -58,7 +58,7 @@ def _has_inplace_edit_flag(executable):
 
 def _mutates_lockfile(simple_command):
     for i, token in enumerate(simple_command):
-        if token in ('>', '>>') and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
+        if is_shell_operator(token, {'>', '>>'}) and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
             return True
     executable = skip_wrappers(simple_command)
     if not executable:

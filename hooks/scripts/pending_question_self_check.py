@@ -312,7 +312,88 @@ MUTATION_FIXTURES = [
         'a multiline GraphQL mutation is still a separate command',
     ),
     ('apply_patch', {'command': '*** Begin Patch\n*** Add File: x\n+y\n*** End Patch'}, True, 'native patches mutate files'),
+    ('Bash', {'command': "echo '>' output.txt"}, False, 'a standalone quoted redirect is only an argument'),
+    ('Bash', {'command': r'echo \> output.txt'}, False, 'a standalone escaped redirect is only an argument'),
+    ('Bash', {'command': 'echo ">" > output.txt'}, True, 'a real redirect after a literal operator'),
+    (
+        'Bash',
+        {'command': "echo ready # status\ngh api graphql -f 'query=mutation { m }'"},
+        True,
+        'a shell comment must not hide a later GraphQL mutation',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f 'query=query { viewer { login } }' -f note=operationName=Read"},
+        False,
+        'an unrelated field value is not an operation selector',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f 'query=query { q }' -f 'query=mutation { m }'"},
+        True,
+        'duplicate query fields are unverified, not last-field-wins',
+    ),
+    (
+        'Bash',
+        {'command': "gh api graphql -f 'query=mutation { m }' -f 'query=query { q }'"},
+        True,
+        'duplicate query fields are unverified in either order',
+    ),
+    (
+        'Bash',
+        {'command': "echo ready; gh api graphql -f 'query=mutation { m }'\nprintf 'unfinished"},
+        True,
+        'a malformed suffix cannot hide an earlier GraphQL mutation',
+    ),
 ]
+
+for option in ('--template', '-t', '--jq', '-q', '--header', '-H'):
+    for operation, expected in (('query', False), ('mutation', True)):
+        for value in ('-fquery=query { q }', '-foperationName=Read', '-f'):
+            MUTATION_FIXTURES.append((
+                'Bash', {'command': f"gh api graphql -f 'query={operation} {{ field }}' {option} '{value}'"},
+                expected, 'option values are not field flags',
+            ))
+
+for args, expected in (
+    ("--template '-f' -f 'query=query { q }'", False),
+    ("--template=-fquery=mutation -f 'query=query { q }'", False),
+    ("-t-fquery=mutation -f 'query=query { q }'", False),
+    ("-f 'query=query { q }' -f 'query=query { q }'", True),
+    ("-F 'query=mutation { m }' -f 'query=query { q }'", True),
+    ("--unknown '-fquery=query { q }'", True),
+    ("-f 'query=query { q }' --input body.json", True),
+    ("-- -f 'query=query { q }'", True),
+    ("-f 'query=query { q }' -f", True),
+    ("-f 'query=query { q }' --template", True),
+    ("--paginate --cache 1h -H 'Accept: application/json' -f 'query=query { q }' 2>/dev/null", False),
+    ("-f 'query=query { q }' 2>&1", False),
+    ("-f 'query=mutation { m }' < '-fquery=query { q }'", True),
+):
+    MUTATION_FIXTURES.append(('Bash', {'command': f'gh api graphql {args}'}, expected, 'GraphQL option boundaries'))
+
+for field_flag in ('-f ', '-F ', '--raw-field ', '--field ', '--raw-field=', '--field=', '-f', '-F', '-f='):
+    for operation, expected in (('query', False), ('mutation', True)):
+        MUTATION_FIXTURES.append((
+            'Bash', {'command': f"gh api graphql {field_flag}'query={operation} {{ field }}'"},
+            expected, 'inline documents use the same field flag forms as operation selectors',
+        ))
+
+for selector in (
+    '-f operationName=Change', '-F operationName=Change',
+    '--raw-field operationName=Change', '--field operationName=Change',
+    '--raw-field=operationName=Change', '--field=operationName=Change',
+    '-foperationName=Change', '-FoperationName=Change', '-f=operationName=Change',
+):
+    for fields in (
+        f"-f 'query=query Read {{ q }} mutation Change {{ m }}' {selector}",
+        f"{selector} -f 'query=query Read {{ q }} mutation Change {{ m }}'",
+        f"-f 'query=query Change {{ q }}' {selector}",
+    ):
+        MUTATION_FIXTURES.append((
+            'Bash', {'command': f'gh api graphql {fields}'}, True,
+            'explicit operation selection is conservatively blocked while a question is pending',
+        ))
 
 
 def main():

@@ -1,8 +1,10 @@
 """Snapshot-based source units and bounded, verifiable delivery pages."""
 import ast
 import hashlib
+import io
 import json
 from pathlib import Path
+import tokenize
 
 SMALL_FILE_LINES = 400
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
@@ -37,6 +39,24 @@ def source_snapshot(path):
     }
 
 
+def decorator_starts(text):
+    starts = {}
+    statement_start = True
+    decorator_line = None
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.type == tokenize.NEWLINE:
+            statement_start = True
+            decorator_line = None
+        elif token.type in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT):
+            continue
+        elif statement_start:
+            decorator_line = token.start[0] if token.type == tokenize.OP and token.string == '@' else None
+            statement_start = False
+        if decorator_line is not None:
+            starts[token.start[0]] = decorator_line
+    return starts
+
+
 def unit_bounds(snapshot):
     count = len(snapshot['lines'])
     units = {'file': (1, count)}
@@ -46,7 +66,8 @@ def unit_bounds(snapshot):
         raise ValueError('bare CR source requires a whole-file read')
     try:
         tree = ast.parse(snapshot['text'])
-    except (SyntaxError, ValueError, RecursionError) as error:
+        decorators = decorator_starts(snapshot['text'])
+    except (SyntaxError, ValueError, RecursionError, tokenize.TokenError) as error:
         raise ValueError(f'cannot parse source units; use the whole file: {error}') from error
     nodes = list(tree.body)
     nodes.extend(
@@ -54,7 +75,10 @@ def unit_bounds(snapshot):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     )
     for node in nodes:
-        start = min([node.lineno] + [item.lineno for item in getattr(node, 'decorator_list', [])])
+        decorator_lines = [item.lineno for item in getattr(node, 'decorator_list', [])]
+        if any(line not in decorators for line in decorator_lines):
+            raise ValueError('cannot locate complete decorator boundaries; use the whole file')
+        start = min([node.lineno] + [decorators[line] for line in decorator_lines])
         end = node.end_lineno
         units[f'{start}:{end}'] = (start, end)
     return units

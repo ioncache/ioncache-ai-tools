@@ -44,14 +44,24 @@ def run_shared_hooks(event, hook_input):
     return outputs
 
 
+class AmbiguousPatchHeader(ValueError):
+    """Header ambiguity must deny the patch, not check a different destination."""
+
+
 def patch_inputs(patch):
     """Check patch targets and added text without rewriting matching context."""
     inputs = []
     current = None
-    for line in patch.splitlines():
-        match = re.match(r'^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$', line)
+    operation = None
+    for line in patch.replace('\r\n', '\n').split('\n'):
+        header = line.rstrip() if operation == 'Update File' else line.strip()
+        match = re.match(r'^\*\*\* (Add File|Update File|Delete File|Move to): (.+)$', header)
         if match:
-            current = {'file_path': match[1], 'new_string': ''}
+            if line != header:
+                raise AmbiguousPatchHeader('Ambiguous patch header whitespace; use unpadded file headers and paths.')
+            if match[1] != 'Move to':
+                operation = match[1]
+            current = {'file_path': match[2], 'new_string': ''}
             inputs.append(current)
         elif line.startswith('+') and current is not None:
             current['new_string'] += line[1:] + '\n'
