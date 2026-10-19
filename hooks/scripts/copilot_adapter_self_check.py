@@ -28,9 +28,6 @@ class CopilotAdapterTests(unittest.TestCase):
         self.project.mkdir()
         self.home = self.root / 'home'
         self.home.mkdir()
-        self.evidence_config = self.home / '.claude/ioncache-ai-tools.local.json'
-        self.evidence_config.parent.mkdir()
-        self.evidence_config.write_text('{"disabledRules":["claim-evidence"]}')
         self.env = {
             **os.environ,
             'HOME': str(self.home),
@@ -90,8 +87,8 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(hooks['version'], 1)
         self.assertEqual(set(hooks['hooks']), {
             'userPromptTransformed', 'preToolUse', 'agentStop', 'sessionEnd',
-            'postToolUse', 'preCompact', 'sessionStart', 'subagentStart', 'subagentStop',
         })
+        self.assertFalse((ROOT / 'skills/claim-evidence/SKILL.md').exists())
         for event, entries in hooks['hooks'].items():
             self.assertEqual(len(entries), 1)
             self.assertIn('${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py', entries[0]['bash'])
@@ -319,7 +316,7 @@ class CopilotAdapterTests(unittest.TestCase):
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1, 0.5])
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1])
 
 
 if __name__ == '__main__':
