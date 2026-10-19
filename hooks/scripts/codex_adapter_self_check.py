@@ -30,9 +30,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.project.mkdir()
         self.home = self.root / 'home'
         self.home.mkdir()
-        self.evidence_config = self.home / '.claude/ioncache-ai-tools.local.json'
-        self.evidence_config.parent.mkdir()
-        self.evidence_config.write_text('{"disabledRules":["claim-evidence"]}')
         self.env = {
             **os.environ,
             'HOME': str(self.home),
