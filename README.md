@@ -57,7 +57,7 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 
 | Guard | Effect |
 | --- | --- |
-| Questions first | Blocks project edits until a non-question prompt; permits private evidence-review records |
+| Questions first | Blocks edits after a question until a subsequent non-question prompt |
 | Documentation first | Reminds the agent to verify external API and tool details |
 | Scope and current state | Reminds the agent to do only the requested work and check status before claiming it |
 | Process termination | Blocks recognized process-kill commands until the rule is disabled |
@@ -69,22 +69,6 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 While a question is pending, GraphQL calls with `operationName`, body files,
 duplicate queries, or unrecognized options are blocked. Use one inline query.
 Patches with ambiguous file-header whitespace are rejected.
-
-### Claim evidence guard
-
-Enabled by default. Requires complete source reads and a review before supported
-edits, commits, and PR text, including code-only edits. Files up to 400 lines
-require whole-file reads; larger Python files allow complete functions or
-classes. Other languages require whole-file evidence.
-
-The agent must use the [claim-evidence workflow](skills/claim-evidence/SKILL.md);
-ordinary reads and search snippets do not count. This adds reads and review
-steps. It checks evidence coverage, not whether a claim is true.
-
-The evidence reader rejects binary files and files over 4 MiB. Unknown tools
-and indirect publication commands can bypass checks. Chat is not held back:
-the guard requests one correction but cannot retract displayed text.
-Disable it with `claim-evidence` in the [rule settings](#disabling-a-rule).
 
 ## Workflows
 
@@ -138,23 +122,23 @@ Settings take effect on the next tool call, without reinstalling.
 For Claude Code or Copilot CLI:
 
 ```json
-{ "disabledRules": ["claim-evidence"] }
+{ "disabledRules": ["never_kill_without_asking"] }
 ```
 
 To re-enable it for one project, put this in that project's settings:
 
 ```json
-{ "enabledRules": ["claim-evidence"] }
+{ "enabledRules": ["never_kill_without_asking"] }
 ```
 
 For Codex:
 
 ```toml
 [ioncache-ai-tools]
-disabled_rules = ["claim-evidence"]
+disabled_rules = ["never_kill_without_asking"]
 
 [projects."/absolute/path/to/project".ioncache-ai-tools]
-enabled_rules = ["claim-evidence"]
+enabled_rules = ["never_kill_without_asking"]
 ```
 
 `COPILOT_HOME` and `CODEX_HOME` override their respective global directories.
@@ -168,7 +152,6 @@ Available IDs:
 
 | ID | Guard |
 | --- | --- |
-| `claim-evidence` | Complete-source evidence and review |
 | `never_kill_without_asking` | Process termination |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |

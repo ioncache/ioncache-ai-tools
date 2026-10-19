@@ -309,7 +309,9 @@ class ClaimEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(self.hook('PreToolUse', **request))
 
     def shared_hook(self, event, **fields):
-        outputs = [output for output in run_shared_hooks(event, {**self.data, **fields}) if output]
+        data = {**self.data, **fields}
+        outputs = [*run_shared_hooks(event, data), claim_evidence.run_hook(event, data)]
+        outputs = [output for output in outputs if output]
         return next((
             output for output in outputs
             if output.get('decision') == 'block'
@@ -651,23 +653,16 @@ class ClaimEvidenceTests(unittest.TestCase):
     def native(self, host, invocation):
         event, fields = invocation
         data = {'cwd': str(self.root), 'session_id': f'native-{host}', **fields}
-        script = claim_evidence.HELPER
-        arguments = ['hook', event]
-        if host == 'codex':
-            script = script.with_name('codex_adapter.py')
-            arguments = [event]
-        elif host == 'copilot':
-            script = script.with_name('copilot_adapter.py')
-            arguments = [event[0].lower() + event[1:]]
+        if host == 'claude':
+            return next((output for output in run_shared_hooks(event, data) if output), {})
+        script = claim_evidence.HELPER.with_name(f'{host}_adapter.py')
+        arguments = [event]
+        if host == 'copilot':
+            arguments = ['userPromptTransformed' if event == 'UserPromptSubmit' else event[0].lower() + event[1:]]
             data = {'cwd': str(self.root), 'sessionId': f'native-{host}', 'timestamp': 1, **fields}
             if 'tool_name' in fields:
                 data['toolName'] = fields['tool_name']
                 data['toolArgs'] = json.dumps(fields['tool_input'])
-                if event == 'PostToolUse':
-                    data['toolResult'] = {'resultType': 'success', 'textResultForLlm': fields['tool_response']}
-        if host == 'claude' and event == 'PostToolUse':
-            arguments = ['hook', 'PostToolBatch']
-            data = {'cwd': str(self.root), 'session_id': f'native-{host}', 'tool_calls': [fields]}
         result = subprocess.run(
             [sys.executable, str(script), *arguments], input=json.dumps(data),
             text=True, capture_output=True, cwd=self.root, timeout=15,
@@ -675,55 +670,31 @@ class ClaimEvidenceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
-    def native_helper(self, host, arguments):
-        command = shlex.join([sys.executable, str(claim_evidence.HELPER), *arguments])
-        fields = {'tool_name': 'bash' if host == 'copilot' else 'Bash', 'tool_input': {'command': command}}
-        self.assertEqual(self.native(host, ('PreToolUse', fields)), {})
-        result = subprocess.run(shlex.split(command), cwd=self.root, text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        output = self.native(host, ('PostToolUse', {**fields, 'tool_response': result.stdout}))
-        self.assertNotIn('not delivered', str(output))
-        return result.stdout
-
-    def test_native_checkpoint_round_trip_on_all_hosts(self):
+    def test_shipped_hosts_do_not_activate_claim_evidence(self):
+        for directory in (self.root / '.claude', self.root / '.github/copilot'):
+            directory.mkdir(parents=True)
+            (directory / 'ioncache-ai-tools.local.json').write_text('{"enabledRules":["claim-evidence"]}')
+        codex = self.home / '.codex/config.toml'
+        codex.parent.mkdir()
+        codex.write_text(
+            f'[projects.{json.dumps(str(self.root))}.ioncache-ai-tools]\nenabled_rules = ["claim-evidence"]\n'
+        )
         for host in ('claude', 'codex', 'copilot'):
             with self.subTest(host=host):
-                self.native_round_trip(host)
-
-    def native_round_trip(self, host):
-        text = 'The handler returns 204.'
-        target = self.root / f'{host}.md'
-        if host == 'copilot':
-            request = {'tool_name': 'create', 'tool_input': {'path': str(target), 'file_text': text}}
-            normalized = {'tool_name': 'Write', 'tool_input': {'file_path': str(target), 'content': text}}
-            native_read = {'tool_name': 'view', 'tool_input': {'path': str(self.source), 'view_range': [1, 1]}}
-        elif host == 'codex':
-            patch = f'*** Begin Patch\n*** Add File: {target}\n+{text}\n*** End Patch'
-            request = normalized = {'tool_name': 'apply_patch', 'tool_input': {'command': patch}}
-            native_read = {'tool_name': 'Read', 'tool_input': {'file_path': str(self.source), 'offset': 1, 'limit': 1}}
-        else:
-            request = normalized = {'tool_name': 'Write', 'tool_input': {'file_path': str(target), 'content': text}}
-            native_read = {'tool_name': 'Read', 'tool_input': {'file_path': str(self.source), 'offset': 1, 'limit': 1}}
-        self.assertIn('400 lines', str(self.native(host, ('PreToolUse', native_read))))
-        self.assertIn('checkpoint required', str(self.native(host, ('PreToolUse', request))))
-        source_output = self.native_helper(host, ['read', str(self.source)])
-        source_record = json.loads(source_output.split(' ', 1)[1])
-        reference = {
-            'path': str(self.source), 'sha256': source_record['sha256'], 'unit': 'file', 'lines': [1, 2],
-        }
-        session = f'copilot-native-{host}' if host == 'copilot' else f'native-{host}'
-        prepared = inventory(normalized, self.root)
-        with EvidenceStore({'cwd': str(self.root), 'session_id': session}) as store:
-            request_path = store.request_path(prepared['fingerprint'])
-        page = json.loads(self.native_helper(host, ['prepare', str(request_path)]).split(' ', 1)[1])
-        for number in range(2, page['pages'] + 1):
-            self.native_helper(host, ['prepare', str(request_path), '--page', str(number)])
-        review_path = request_path.with_suffix('.review.json')
-        review_path.write_text(json.dumps(self.review(prepared, reference)))
-        self.native_helper(host, ['approve', str(request_path), '--review', str(review_path)])
-        self.assertEqual(self.native(host, ('PreToolUse', request)), {})
-        self.native(host, ('PreCompact', {}))
-        self.assertIn('checkpoint required', str(self.native(host, ('PreToolUse', request))))
+                prompt = self.native(host, ('UserPromptSubmit', {
+                    'prompt': 'Implement the change', 'transformedPrompt': 'Implement the change',
+                }))
+                self.assertNotIn('claim-evidence', str(prompt))
+                if host == 'copilot':
+                    edit = {'tool_name': 'create', 'tool_input': {'path': 'note.md', 'file_text': 'A claim.'}}
+                    read = {'tool_name': 'view', 'tool_input': {'path': str(self.source), 'view_range': [1, 1]}}
+                else:
+                    edit = self.request()
+                    read = {'tool_name': 'Read', 'tool_input': {
+                        'file_path': str(self.source), 'offset': 1, 'limit': 1,
+                    }}
+                self.assertEqual(self.native(host, ('PreToolUse', edit)), {})
+                self.assertEqual(self.native(host, ('PreToolUse', read)), {})
 
 
 if __name__ == '__main__':
