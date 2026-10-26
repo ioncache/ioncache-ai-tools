@@ -175,6 +175,34 @@ def check_copy_destinations():
             assert result is expected, (command, result, expected)
 
 
+def check_copy_directory_changes():
+    with tempfile.TemporaryDirectory(prefix='lockfile-cd-') as temp:
+        for directory in ('destination', 'app/lockfiles', 'app space/lockfiles'):
+            os.makedirs(os.path.join(temp, directory))
+        cases = (
+            ('cd app && cp /tmp/package-lock.json lockfiles', True),
+            ('cd app\nmv /tmp/yarn.lock lockfiles', True),
+            ('cd app; cp /tmp/package-lock.json ../destination', True),
+            ("cd -- 'app space' && cp /tmp/package-lock.json lockfiles", True),
+            ('cd app && cd lockfiles && mv /tmp/pnpm-lock.yaml .', True),
+            ('cd app && cd lockfiles && cp /tmp/package-lock.json backup.json', False),
+            ('cd app && cp /tmp/package-lock.json backup.json', False),
+            ('cd app && cp ordinary.txt lockfiles', False),
+            ('cd app && cp /tmp/package-lock.json destination', False),
+            ('cd "$APP" && cp /tmp/package-lock.json lockfiles', True),
+            ('(cd app); cp /tmp/package-lock.json destination', True),
+            ('cd app || cp /tmp/package-lock.json destination', True),
+            ('false && cd app; cp /tmp/package-lock.json destination', True),
+            (f'cd "$APP" && cp /tmp/package-lock.json {temp}/backup.json', False),
+        )
+        with mock.patch.dict(os.environ, {'CDPATH': ''}):
+            for command, expected in cases:
+                result = no_manual_lockfile_edit_bash.matches({
+                    'cwd': temp, 'tool_name': 'Bash', 'tool_input': {'command': command},
+                })
+                assert result is expected, (command, result, expected)
+
+
 def check_emdash_line_boundaries():
     dash = chr(0x2014)
     cases = (
@@ -197,6 +225,7 @@ def main():
     check_rule_discovery()
     check_shell_tokens()
     check_copy_destinations()
+    check_copy_directory_changes()
     check_emdash_line_boundaries()
 
     # match_rule: always
