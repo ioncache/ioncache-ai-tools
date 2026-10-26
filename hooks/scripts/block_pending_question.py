@@ -240,7 +240,7 @@ def _is_graphql_call(simple_command):
 
 def _mutating_shell_command(simple_command):
     executable = skip_wrappers(without_redirections(simple_command))
-    prefixes = {"if", "then", "elif", "else", "while", "until", "do", "!", "{", "env"}
+    prefixes = {"if", "then", "elif", "else", "while", "until", "do", "!", "{"}
     while executable and (
         executable[0] in prefixes or re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", executable[0])
     ):

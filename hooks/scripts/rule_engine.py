@@ -214,9 +214,31 @@ def split_into_simple_commands(tokens):
 # these wrappers are not recognized: their flags can take a value of
 # their own, and telling a flag from its value needs per-wrapper
 # knowledge, real scope beyond what this covers, and stays a known,
-# accepted gap.
+# accepted gap. env additionally supports ignore-environment/unset options
+# and assignments; split-string and other env options remain uninterpreted.
 NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf'}
 DURATION_ARG_WRAPPERS = {'timeout'}
+
+
+def _env_command_index(tokens, index):
+    while index < len(tokens):
+        token = tokens[index]
+        if token == '--':
+            index += 1
+            break
+        if token in {'-', '-i', '--ignore-environment'} or token.startswith('--unset='):
+            index += 1
+        elif token in {'-u', '--unset'}:
+            index += 2
+        elif token.startswith('-u') and len(token) > 2:
+            index += 1
+        else:
+            if token.startswith('-'):
+                return index
+            break
+    while index < len(tokens) and '=' in tokens[index]:
+        index += 1
+    return index
 
 
 def skip_wrappers(simple_command):
@@ -232,6 +254,9 @@ def skip_wrappers(simple_command):
             continue
         if name in DURATION_ARG_WRAPPERS and i + 1 < n:
             i += 2
+            continue
+        if name == 'env':
+            i = _env_command_index(simple_command, i + 1)
             continue
         break
     return simple_command[i:]
