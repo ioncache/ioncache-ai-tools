@@ -120,9 +120,13 @@ def matches(hook_input):
     for simple_command in split_into_simple_commands(tokens):
         if _mutates_lockfile(simple_command, cwd):
             return True
-        executable = skip_wrappers(without_redirections(simple_command))
-        if executable and executable[0] == 'cd':
-            cwd = _directory_after_cd(executable, cwd) if leading_cd else None
-        elif executable:
+        shell_command = without_redirections(simple_command)
+        while shell_command and shell_command[0] in {'command', 'builtin'}:
+            shell_command = shell_command[1:]
+        if shell_command and shell_command[0] == 'cd':
+            cwd = _directory_after_cd(shell_command, cwd) if leading_cd else None
+        elif shell_command:
+            if skip_wrappers(shell_command)[:1] == ['cd']:
+                cwd = None
             leading_cd = False
     return False
