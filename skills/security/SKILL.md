@@ -8,8 +8,7 @@ description: Use when writing or reviewing API endpoints, database access, auth,
 ## CRITICAL PRINCIPLES
 
 1. **Validate at the edge**, JSON Schema validation on all API endpoints
-2. **Sanitize all user input**, use `sanitize-html` for any user-generated
-   content
+2. **Sanitize HTML fields**, validate other input without rewriting it as HTML
 3. **Verify webhook signatures**, always verify Stripe, Slack, Terra webhooks
 4. **Use secure ObjectId conversion**, always use
    `ObjectId.createFromHexString()` with try/catch
@@ -66,19 +65,21 @@ fastify.register(helmet, {
 
 ### Safe MongoDB ObjectId Conversion
 
-**Always wrap ObjectId conversion in try/catch:**
+Catch ObjectId conversion failures separately from database failures. Let
+operational errors reach the application's logging and server-error handler.
 
 ```javascript
 // Good: Safe ObjectId conversion
+let objectId
 try {
-  const objectId = ObjectId.createFromHexString(id)
-  const doc = await mongo.collection('files').findOne({ _id: objectId })
+  objectId = ObjectId.createFromHexString(id)
 } catch (err) {
   return reply.code(400).send({ error: 'Invalid ID format' })
 }
+const doc = await mongo.collection('files').findOne({ _id: objectId })
 
 // Bad: Unsafe conversion (can crash server)
-const objectId = ObjectId.createFromHexString(untrustedId)
+const uncheckedObjectId = ObjectId.createFromHexString(untrustedId)
 ```
 
 ### Webhook Signature Verification
@@ -116,33 +117,21 @@ fastify.post('/stripe/webhook', async (req, reply) => {
 
 ## Authentication & Authorization
 
-**Use JWT validation and role-based access control:**
+Register `@fastify/jwt` and use `await request.jwtVerify()` in an async
+authentication hook, or return its promise. Verification must finish
+successfully before the protected handler runs; rejection must stop the
+request. Registration alone does not protect routes. Follow the
+[JWT verification examples](https://github.com/fastify/fastify-jwt#usage).
 
-```javascript
-// Good: Protected route restricted via RBAC permissions
-fastify.post('/admin/users', {
-  config: {
-    permissions: {
-      any: [],
-      all: [PERMISSIONS.member.create.all]
-    }
-  },
-  handler: async (req, reply) => {
-    // Only authorized users can access this
-  }
-})
+JWT verification establishes identity, not permission to perform an operation.
+Use a separate authorization hook that rejects insufficient permissions before
+the handler runs. Locate and verify the consuming application's middleware
+before describing a route as protected.
 
-// Good: Public endpoint (explicitly disable auth)
-fastify.get('/public/data', {
-  config: { authorization: false },
-  handler: async (req, reply) => {
-    // No auth required
-  }
-})
-
-// JWT is automatically verified on all routes unless authorization: false
-// Token can be in a cookie or Authorization header
-```
+Fastify route `config` stores custom metadata. Fields such as
+`config.permissions` and `config.authorization` enforce nothing unless
+registered application middleware implements them. Do not assume that
+`authorization: false` makes a route public or that its absence enables auth.
 
 ## Data Protection
 
@@ -160,41 +149,27 @@ fastify.register(rateLimit, {
 
 ### Input Sanitization
 
-**Sanitize all user-generated content with `sanitize-html`:**
+Use `sanitize-html` only for fields intentionally accepting HTML, after schema
+validation establishes that they are strings. It returns HTML text, not a
+sanitized JSON object.
+
+For example, with `bioHtml` declared as a required string in the body schema:
 
 ```javascript
 import sanitizeHtml from 'sanitize-html'
 
-// Good: Recursive sanitization for nested objects
-function sanitizePropertiesObject(obj) {
-  const output = {}
-  const sanitizeOptions = {
-    allowedTags: [],
+const sanitized = {
+  ...request.body,
+  bioHtml: sanitizeHtml(request.body.bioHtml, {
+    allowedTags: ['p', 'strong', 'em'],
     allowedAttributes: {}
-  }
-
-  for (const [key, value] of Object.entries(obj)) {
-    if (typeof value === 'string') {
-      output[key] = sanitizeHtml(value, sanitizeOptions)
-    } else if (typeof value === 'object' && value !== null) {
-      output[key] = sanitizePropertiesObject(value)
-    } else {
-      output[key] = value
-    }
-  }
-  return output
+  })
 }
-
-const sanitized = sanitizePropertiesObject(userInput)
-
-// Good: General sanitization hook (best practice)
-fastify.addHook('preHandler', (request, reply, done) => {
-  if (request.body) {
-    request.body = sanitizeHtml(request.body)
-  }
-  done()
-})
 ```
+
+Keep arrays, objects, nulls, and other scalar values intact. Do not pass an
+entire request body to an HTML sanitizer or blanket-transform passwords,
+identifiers, or ordinary plain-text fields.
 
 ### Environment Variables & Secrets
 
@@ -293,9 +268,9 @@ class ErrorBoundary extends React.Component {
 - [ ] CSRF protection
 - [ ] Proper logging (no sensitive data)
 - [ ] Webhook signatures verified
-- [ ] ObjectId conversion wrapped in try/catch
-- [ ] User input sanitized with sanitize-html
+- [ ] ObjectId conversion caught separately from database errors
+- [ ] Designated HTML fields sanitized without changing unrelated input
 - [ ] All secrets validated at startup
-- [ ] Protected routes use RBAC permissions
+- [ ] Protected routes verify identity and enforce permissions before handlers
 - [ ] No dangerouslySetInnerHTML with user content
 - [ ] Error boundaries implemented in React

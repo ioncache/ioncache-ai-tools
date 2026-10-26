@@ -304,6 +304,42 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Recovered edit"}},
                   checks=CHECKS)
 
+    def test_stopped_fix_can_be_abandoned_without_reverting_drift(self):
+        for stopped, terminal in (("interrupted", "failed"), ("blocked", "stalled")):
+            with self.subTest(stopped=stopped, terminal=terminal):
+                self.init()
+                self.review()
+                self.finding()
+                self.decide()
+                self.send("start_fix", findings=["F001"], files=["app.txt"])
+                (self.root / "app.txt").write_text(f"partial {stopped}\n")
+                self.send("stop", outcome=stopped)
+                before = self.state
+                history = json.loads(Path(self.ledger).read_text())["events"]
+                (self.root / "outside.txt").write_text(f"external {stopped}\n")
+                if stopped == "blocked":
+                    self.git("add", "outside.txt")
+                index = self.git("ls-files", "--stage", "-z")
+                self.reject("resume")
+                self.reject("reconcile", evidence=["Unexpected edits"])
+                self.reject("stop", outcome="completed")
+                self.reject("stop", outcome="interrupted")
+                self.send("stop", outcome=terminal)
+                self.assertEqual(self.state["outcome"], terminal)
+                for key in ("snapshot", "phase", "loops", "findings", "limits"):
+                    self.assertEqual(self.state[key], before[key])
+                report = self.cli(["status", self.ledger])
+                self.assertTrue(report["drift"])
+                self.assertEqual(report["history"][:-1], history)
+                self.assertEqual(report["revision"], before["revision"] + 1)
+                self.assertEqual((self.root / "app.txt").read_text(), f"partial {stopped}\n")
+                self.assertEqual((self.root / "outside.txt").read_text(), f"external {stopped}\n")
+                self.assertEqual(self.git("ls-files", "--stage", "-z"), index)
+                self.reject("resume")
+                self.reject("reconcile", evidence=["Finished run"])
+                self.reject("stop", outcome="failed")
+        self.init()
+
     def test_stop_cannot_launder_stale_review(self):
         """Stopping after external edits must not relabel an old review as current."""
         self.init()

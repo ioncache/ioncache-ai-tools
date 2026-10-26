@@ -101,6 +101,10 @@ old judgments and consumes another outer loop when full review restarts;
 it never refunds completed or interrupted work. During fixing, only declared
 file edits with unchanged HEAD/index can be recovered through `fix_done`.
 Unexpected edits require stopping with an explanation, not a silent reset.
+If a blocked/interrupted run cannot resume safely, send `stop` with outcome
+`failed` or `stalled`. This terminates the run without reverting files or
+changing its evidence snapshot, finding history, or consumed allowances.
+Do not delete the ledger or reconstruct an earlier worktree just to abandon it.
 
 Stop for unrecoverable errors, missing capabilities, or oscillating fixes.
 Do not repeatedly relaunch a failing worker within a phase to evade counts.

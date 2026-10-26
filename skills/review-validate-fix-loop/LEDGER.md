@@ -40,7 +40,7 @@ adds `snapshot`, `sequence`, and `time`; do not supply them.
 | `fix_done` | `results`, `checks` | Record results for every attempted finding and enter review-fixes. |
 | `fixes_reviewed` | `passes` | Finish focused review and enter inner validation. |
 | `advance` | None | Finish validation, enforce limits, or finish the run. |
-| `stop` | `outcome` | Stop as `blocked`, `interrupted`, `failed`, or `stalled`. |
+| `stop` | `outcome` | Stop as `blocked`, `interrupted`, `failed`, or `stalled`. A blocked/interrupted run may be abandoned as `failed` or `stalled`. |
 | `resume` | None | Reopen a blocked/interrupted run without changing allowances. |
 | `reconcile` | `evidence` | Invalidate evidence after external edits outside a fixing phase. |
 

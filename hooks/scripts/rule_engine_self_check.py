@@ -150,9 +150,89 @@ def check_shell_tokens():
     assert rule_engine.split_into_simple_commands(['echo', ';', 'next']) == [['echo'], ['next']]
 
 
+def check_copy_destinations():
+    with tempfile.TemporaryDirectory(prefix='lockfile-copy-') as temp, contextlib.chdir(temp):
+        os.mkdir('destination')
+        cases = (
+            ('cp replacement.json package-lock.json 2>/dev/null', True),
+            ('mv replacement.yaml pnpm-lock.yaml 2>&1', True),
+            ('cp source/package-lock.json .', True),
+            ('mv source/yarn.lock destination', True),
+            ('cp ordinary.txt source/package-lock.json destination/', True),
+            ('cp source/package-lock.json backup.json', False),
+            ('cp ordinary.txt destination 2>/dev/null', False),
+            ('cp source/package-lock.json 2 >/dev/null', False),
+            ("cp source/package-lock.json '2'>/dev/null", False),
+            (r'cp source/package-lock.json \2>/dev/null', False),
+            ('cp source/package-lock.json backup.json < input.txt', False),
+            ('2>/dev/null cp replacement.json package-lock.json', True),
+            ('cp replacement.json 2>/dev/null package-lock.json', True),
+        )
+        for command, expected in cases:
+            result = no_manual_lockfile_edit_bash.matches({
+                'tool_name': 'Bash', 'tool_input': {'command': command},
+            })
+            assert result is expected, (command, result, expected)
+
+
+def check_copy_directory_changes():
+    with tempfile.TemporaryDirectory(prefix='lockfile-cd-') as temp:
+        for directory in ('destination', 'app/lockfiles', 'app space/lockfiles'):
+            os.makedirs(os.path.join(temp, directory))
+        cases = (
+            ('cd app && cp /tmp/package-lock.json lockfiles', True),
+            ('cd app\nmv /tmp/yarn.lock lockfiles', True),
+            ('cd app; cp /tmp/package-lock.json ../destination', True),
+            ("cd -- 'app space' && cp /tmp/package-lock.json lockfiles", True),
+            ('cd app && cd lockfiles && mv /tmp/pnpm-lock.yaml .', True),
+            ('cd app && cd lockfiles && cp /tmp/package-lock.json backup.json', False),
+            ('cd app && cp /tmp/package-lock.json backup.json', False),
+            ('cd app && cp ordinary.txt lockfiles', False),
+            ('cd app && cp /tmp/package-lock.json destination', False),
+            ('env cd app; cp /tmp/package-lock.json destination', True),
+            ('/usr/bin/env cd app; cp /tmp/package-lock.json destination', True),
+            ('timeout 5 cd app; cp /tmp/package-lock.json destination', True),
+            ('command env cd app; cp /tmp/package-lock.json destination', True),
+            ('command cd app; cp /tmp/package-lock.json destination', False),
+            ('builtin cd app; cp /tmp/package-lock.json destination', False),
+            ('cd "$APP" && cp /tmp/package-lock.json lockfiles', True),
+            ('(cd app); cp /tmp/package-lock.json destination', True),
+            ('cd app || cp /tmp/package-lock.json destination', True),
+            ('false && cd app; cp /tmp/package-lock.json destination', True),
+            (f'cd "$APP" && cp /tmp/package-lock.json {temp}/backup.json', False),
+        )
+        with mock.patch.dict(os.environ, {'CDPATH': ''}):
+            for command, expected in cases:
+                result = no_manual_lockfile_edit_bash.matches({
+                    'cwd': temp, 'tool_name': 'Bash', 'tool_input': {'command': command},
+                })
+                assert result is expected, (command, result, expected)
+
+
+def check_emdash_line_boundaries():
+    dash = chr(0x2014)
+    cases = (
+        (f'# Explanation {dash}\nimportant_value = 1\n', '# Explanation, \nimportant_value = 1\n'),
+        (f'Paragraph {dash}\n\n  Next paragraph\n', 'Paragraph, \n\n  Next paragraph\n'),
+        (f'Before\r\n{dash} after\r\n', 'Before\r\n, after\r\n'),
+    )
+    for original, expected in cases:
+        for tool, field in (('Write', 'content'), ('Edit', 'new_string')):
+            result = fix_emdash.check({'tool_name': tool, 'tool_input': {field: original}})
+            assert result['updatedInput'][field] == expected, (tool, result)
+        result = fix_emdash.check({
+            'tool_name': 'MultiEdit',
+            'tool_input': {'edits': [{'old_string': 'old', 'new_string': original}]},
+        })
+        assert result['updatedInput']['edits'][0]['new_string'] == expected, result
+
+
 def main():
     check_rule_discovery()
     check_shell_tokens()
+    check_copy_destinations()
+    check_copy_directory_changes()
+    check_emdash_line_boundaries()
 
     # match_rule: always
     assert match_rule({'matcher': {'type': 'always'}}, {}) is True, 'always matcher should always match'
