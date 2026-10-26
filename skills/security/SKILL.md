@@ -117,9 +117,10 @@ fastify.post('/stripe/webhook', async (req, reply) => {
 
 ## Authentication & Authorization
 
-Register `@fastify/jwt` and explicitly call `request.jwtVerify()` in an
-authentication hook before the protected handler runs. Registration alone
-does not protect routes. Follow the
+Register `@fastify/jwt` and use `await request.jwtVerify()` in an async
+authentication hook, or return its promise. Verification must finish
+successfully before the protected handler runs; rejection must stop the
+request. Registration alone does not protect routes. Follow the
 [JWT verification examples](https://github.com/fastify/fastify-jwt#usage).
 
 JWT verification establishes identity, not permission to perform an operation.
