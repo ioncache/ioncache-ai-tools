@@ -260,6 +260,34 @@ function report(applied, worktreePath) {
   for (const item of applied) console.log(`  ${item}`)
 }
 
+/**
+ * Exercises setup when a registered worktree directory has been removed.
+ * @param {string} tmp - Isolated fixture directory
+ * @returns {void}
+ * @throws {Error} If Git, the helper, or a setup assertion fails
+ * @example
+ * selfTestRestoredWorktree(fixtureDirectory)
+ */
+function selfTestRestoredWorktree(tmp) {
+  const assert = require('assert')
+  const main = path.join(tmp, 'recovery-main')
+  const linked = path.join(tmp, 'recovery-linked')
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+  execFileSync('git', ['init', '--quiet', main], { env })
+  execFileSync('git', [
+    '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '--quiet', '--allow-empty', '-m', 'Fixture'
+  ], { cwd: main, env })
+  fs.writeFileSync(path.join(main, SETUP_FILE), JSON.stringify({
+    afterCopy: [{ path: 'ready.txt', content: 'configured\n' }]
+  }))
+  execFileSync(process.execPath, [__filename, '--detach', linked], { cwd: main, env, stdio: 'pipe' })
+  assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'configured\n')
+  fs.rmSync(linked, { recursive: true })
+  execFileSync(process.execPath, [__filename, '--force', '--detach', linked], { cwd: main, env, stdio: 'pipe' })
+  assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'configured\n')
+}
+
 function selfTest() {
   const assert = require('assert')
   const os = require('os')
@@ -330,6 +358,7 @@ function selfTest() {
 
     applySetup(root, worktree)
     assert.strictEqual(fs.readFileSync(path.join(worktree, 'cache/nested/x'), 'utf8'), 'copied')
+    selfTestRestoredWorktree(tmp)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
@@ -349,7 +378,7 @@ function main() {
   }
 
   const cwd = process.cwd()
-  const before = new Set(listWorktrees(cwd))
+  const before = new Set(listWorktrees(cwd).filter((worktreePath) => fs.existsSync(worktreePath)))
 
   const result = spawnSync('git', ['worktree', 'add', ...args], { cwd, stdio: 'inherit' })
   if (result.status !== 0) process.exit(result.status ?? 1)
