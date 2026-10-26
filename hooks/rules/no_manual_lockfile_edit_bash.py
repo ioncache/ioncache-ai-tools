@@ -21,7 +21,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
-from rule_engine import is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
+from rule_engine import (  # noqa: E402
+    is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
+    without_redirections,
+)
 
 LOCKFILE_NAMES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
 
@@ -56,11 +59,22 @@ def _has_inplace_edit_flag(executable):
     return False
 
 
-def _mutates_lockfile(simple_command):
+def _copy_targets_lockfile(executable, cwd):
+    if len(executable) < 3:
+        return False
+    destination = executable[-1]
+    if _is_lockfile(destination):
+        return True
+    if destination.endswith(os.sep) or os.path.isdir(os.path.join(cwd, destination)):
+        return any(_is_lockfile(source) for source in executable[1:-1])
+    return False
+
+
+def _mutates_lockfile(simple_command, cwd):
     for i, token in enumerate(simple_command):
         if is_shell_operator(token, {'>', '>>'}) and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
             return True
-    executable = skip_wrappers(simple_command)
+    executable = skip_wrappers(without_redirections(simple_command))
     if not executable:
         return False
     head = os.path.basename(executable[0])
@@ -68,11 +82,12 @@ def _mutates_lockfile(simple_command):
         return any(_is_lockfile(t) for t in executable[1:])
     if head in ('sed', 'perl'):
         return _has_inplace_edit_flag(executable) and any(_is_lockfile(t) for t in executable[1:])
-    if head in ('cp', 'mv') and len(executable) > 1:
-        return _is_lockfile(executable[-1])
+    if head in ('cp', 'mv'):
+        return _copy_targets_lockfile(executable, cwd)
     return False
 
 
 def matches(hook_input):
     command = (hook_input.get('tool_input') or {}).get('command') or ''
-    return any(_mutates_lockfile(sc) for sc in split_into_simple_commands(tokenize_command(command)))
+    cwd = hook_input.get('cwd') or os.getcwd()
+    return any(_mutates_lockfile(sc, cwd) for sc in split_into_simple_commands(tokenize_command(command)))

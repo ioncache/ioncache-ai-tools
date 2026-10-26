@@ -150,6 +150,31 @@ def check_shell_tokens():
     assert rule_engine.split_into_simple_commands(['echo', ';', 'next']) == [['echo'], ['next']]
 
 
+def check_copy_destinations():
+    with tempfile.TemporaryDirectory(prefix='lockfile-copy-') as temp, contextlib.chdir(temp):
+        os.mkdir('destination')
+        cases = (
+            ('cp replacement.json package-lock.json 2>/dev/null', True),
+            ('mv replacement.yaml pnpm-lock.yaml 2>&1', True),
+            ('cp source/package-lock.json .', True),
+            ('mv source/yarn.lock destination', True),
+            ('cp ordinary.txt source/package-lock.json destination/', True),
+            ('cp source/package-lock.json backup.json', False),
+            ('cp ordinary.txt destination 2>/dev/null', False),
+            ('cp source/package-lock.json 2 >/dev/null', False),
+            ("cp source/package-lock.json '2'>/dev/null", False),
+            (r'cp source/package-lock.json \2>/dev/null', False),
+            ('cp source/package-lock.json backup.json < input.txt', False),
+            ('2>/dev/null cp replacement.json package-lock.json', True),
+            ('cp replacement.json 2>/dev/null package-lock.json', True),
+        )
+        for command, expected in cases:
+            result = no_manual_lockfile_edit_bash.matches({
+                'tool_name': 'Bash', 'tool_input': {'command': command},
+            })
+            assert result is expected, (command, result, expected)
+
+
 def check_emdash_line_boundaries():
     dash = chr(0x2014)
     cases = (
@@ -171,6 +196,7 @@ def check_emdash_line_boundaries():
 def main():
     check_rule_discovery()
     check_shell_tokens()
+    check_copy_destinations()
     check_emdash_line_boundaries()
 
     # match_rule: always

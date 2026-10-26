@@ -122,6 +122,8 @@ SHELL_LEXEMES = re.compile(
 class ShellWord(str):
     """Keep decoded arguments distinguishable from identically spelled operators."""
 
+    is_io_number = False
+
 
 def is_shell_operator(token, operators):
     return not isinstance(token, ShellWord) and token in operators
@@ -149,11 +151,37 @@ def tokenize_command(command):
                 word, = shlex.split(match[0], comments=False, posix=True)
             except ValueError:
                 return tokens + command[position:].split()
-            tokens.append(ShellWord(word))
+            token = ShellWord(word)
+            token.is_io_number = (
+                match[0].isascii() and match[0].isdigit()
+                and command[match.end():match.end() + 1] in ('<', '>')
+            )
+            tokens.append(token)
         elif match.lastgroup == 'operator':
             tokens.append(match[0])
         position = match.end()
     return tokens
+
+
+REDIRECTION_OPERATORS = {'>', '>>', '>|', '&>', '&>>', '<', '<<', '<<-', '<<<', '>&', '<&', '<>'}
+
+
+def without_redirections(tokens):
+    """Remove redirect clauses, preserving quoted or separated numeric operands."""
+    operands = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if (getattr(token, 'is_io_number', False) and index + 1 < len(tokens)
+                and is_shell_operator(tokens[index + 1], REDIRECTION_OPERATORS)):
+            index += 1
+            token = tokens[index]
+        if is_shell_operator(token, REDIRECTION_OPERATORS):
+            index += 2
+            continue
+        operands.append(token)
+        index += 1
+    return operands
 
 
 def split_into_simple_commands(tokens):
