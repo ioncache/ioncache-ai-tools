@@ -14,8 +14,8 @@ even while a question is pending, since answering a question well often
 requires looking things up - the rule this enforces is "don't act before
 answering," not "don't use any tool at all."
 
-Bash matching here is a fixed pattern list, not real command parsing: it
-catches common ways of mutating state, not every way. Known, accepted
+Bash matching applies a fixed pattern list at tokenized command positions.
+It catches common ways of mutating state, not every way. Known, accepted
 gap: an interpreter one-liner or shell construct not in the list (an
 uncommon shell, an obscure redirect form) can still slip through
 unmatched.
@@ -25,13 +25,17 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evidence_review import review_metadata_request  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
-from rule_engine import is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers  # noqa: E402
+from rule_engine import (  # noqa: E402
+    is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
+    without_redirections,
+)
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
 
@@ -42,15 +46,12 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_pa
 # intentionally not matched here. `gh api graphql` is handled separately
 # (see _is_graphql_mutation_document), since it can be either a read or
 # a write.
-# A real file redirect (`>`, `>>`, `>&file`, `&>file`, `>|file`) is
-# handled separately too (see has_file_redirect): unlike these, a
-# redirect operator needs actual tokenization to check, a raw text scan
-# for `>` also matches one quoted inside another command's argument
-# (`grep "a > b" file`) or a `((...))` arithmetic comparison, neither of
-# which is a redirect at all.
+# File redirects are checked separately: quoted operators and arithmetic
+# comparisons must not be mistaken for persistent writes.
 BASH_MUTATION_PATTERNS = re.compile(
+    r"\bgit\s+checkout\s+--(?=\s|$)|"
     r"\bgit\s+("
-    r"commit|push|reset|checkout\s+--|worktree\s+remove|branch\s+-[fD]\b|"
+    r"commit|push|reset|worktree\s+remove|branch\s+-[fD]\b|"
     r"rebase|merge|cherry-pick|clean\s+-"
     r")\b|"
     r"\bgh\s+("
@@ -237,6 +238,19 @@ def _is_graphql_call(simple_command):
     return executable[:3] == ["gh", "api", "graphql"]
 
 
+def _mutating_shell_command(simple_command):
+    executable = skip_wrappers(without_redirections(simple_command))
+    prefixes = {"if", "then", "elif", "else", "while", "until", "do", "!", "{"}
+    while executable and (
+        executable[0] in prefixes or re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", executable[0])
+    ):
+        executable = skip_wrappers(executable[1:])
+    if not executable:
+        return False
+    command = shlex.join([os.path.basename(executable[0]), *executable[1:]])
+    return bool(BASH_MUTATION_PATTERNS.match(command))
+
+
 def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
@@ -252,12 +266,14 @@ def is_mutating(tool_name, tool_input):
         # query='mutation {...}'` let the first match win and the
         # second, mutating call was never examined.
         for simple_command in simple_commands:
+            if _mutating_shell_command(simple_command) or _redirects_to_a_file(simple_command):
+                return True
             if not _is_graphql_call(simple_command):
                 continue
             query_text = _extract_graphql_query_document(simple_command)
             if query_text is None or _is_graphql_mutation_document(query_text):
                 return True
-        return bool(BASH_MUTATION_PATTERNS.search(command)) or has_file_redirect(command)
+        return False
     return False
 
 

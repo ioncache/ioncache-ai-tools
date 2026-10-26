@@ -122,6 +122,8 @@ SHELL_LEXEMES = re.compile(
 class ShellWord(str):
     """Keep decoded arguments distinguishable from identically spelled operators."""
 
+    is_io_number = False
+
 
 def is_shell_operator(token, operators):
     return not isinstance(token, ShellWord) and token in operators
@@ -149,11 +151,37 @@ def tokenize_command(command):
                 word, = shlex.split(match[0], comments=False, posix=True)
             except ValueError:
                 return tokens + command[position:].split()
-            tokens.append(ShellWord(word))
+            token = ShellWord(word)
+            token.is_io_number = (
+                match[0].isascii() and match[0].isdigit()
+                and command[match.end():match.end() + 1] in ('<', '>')
+            )
+            tokens.append(token)
         elif match.lastgroup == 'operator':
             tokens.append(match[0])
         position = match.end()
     return tokens
+
+
+REDIRECTION_OPERATORS = {'>', '>>', '>|', '&>', '&>>', '<', '<<', '<<-', '<<<', '>&', '<&', '<>'}
+
+
+def without_redirections(tokens):
+    """Remove redirect clauses, preserving quoted or separated numeric operands."""
+    operands = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if (getattr(token, 'is_io_number', False) and index + 1 < len(tokens)
+                and is_shell_operator(tokens[index + 1], REDIRECTION_OPERATORS)):
+            index += 1
+            token = tokens[index]
+        if is_shell_operator(token, REDIRECTION_OPERATORS):
+            index += 2
+            continue
+        operands.append(token)
+        index += 1
+    return operands
 
 
 def split_into_simple_commands(tokens):
@@ -186,9 +214,31 @@ def split_into_simple_commands(tokens):
 # these wrappers are not recognized: their flags can take a value of
 # their own, and telling a flag from its value needs per-wrapper
 # knowledge, real scope beyond what this covers, and stays a known,
-# accepted gap.
+# accepted gap. env additionally supports ignore-environment/unset options
+# and assignments; split-string and other env options remain uninterpreted.
 NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf'}
 DURATION_ARG_WRAPPERS = {'timeout'}
+
+
+def _env_command_index(tokens, index):
+    while index < len(tokens):
+        token = tokens[index]
+        if token == '--':
+            index += 1
+            break
+        if token in {'-', '-i', '--ignore-environment'} or token.startswith('--unset='):
+            index += 1
+        elif token in {'-u', '--unset'}:
+            index += 2
+        elif token.startswith('-u') and len(token) > 2:
+            index += 1
+        else:
+            if token.startswith('-'):
+                return index
+            break
+    while index < len(tokens) and '=' in tokens[index]:
+        index += 1
+    return index
 
 
 def skip_wrappers(simple_command):
@@ -204,6 +254,9 @@ def skip_wrappers(simple_command):
             continue
         if name in DURATION_ARG_WRAPPERS and i + 1 < n:
             i += 2
+            continue
+        if name == 'env':
+            i = _env_command_index(simple_command, i + 1)
             continue
         break
     return simple_command[i:]
