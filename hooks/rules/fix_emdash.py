@@ -7,7 +7,7 @@ very rule it implements.
 import re
 
 EM_DASH = chr(0x2014)
-EM_DASH_PATTERN = re.compile(r'\s*' + EM_DASH + r'\s*')
+EM_DASH_PATTERN = re.compile(r'[ \t]*' + EM_DASH + r'[ \t]*')
 REPLACEMENT = ', '
 
 EVENT = 'PreToolUse'

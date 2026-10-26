@@ -150,9 +150,28 @@ def check_shell_tokens():
     assert rule_engine.split_into_simple_commands(['echo', ';', 'next']) == [['echo'], ['next']]
 
 
+def check_emdash_line_boundaries():
+    dash = chr(0x2014)
+    cases = (
+        (f'# Explanation {dash}\nimportant_value = 1\n', '# Explanation, \nimportant_value = 1\n'),
+        (f'Paragraph {dash}\n\n  Next paragraph\n', 'Paragraph, \n\n  Next paragraph\n'),
+        (f'Before\r\n{dash} after\r\n', 'Before\r\n, after\r\n'),
+    )
+    for original, expected in cases:
+        for tool, field in (('Write', 'content'), ('Edit', 'new_string')):
+            result = fix_emdash.check({'tool_name': tool, 'tool_input': {field: original}})
+            assert result['updatedInput'][field] == expected, (tool, result)
+        result = fix_emdash.check({
+            'tool_name': 'MultiEdit',
+            'tool_input': {'edits': [{'old_string': 'old', 'new_string': original}]},
+        })
+        assert result['updatedInput']['edits'][0]['new_string'] == expected, result
+
+
 def main():
     check_rule_discovery()
     check_shell_tokens()
+    check_emdash_line_boundaries()
 
     # match_rule: always
     assert match_rule({'matcher': {'type': 'always'}}, {}) is True, 'always matcher should always match'
