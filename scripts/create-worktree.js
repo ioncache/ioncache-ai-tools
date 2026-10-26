@@ -272,6 +272,7 @@ function selfTestRestoredWorktree(tmp) {
   const assert = require('assert')
   const main = path.join(tmp, 'recovery-main')
   const linked = path.join(tmp, 'recovery-linked')
+  const stale = path.join(tmp, 'recovery-a-stale')
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
   execFileSync('git', ['init', '--quiet', main], { env })
   execFileSync('git', [
@@ -281,6 +282,8 @@ function selfTestRestoredWorktree(tmp) {
   fs.writeFileSync(path.join(main, SETUP_FILE), JSON.stringify({
     afterCopy: [{ path: 'ready.txt', content: 'configured\n' }]
   }))
+  execFileSync(process.execPath, [__filename, '--detach', stale], { cwd: main, env, stdio: 'pipe' })
+  fs.rmSync(stale, { recursive: true })
   execFileSync(process.execPath, [__filename, '--detach', linked], { cwd: main, env, stdio: 'pipe' })
   assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'configured\n')
   fs.rmSync(linked, { recursive: true })
@@ -384,7 +387,7 @@ function main() {
   if (result.status !== 0) process.exit(result.status ?? 1)
 
   const after = listWorktrees(cwd)
-  const newWorktree = after.find((worktreePath) => !before.has(worktreePath))
+  const newWorktree = after.find((worktreePath) => !before.has(worktreePath) && fs.existsSync(worktreePath))
   if (!newWorktree) return
 
   const mainWorktree = listWorktrees(newWorktree)[0]
