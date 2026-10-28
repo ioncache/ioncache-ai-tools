@@ -95,8 +95,8 @@ stale conclusions silently or discard unresolved gaps to claim completion.
 ## Output
 
 Start with exactly one verdict line: **breaks**, **needs a project change**,
-**no breakage found**, or **incomplete** followed by the missing required
-evidence/checks on the same line.
+**no breakage found**, or **incomplete** followed by a colon and the missing
+required evidence/checks on the same line.
 Use step 8's definitions, then return these sections in order:
 
 1. Per-package table.
