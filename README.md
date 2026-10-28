@@ -77,11 +77,17 @@ Ask the assistant to use a skill by name.
 | Skill | Purpose |
 | --- | --- |
 | [review-code](skills/review-code/SKILL.md) | Read-only code review |
+| [review-dependabot-pr](skills/review-dependabot-pr/SKILL.md) | Read-only dependency-update review against actual project usage |
 | [verify-unresolved-pr-comments](skills/verify-unresolved-pr-comments/SKILL.md) | Triage outstanding PR feedback without changing it |
 | [review-validate-fix-loop](skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within set limits |
 | [investigate](skills/investigate/SKILL.md) | Read-only investigation |
 | [triage-errors](skills/triage-errors/SKILL.md) | Fix related failures by root cause |
 | [create-worktree](skills/create-worktree/SKILL.md) | Create a worktree with repository setup applied |
+
+The dependency review covers Dependabot, Renovate, and similar updates,
+including grouped bumps and indirect dependencies. It compares package code
+against project usage and checks environment drift without changing the PR.
+Reviews can resume from a saved private run directory.
 
 The review/fix loop defaults to three review loops and three fix cycles per
 loop. It supports resuming a run, but does not authorize commits, pushes, or PR
