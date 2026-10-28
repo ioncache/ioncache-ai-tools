@@ -1,10 +1,11 @@
 ---
 name: review-dependabot-pr
-description: Reviews dependency-bump pull requests by comparing old and new package code against actual project usage, including indirect dependencies and environment drift. Use when asked to review a Dependabot, Renovate, or similar automated dependency update, including grouped bumps, or resume that review; reports findings without changing the PR.
+description: Determines whether dependency-bump pull requests break the project by comparing old and new package code against actual usage, including indirect dependencies and environment drift. Use when asked to review a Dependabot, Renovate, or similar automated dependency update, including grouped bumps, or resume that review; reports without changing the PR.
 ---
 
 # Read-only dependency review
 
+Answer whether this dependency-bump PR breaks anything in the project.
 Read the [workflow](WORKFLOW.md) before starting. Follow all eight steps.
 Examples: "review this Dependabot PR" or "resume the dependency review using
 this saved run directory". Resolve an unspecified target rather than guessing.
@@ -58,11 +59,18 @@ own. Tests cover their inputs, not every dependency behavior the project uses.
 Source comparison and project call-path analysis are mandatory.
 
 Use **no impact**, **breaks**, or **needs a project change** only for supported
-conclusions. Keep incomplete cases **unverified**, not implicitly safe.
+package conclusions. A required project change must keep the project working,
+not merely make output look different. Findings require a PR-introduced,
+verified failure or mandatory adaptation with evidence of a project trigger.
+Non-failing cosmetic or scanner-metadata changes and pre-existing issues belong
+only in Notes, without severity or recommended action.
+
+Keep missing required evidence **unverified**, not implicitly safe.
 "Safe" means checked within the stated usage and environments, never
-"probably fine" or a universal guarantee. Do not give an overall safe verdict
-while relevant source paths, packages, environments, or required checks remain
-unverified. "Could break" belongs only in the Unverified section, never findings.
+"probably fine" or a universal guarantee. Required analysis or check gaps force
+an **incomplete** report. A hypothetical input without evidence of project use
+belongs in Unverified, not Findings; distinguish it from required gaps as in
+step 5. "Could break" belongs only in Unverified, never findings or table rows.
 
 ## Scale and resumption
 
@@ -86,7 +94,21 @@ stale conclusions silently or discard unresolved gaps to claim completion.
 
 ## Output
 
-Use the workflow's per-package table, severity-ranked findings, Unverified
-section, and base/head check table. Include the run directory and coverage
-counts. State whether the review is complete or incomplete, separately from
-whether any breakage was found.
+Start with exactly one verdict line: **breaks**, **needs a project change**,
+**no breakage found**, or **incomplete** followed by a colon and the missing
+required evidence/checks on the same line.
+Use step 8's definitions, then return these sections in order:
+
+1. Per-package table.
+2. Findings, ranked High or Medium for verified project failures, or "None".
+3. Unverified, including evidence needed to decide, or "None".
+4. Notes, under `tooling changes`, `issues already on the base branch`, and
+   `other observations`. One line per note with evidence links; no severity
+   or recommended action.
+5. Base/head check table.
+
+State completeness separately, with the run directory and coverage counts.
+Only a fully checked scope with no PR-introduced failures or required changes earns
+**no breakage found**. Follow the workflow's later-posting rules only after
+an explicit user request: verdict and table by default, inline comments only
+for findings, never for Unverified or Notes.

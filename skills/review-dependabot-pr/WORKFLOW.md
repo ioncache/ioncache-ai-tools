@@ -57,8 +57,9 @@ decisions, environment drift, required check identifiers, and unverified gaps.
 
 Save after each substantive step and immediately after steps 2 through 6
 finish for that package. `complete` means those analysis steps are finished
-without unresolved analysis gaps, not that shared validation passed or that
-the PR is safe. Analysis gaps keep the package blocked while others proceed.
+without unresolved required analysis gaps, not that shared validation passed
+or that the PR is safe. Required gaps keep the package blocked while others
+proceed; distinguish hypothetical inputs from those gaps as in step 5.
 Keep shared check plans/results in the run index, owned by the coordinator.
 Pending shared checks must not force completed package research to restart.
 
@@ -194,6 +195,9 @@ For every relevant change from steps 3 and 4, record the affected project
 old result X and new result Y with both source paths and project assumptions.
 Separate conclusions established by static source tracing from observed check
 results. Never claim to have reproduced behavior by merely reading it.
+Show project evidence for the triggering input or configuration, such as a
+caller, fixture, or documented input contract. A dependency's ability to accept
+an input is not evidence that the project uses it.
 
 For additions, removals, and replacements, the before/after is the project
 call path and its outcome, not a fictional implementation on the absent side.
@@ -203,22 +207,44 @@ path and any installation or initialization behavior the project relied on.
 Use one of these verdicts for verified changes:
 
 - **no impact**: show why the changed behavior preserves this project's
-  contract or cannot be reached with its actual inputs/configuration.
-- **breaks**: give the reachable failure scenario and resulting project failure.
+  contract or cannot be reached with its actual inputs/configuration. Changes
+  only to formatting, warnings, or log text are no impact unless they break a
+  project contract or fail a check the project actually enforces. Record
+  non-failing output changes in Notes.
+- **breaks**: give the verified, reachable failure introduced by the PR, with
+  evidence of the project trigger and the resulting failure.
 - **needs a project change**: identify the specific required configuration,
-  usage, runtime, or tooling adjustment and what fails or changes without it.
+  usage, runtime, or tooling adjustment to keep the project working. Show
+  what fails without it, such as a removed API the project calls or a runtime
+  floor its image does not meet. Different-looking output is not enough.
 
 If evidence cannot decide, mark the case unverified rather than choosing a
 verdict. Preserve verified findings alongside gaps. At package level, summarize
-the actionable verdicts without hiding unresolved paths behind "no impact".
+the impact verdicts without hiding unresolved paths behind "no impact".
 Packages with no mapped runtime usage still need installation, tooling,
 environment, and packaging compatibility accounted for.
 
+Behavior changes whose triggering inputs have no evidence of occurring in the
+project belong in Unverified, with the evidence needed to decide. Distinguish
+these hypothetical inputs from missing required usage mapping, source evidence,
+or checks. A hypothetical input alone does not make a finished review incomplete.
+An untraced project entry point or unresolved accepted input contract is a
+required gap, not a hypothetical input to dismiss.
+
+Only PR-introduced failures or mandatory adaptations qualify as findings.
+Formatter/linter output changes qualify only when they fail a check enforced
+in CI, pre-commit, or the build. Scanner or vulnerability-database metadata
+disagreeing with a verified fix belongs in Notes unless a scanner the project
+actually runs would fail the build because of this PR. Existing drift, unpinned
+CI tools, and startup behavior unchanged between base and head are not findings.
+Keep them in Notes; do not turn an unchanged base failure into a bump regression.
+
 Fictional example: `src/preview.py:42` falls back when an image decoder returns
-no image for a truncated header. The old decoder returns no image; the new
-decoder raises an exception that the caller does not catch. Cite both decoder
-implementations and the project fallback. The finding is that malformed image
-input now aborts preview generation, not that the image library "could break".
+no image for a truncated header accepted by the upload route and covered by a
+project fixture. The old decoder returns no image; the new decoder raises an
+exception that the caller does not catch. Cite both decoder implementations,
+the project fallback, and the fixture. The finding is that this supported
+upload now aborts preview generation, not a speculative dependency warning.
 
 Save individual package analyses without waiting for other packages. After
 collecting them, the coordinator reconciles grouped changes across package
@@ -240,11 +266,14 @@ Check specifically for:
 - Build or packaging tools declared as runtime dependencies. Trace production
   installation and packaging rules to establish whether they ship in artefacts.
 - Formatter or linter changes that rewrite or flag existing files the PR does
-  not touch. Record the affected files and expected later-PR churn.
+  not touch. Record the affected files, changed output, and whether a project
+  check enforces that output.
 
-Give each drift finding the conflicting `file:line` pins and a concrete
-failure or output change. Keep pre-existing drift distinct from newly
-introduced or worsened drift. Do not silently align versions to make checks pass.
+Record conflicting `file:line` pins and concrete failure or output differences.
+Route observations to Notes unless they meet step 5's finding bar: a verified,
+reachable failure or mandatory project change introduced by the PR. Missing
+required evidence belongs in Unverified, not Notes. Keep pre-existing issues
+separate from new failures. Do not silently align versions to make checks pass.
 
 ## 7. Run the project's checks on both base and head
 
@@ -299,32 +328,96 @@ checkpoint invalidation rules before claiming anything about the current PR,
 or limit the report to the reviewed SHAs and mark the current PR unverified.
 Reconcile every inventory entry with a completed result or an explicit
 unverified gap; include failed workers and interrupted packages. Report the
-private run directory for resume,
-package-analysis counts by status, shared-check outcomes, covered environments,
-and overall completeness. A completed analysis record cannot override a
-failed or skipped required check.
+private run directory for resume, package-analysis counts by status,
+shared-check outcomes, covered environments,
+and overall completeness as a separate statement after the check table.
+A completed analysis record cannot substitute for required check results.
 
-Return a per-package table, preserving distinct resolutions:
+### Verdict line
+
+The report's first line must be exactly one of these verdicts, without a
+heading or preamble. Emit only the bold label for the first three. For
+**incomplete**, add a colon and name the missing evidence or checks on that
+same line. The definitions are:
+
+- **breaks**: at least one verified, reachable failure introduced by the PR.
+- **needs a project change**: the project must change to keep working with
+  the bump, not merely to adjust its appearance.
+- **no breakage found**: all required analysis and checks are complete and
+  the bump introduces no failures or required changes in the checked scope.
+- **incomplete**: required evidence or checks are missing.
+
+Required gaps take precedence: use **incomplete** even if verified findings
+also exist, and retain those findings and per-package impact verdicts. Otherwise
+use **breaks** for a verified failure, **needs a project change** for a mandatory
+adaptation, or **no breakage found** when neither exists. Hypothetical inputs
+without evidence of project use remain in Unverified as defined in step 5;
+they are not themselves missing required work.
+
+The verdict answers whether the PR keeps this project working, not whether
+anything changed. Report completeness separately from compatibility, even when
+both are known. Do not claim universal safety beyond the checked scope.
+
+### Per-package table
+
+Immediately after the verdict line, return this table, preserving distinct
+resolutions:
 
 | Package | Old to new | Jump | Direct/indirect and direct parents | Usage sites | Relevant changes | Verdict | Evidence links |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 
 Use version-qualified project/source citations and upstream URLs. Summarize
 verified verdicts and visibly flag any remaining gaps in the row; do not
-force an unverified package into a clean verdict.
+force an unverified package into a clean verdict. Mark a hypothetical-input
+limit without implying a verified failure or required action. Keep speculative
+scenarios in Unverified and cosmetic/metadata details in Notes, not table rows
+that look like action items.
 
-Then return findings ranked most severe first. Use High for correctness or
-security failures, Medium for reliability/contracts/tooling, and Low for
-cosmetic churn. Each finding needs project `file:line`, a one-sentence problem
-statement, a concrete failure scenario with before/after, source evidence,
-and the minimal recommended project action. Do not apply it.
+### Findings
 
-Always include an **Unverified** section listing what was not checked, why,
-the affected packages/paths/environments, and the evidence needed to finish.
-Use "None" only when there are no gaps. Speculative "could break" statements
-belong here, never in findings.
+Use "None" when there are no findings. Include only evidence supporting a
+**breaks** or **needs a project change** impact verdict under step 5's rules.
+Rank findings most severe first: High for correctness or security failures
+in the project, Medium for reliability or contract failures in the project.
+No severity applies to Notes or Unverified.
 
-Finally include the check comparison:
+Each finding needs project `file:line`, a one-sentence problem statement,
+a reachable failure scenario with before/after, evidence of the project
+trigger and both source paths, and the minimal required project action.
+Record the affected package's manifest or lockfile line for a later inline
+anchor. Do not apply the action.
+
+### Unverified
+
+Always include this section, or "None" when it is empty. List missing required
+work and hypothetical inputs separately. Give the affected packages, paths,
+or environments, why each case is unresolved, and the evidence needed to
+decide it. "Could break" belongs only here, never in Findings or package rows.
+Do not present these items as failures or recommended project changes.
+
+### Notes
+
+Group non-verdict observations under these three plain headings:
+
+#### tooling changes
+
+Non-failing formatter/linter changes, warnings, and other tooling output.
+
+#### issues already on the base branch
+
+Existing drift, failures, or startup behavior that the PR did not introduce.
+
+#### other observations
+
+Non-blocking scanner metadata disagreements and other non-breaking changes.
+
+Use one line per note, with evidence links, no severity, and no recommended
+action. Use "None" under empty headings. Keep step 6's observations here
+unless they meet the finding bar; never hide required evidence gaps in Notes.
+
+### Base/head checks
+
+Return the check comparison after Notes:
 
 | Check | Exact base command and environment | Base result | Exact head command and environment | Head result | Attribution or skip reason |
 | --- | --- | --- | --- | --- | --- |
@@ -332,5 +425,17 @@ Finally include the check comparison:
 Label each base role and immutable SHA explicitly. When the target tip differs,
 include its check results separately rather than replacing comparison-base
 results. Include logs and environment differences, not just pass/fail totals.
-End with the compatibility conclusion for the checked scope and any work still
-unverified. Do not approve the PR or turn the report into posted comments.
+Finish with the separate completeness statement and coverage/run metadata.
+Do not approve the PR or turn the report into posted comments.
+
+### If the user later asks to post
+
+This skill only reports; it never posts during the review. A later explicit
+request to post is a separate action. The posted review text is the verdict
+line plus the per-package table. Include Unverified or Notes in that review
+text only when the user explicitly asks for those sections.
+
+Inline comments are only for verified findings, anchored to the manifest or
+lockfile line of the package concerned. **no breakage found** means zero inline
+comments. Never turn an Unverified item or a Note into a PR comment, even when
+including those sections in the review text at the user's request.
