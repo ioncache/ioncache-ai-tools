@@ -80,6 +80,7 @@ Ask the assistant to use a skill by name.
 | [review-dependabot-pr](skills/review-dependabot-pr/SKILL.md) | Read-only dependency-update review against actual project usage |
 | [verify-unresolved-pr-comments](skills/verify-unresolved-pr-comments/SKILL.md) | Triage outstanding PR feedback without changing it |
 | [post-pr-review-comments](skills/post-pr-review-comments/SKILL.md) | Draft and edit PR review comments in a pending review; never submit it |
+| [review-triage-loop](skills/review-triage-loop/SKILL.md) | Repeated read-only review with evidence-based triage and prioritized actions |
 | [review-validate-fix-loop](skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within set limits |
 | [investigate](skills/investigate/SKILL.md) | Read-only investigation |
 | [triage-errors](skills/triage-errors/SKILL.md) | Fix related failures by root cause |
@@ -89,6 +90,19 @@ The dependency review covers Dependabot, Renovate, and similar updates,
 including grouped bumps and indirect dependencies. It compares package code
 against project usage and checks environment drift without changing the PR.
 Reviews can resume from a saved private run directory.
+
+The review/triage loop keeps code and documents unchanged. It defaults to five
+rounds. Configure the cap at invocation:
+`review-triage-loop docs/architecture.md --max-rounds 8`.
+Each round uses a fresh reviewer with a minimal assignment and prior findings.
+The coordinator validates every candidate but reports only
+worthwhile actions and consequential uncertainties. Two consecutive complete
+rounds without new reportable information stop the run early.
+Its private ledger retains suppressed findings and supports
+`review-triage-loop --resume /absolute/private/run/REVIEW_LEDGER.md`.
+Storage defaults to `~/.local/state/ioncache-ai-tools/review-triage-loop/`,
+outside the reviewed tree. Counters and checkpoints are skill instructions,
+not enforcement by the review/fix ledger helper.
 
 The review/fix loop defaults to three review loops and three fix cycles per
 loop. It supports resuming a run, but does not authorize commits, pushes, or PR
