@@ -24,13 +24,16 @@ or claims to recheck. Keep PR-specific details out of this skill.
 
 ## What counts as a finding
 
-Report user, operational, or business misbehaviour, or documentation/runbooks
-that cannot be followed. Exclude duplication, helper reuse, style, wording-only
-issues, log-message noise, and speculative typo guards.
+Report user, operational, or business misbehaviour, security or privacy failures,
+or documentation/runbooks that cannot be followed. Exclude duplication, helper
+reuse, style, wording-only issues, log-message noise, and speculative typo guards.
 
-Require code or documentation evidence for the scenario. Inspect callers;
-flag missing guards only for inputs they can actually produce. Another helper's
-defensive code is not evidence.
+Require code or documentation evidence for the scenario. For closed internal
+contracts, inspect callers and flag missing guards only for inputs they can
+actually produce. For open input boundaries, assess externally supplied values
+against the boundary's input contract and existing validation. Do not report
+missing guards for values already rejected upstream. Another helper's defensive
+code is not evidence.
 Outside-diff findings require a PR-changed input that makes the failure reachable.
 Explain that dependency; exclude untouched pre-existing problems.
 
