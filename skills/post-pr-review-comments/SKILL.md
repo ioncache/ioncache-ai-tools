@@ -41,7 +41,11 @@ coverage and no stated branch-specific test policy. Check that policy first.
 
 Check the current PR diff before assigning anchors. Use added or context lines
 inside its hunks, never removed-only lines. Put `path:start-end` in each
-comment's working-file heading.
+inline comment's working-file heading.
+
+If no valid anchor exists, retain the finding with a `path (non-inline, unposted)`
+heading in the working file and ask the human how to proceed. Do not invent an
+anchor or discard the finding.
 
 For prose, anchor the whole relevant construct; use one line only when that
 line is the subject. Suggestion blocks use the smallest changed range.
@@ -105,8 +109,11 @@ Use a small scratchpad script invoking `gh`, in an available runtime, with a
 `--dry-run`; avoid one-off shell mutations. Before deleting, list targets and
 exclude human-written comments, even when they share the assistant's review.
 
-Recheck the review's state before modifying it; the human may submit at any time.
-A draft is a `PENDING` `PullRequestReview`. While pending, use GraphQL:
+Before adding threads or replies, find the authenticated user's `PENDING`
+`PullRequestReview` for this PR and use its ID. If none exists, ask the human
+for approval to create one. Keep new comments local until that draft exists.
+Recheck its state before modifying it; the human may submit at any time.
+While pending, use GraphQL:
 
 - Add: `addPullRequestReviewThread` with `pullRequestReviewId`, `body`, `path`,
   `line` (range end), and `side: RIGHT`; for ranges also pass `startLine` and
@@ -139,8 +146,8 @@ For any non-`PENDING` state:
 
 ## Judging another reviewer's comments
 
-When asked to assess another reviewer's comments, read each comment's `diff_hunk`
-and surrounding code, not just its body.
+When asked to assess another reviewer's comments, read each comment's diff hunk
+(`diff_hunk` in REST, `diffHunk` in GraphQL) and surrounding code, not just its body.
 Post a plain verdict as its own sentence using the pending-reply rules above.
 Give the human a one-line reason per verdict outside GitHub, flagging conflicts
 with written repository instructions so they can overrule it.
