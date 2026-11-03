@@ -198,6 +198,33 @@ Browse the [skills](skills/) for their instructions.
 
 ## Local development
 
+Use Node.js 22.12.0+ and npm for contributor tooling:
+
+```sh
+npm ci
+```
+
+This installs commitlint and activates Husky's `commit-msg` hook. Repeat it in
+each development checkout or worktree. This repository's `.worktree-setup.json`
+runs it automatically for worktrees created through the setup helper.
+Plugin users do not need these npm dependencies.
+
+Commit messages and PR titles must follow Conventional Commits, for example
+`fix: preserve hook permissions` or `feat(review): add draft comments`.
+Generated merge, revert, and version messages are not exempt. Write reverts as
+`revert: describe the reverted change`.
+
+The `Commit conventions` workflow checks PR titles (including title edits),
+PR commits, and commits pushed to `main`. It checks the entire reachable
+history if a push has no available previous tip.
+
+Local hooks can be bypassed. To block merges on CI failures, require the
+`Commit conventions` status check on `main` in GitHub. Configure squash-only
+merging, use PR titles for squash commit messages, and require linear history.
+These are separate repository settings; this setup does not change them.
+Editing a squash message can still introduce a bad message, which the push
+check reports after it reaches `main`.
+
 See [repository instructions](.github/copilot-instructions.md) for validation
 commands. Refresh installed copies after source changes and start a new session
 or thread. Rule-setting changes need neither.

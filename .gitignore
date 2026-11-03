@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+node_modules/
+.husky/_/
 .worktrees/
 .review-loop/
 .claude/*.local.json
