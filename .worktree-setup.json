@@ -11,5 +11,5 @@
     ".github/copilot/ioncache-ai-tools.local.json",
     ".graphifyignore"
   ],
-  "commands": ["npm ci"]
+  "commands": ["if [ -f package-lock.json ]; then npm ci; fi"]
 }
