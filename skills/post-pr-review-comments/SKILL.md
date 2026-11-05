@@ -1,6 +1,6 @@
 ---
 name: post-pr-review-comments
-description: Turns verified review findings into actionable GitHub PR comments that explain their connection to the reviewed code. Use when a human is driving a PR review and wants comments written up, edited, and added to a pending draft review; never submits the review.
+description: Turns verified review findings into actionable GitHub PR comments that explain their connection to the reviewed code. Use when a human is driving a PR review and wants comments written up, added to a pending draft review, or edited, including authorised wording edits to submitted review comments; never submits the review.
 ---
 
 # PR Review Comment Process
