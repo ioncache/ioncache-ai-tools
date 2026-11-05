@@ -80,6 +80,7 @@ Ask the assistant to use a skill by name.
 | [review-dependabot-pr](skills/review-dependabot-pr/SKILL.md) | Read-only dependency-update review against actual project usage |
 | [verify-unresolved-pr-comments](skills/verify-unresolved-pr-comments/SKILL.md) | Triage outstanding PR feedback without changing it |
 | [post-pr-review-comments](skills/post-pr-review-comments/SKILL.md) | Draft and edit PR review comments in a pending review; never submit it |
+| [write-pr-descriptions](skills/write-pr-descriptions/SKILL.md) | Write and edit human-focused PR titles and descriptions |
 | [review-triage-loop](skills/review-triage-loop/SKILL.md) | Repeated read-only review with evidence-based triage and prioritized actions |
 | [review-validate-fix-loop](skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within set limits |
 | [investigate](skills/investigate/SKILL.md) | Read-only investigation |
