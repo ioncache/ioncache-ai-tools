@@ -70,6 +70,43 @@ While a question is pending, GraphQL calls with `operationName`, body files,
 duplicate queries, or unrecognized options are blocked. Use one inline query.
 Patches with ambiguous file-header whitespace are rejected.
 
+### Documentation lookup cache
+
+Copilot CLI caches short facts distilled from successful `web_fetch` results.
+A cache hit supplies the source URL and fetch date instead of downloading the
+page again. Repeating the identical call bypasses that hit once and fetches live.
+The documentation reminder permits reusing verified facts in the conversation
+or a fresh cache hit when they cover the needed detail and version.
+
+The cache lives at
+`${XDG_CACHE_HOME:-~/.cache}/ioncache-ai-tools/docs-cache/`, shared across projects
+and sessions. Claude Code and Codex fetch integration is not wired up yet.
+The cache stores facts, not fetched pages. Facts expire after seven days, with
+up to three facts per URL/chunk and a 20 MB entry budget.
+Each summary is limited to 150 whitespace-separated words. Overlong output is
+rejected and reported as a distiller failure, not truncated into partial facts.
+
+Only requests with an explicit positive `max_length` participate. A cached
+chunk must start at the same offset and cover at least the requested length.
+Raw HTML requests, failed or empty results, and volatile pages such as release
+notes, changelogs, and `/latest` always fetch live. Cache faults leave normal
+fetch permissions unchanged.
+
+Distillation runs outside the main context through the local `copilot` CLI,
+using its login and the `gpt-6-luna` model with low reasoning effort. These jobs
+consume Copilot usage separately. Their model choice is currently fixed in code.
+The plugin suppresses its own adapters in distiller runs; update installed
+copies too when testing with a live checkout.
+
+Distiller problems must appear in the assistant's final response, including in
+`--silent` mode. Post-tool hooks supply the notice as context; the stop hook
+requests a corrected answer if it omits the notice. A problem is marked as
+reported only after the current root response contains it, once per distinct
+problem per session. Fetch permissions stay unchanged.
+Inspect `events.jsonl` for misses, hits, bypasses, stores, and distiller outcomes;
+`distill-status.json` holds the latest problem. Removing the cache's contents
+resets it. The cache's storage limits do not govern the CLI's own session history.
+
 ## Workflows
 
 Ask the assistant to use a skill by name.

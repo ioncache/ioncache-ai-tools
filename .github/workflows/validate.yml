@@ -45,6 +45,9 @@ jobs:
       - name: Run Copilot adapter self-check
         run: python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 
+      - name: Run docs cache self-check
+        run: python3 hooks/scripts/docs_cache_self_check.py < /dev/null
+
       - name: Run Codex adapter self-check
         run: python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 

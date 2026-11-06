@@ -13,6 +13,7 @@ from unittest import mock
 import uuid
 
 import copilot_adapter
+import docs_cache
 import hook_adapter_common
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,7 @@ class CopilotAdapterTests(unittest.TestCase):
             'HOME': str(self.home),
             'COPILOT_HOME': str(self.home / '.copilot'),
             'CODEX_HOME': str(self.home / '.codex'),
+            'XDG_CACHE_HOME': str(self.home / '.cache'),
             'PYTHONDONTWRITEBYTECODE': '1',
         }
         self.payload = {
@@ -86,7 +88,7 @@ class CopilotAdapterTests(unittest.TestCase):
         hooks = json.loads((ROOT / manifest['hooks']).read_text())
         self.assertEqual(hooks['version'], 1)
         self.assertEqual(set(hooks['hooks']), {
-            'userPromptTransformed', 'preToolUse', 'agentStop', 'sessionEnd',
+            'userPromptTransformed', 'preToolUse', 'postToolUse', 'agentStop', 'sessionEnd',
         })
         self.assertFalse((ROOT / 'skills/claim-evidence/SKILL.md').exists())
         for event, entries in hooks['hooks'].items():
@@ -109,6 +111,65 @@ class CopilotAdapterTests(unittest.TestCase):
         graph.parent.mkdir()
         graph.write_text('{}')
         self.assertIn('graphify query', self.prompt('Investigate the flow')['modifiedTransformedPrompt'])
+
+    def test_web_fetch_served_from_docs_cache_and_faults_fail_open(self):
+        url = 'https://git-scm.com/docs/git-commit'
+        args = json.dumps({'url': url, 'max_length': 20000})
+        self.assertEqual(self.tool('web_fetch', args), {})
+        entries = self.home / '.cache/ioncache-ai-tools/docs-cache/entries'
+        key = docs_cache.cache_key(url, None)
+        (entries / f'{key}.json').write_text(json.dumps({'url': url, 'facts': [
+            {'fact': 'cached fixup fact', 'fetched_at': time.time(),
+             'harness': 'copilot', 'length': 20000}]}))
+        denied = self.tool('web_fetch', args)
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        self.assertIn('cached fixup fact', denied['permissionDecisionReason'])
+        self.assertEqual(self.tool('web_fetch', args), {}, 'repeat must fetch live')
+        (entries / f'{key}.json').write_text(json.dumps({'facts': [{'fetched_at': 'bad'}]}))
+        output, stderr = self.invoke('preToolUse', toolName='web_fetch', toolArgs=args)
+        self.assertEqual(output, {})
+        self.assertIn('docs-cache:', stderr)
+
+    def test_docs_cache_problem_must_appear_in_final_response(self):
+        status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
+        status.parent.mkdir(parents=True)
+        status.write_text(json.dumps({'problem': 'Not logged in', 'ts': time.time()}))
+        payload = {'toolName': 'bash', 'toolArgs': {'command': 'true'},
+                   'toolResult': {'resultType': 'success', 'textResultForLlm': ''}}
+        output, stderr = self.invoke('postToolUse', **payload)
+        notice = output['additionalContext']
+        self.assertIn('Not logged in', notice)
+        self.assertEqual(stderr, '')
+        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
+        self.assertFalse(marker.exists())
+        path = self.write_events(self.transcript_events('Fetch completed.'))
+        blocked = self.invoke('agentStop', transcriptPath=str(path))[0]
+        self.assertEqual(blocked['decision'], 'block')
+        self.assertIn(notice, blocked['reason'])
+        self.assertFalse(marker.exists())
+        path = self.write_events(self.transcript_events(f'Fetch completed.\n\n{notice}'))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertTrue(marker.exists())
+        self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
+
+    def test_docs_cache_acknowledgment_waits_for_other_stop_guards(self):
+        status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
+        status.parent.mkdir(parents=True)
+        status.write_text(json.dumps({'problem': f'Not logged in{EM_DASH}retry', 'ts': time.time()}))
+        notice = self.invoke('postToolUse', toolName='bash', toolArgs={'command': 'true'},
+                             toolResult={'resultType': 'success', 'textResultForLlm': ''})[0]['additionalContext']
+        self.assertNotIn(EM_DASH, notice)
+        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
+        path = self.write_events(self.transcript_events(f'{notice}\nBad{EM_DASH}punctuation'))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
+        self.assertFalse(marker.exists())
+        path = self.write_events(self.transcript_events(notice))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertTrue(marker.exists())
+
+    def test_adapter_stays_out_of_docs_distiller_runs(self):
+        self.env['IONCACHE_DOCS_DISTILLER'] = '1'
+        self.assertEqual(self.prompt('Implement the feature'), {})
 
     def test_question_blocks_mutations_until_non_question_prompt(self):
         text = self.prompt('why is this behavior different')['modifiedTransformedPrompt']

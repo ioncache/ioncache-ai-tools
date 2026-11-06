@@ -25,12 +25,17 @@ import sys
 REMINDER = (
     "Never state or rely on specifics about any library, API, framework, "
     "SDK, CLI tool, or service (method signatures, config syntax, flags, "
-    "behavior, version differences) from training data or memory. Always "
-    "verify with a real, current lookup (WebFetch, WebSearch, or the "
-    "context7 MCP) first, whether answering a question or writing code, "
-    "even for something already used in this project, and even when "
-    "confident. Training data can be stale or simply wrong for the exact "
-    "version actually in use."
+    "behavior, version differences) from training data or memory. Use "
+    "facts verified by a real, current lookup (WebFetch, WebSearch, or "
+    "the context7 MCP), whether answering a question or writing code. "
+    "Reuse a verified fact already in this conversation or a fresh fact "
+    "served by the shared docs cache when it covers the exact detail "
+    "and version you need; that counts as a current lookup. Do not fetch "
+    "the same documentation again merely because another turn or tool "
+    "call uses those facts. Look up missing or uncertain details, version "
+    "changes, and time-sensitive information live. If a cached answer "
+    "is insufficient, repeat the identical fetch to bypass the cache. "
+    "Confidence or existing project usage alone is not verification."
 )
 
 
