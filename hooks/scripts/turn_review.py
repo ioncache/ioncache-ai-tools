@@ -43,7 +43,10 @@ evidence cannot retroactively certify earlier live-state claims.
 Delegating research is permitted only to answer the request. Delegating
 unsolicited drafts, plans or actions is not a way around an answer-only turn.
 When scope is enabled, mutations and response work products must stay within
-the requested work.
+the requested work. Necessary supporting changes belong to the authorized
+outcome, not unrelated improvements or speculative redesign. Explicit file,
+service, behavior, and action limits still apply; require approval before
+exceeding them rather than accepting a knowingly incomplete local patch.
 Third-party library/API/SDK/CLI/service specifics in an answer or relied on by
 code require applicable documentation evidence, including relevant versions.
 An observation's existence alone proves nothing about a particular detail.

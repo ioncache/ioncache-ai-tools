@@ -12,8 +12,16 @@ standard and a final cross-cutting correctness pass. Do not skip standards
 or stop after finding a few issues. Report coverage limitations honestly;
 no pass can guarantee exhaustive bug detection.
 
+For non-trivial design or contract decisions, apply
+[engineering judgment](../engineering-judgment/SKILL.md) within the assigned
+read-only scope. Coordinators must pass relevant ownership and compatibility
+constraints to reviewers explicitly; do not assume they inherit this guidance.
+
 - Does each new file, abstraction, function, and test serve the objective?
   Flag unnecessary duplication, unrelated behavior, and unjustified abstraction.
+- Does the solution keep responsibilities and shared rules coherent across
+  affected packages or services? Do not prefer a smaller patch that shifts work
+  to the wrong owner or leaves consumers inconsistent.
 - Do parameter, return, error, and side-effect contracts match actual callers?
   Trace affected call sites rather than judging signatures in isolation.
 - Are correctness, security, performance, edge cases, and failure behavior sound?
@@ -38,7 +46,7 @@ The invoking agent or coordinator returns one consolidated table:
 
 Use a short standard prefix plus a number, or `COR<N>` for correctness.
 Severity is High (correctness/security), Medium (reliability/contracts/
-standards), or Low (style/cosmetic). Explain the minimal correction or
+standards), or Low (style/cosmetic). Explain the simplest coherent correction or
 specific no-fix reason without conflating invalidity and scope.
 
 Provide evidence with each finding: behavior, triggering conditions,

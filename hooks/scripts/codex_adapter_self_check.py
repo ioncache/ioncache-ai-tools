@@ -190,9 +190,28 @@ class CodexAdapterTests(unittest.TestCase):
         text = self.prompt('Implement the change')
         self.assertIn('graphify query', text)
         self.assertIn('documentation-backed', text)
-        for name in ('scope-exactly-what-asked', 'verify-state-before-claiming'):
+        for name in ('engineering-judgment', 'scope-exactly-what-asked', 'verify-state-before-claiming'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
+        self.assertEqual(self.prompt('Continue the implementation'), '')
+
+    def test_engineering_reminder_can_be_disabled_and_reenabled(self):
+        name = 'engineering-judgment'
+        rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
+        scope = json.loads((ROOT / 'hooks/rules/scope-exactly-what-asked.json').read_text())
+        config = self.home / '.codex/config.toml'
+        config.parent.mkdir()
+        disabled = f'[ioncache-ai-tools]\ndisabled_rules = ["{name}"]\n'
+        config.write_text(disabled)
+        text = self.prompt('Implement the feature')
+        self.assertNotIn(rule['message'], text)
+        self.assertIn(scope['message'], text)
+        config.write_text(
+            disabled + f'\n[projects."{self.project}".ioncache-ai-tools]\nenabled_rules = ["{name}"]\n',
+        )
+        self.invoke('PreCompact')
+        self.assertIn(rule['message'], self.prompt('Implement the feature'))
+        self.assertEqual(self.prompt('Continue the feature'), '')
 
     def test_question_blocks_patch_until_non_question_prompt(self):
         self.prompt('why is this different')
@@ -260,7 +279,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIn('lockfile', output['permissionDecisionReason'])
 
     def test_workflows_ship_as_native_skills(self):
-        for name in ('create-worktree', 'investigate', 'review-code', 'triage-errors', 'verify-unresolved-pr-comments'):
+        for name in (
+            'create-worktree', 'engineering-judgment', 'investigate', 'review-code',
+            'triage-errors', 'verify-unresolved-pr-comments',
+        ):
             with self.subTest(name=name):
                 path = ROOT / 'skills' / name / 'SKILL.md'
                 self.assertTrue(path.is_file())
