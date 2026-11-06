@@ -15,6 +15,7 @@ from unittest import mock
 import uuid
 
 import codex_adapter
+import docs_cache
 
 ROOT = Path(__file__).resolve().parents[2]
 EM_DASH = chr(0x2014)
@@ -35,6 +36,7 @@ class CodexAdapterTests(unittest.TestCase):
             'HOME': str(self.home),
             'CODEX_HOME': str(self.home / '.codex'),
             'COPILOT_HOME': str(self.home / '.copilot'),
+            'XDG_CACHE_HOME': str(self.home / '.cache'),
             'PYTHONDONTWRITEBYTECODE': '1',
         }
         self.payload = {
@@ -88,11 +90,45 @@ class CodexAdapterTests(unittest.TestCase):
         ), {})
 
     def test_manifest_serializes_dependent_hooks(self):
-        for event in ('UserPromptSubmit', 'PreToolUse'):
+        for event in ('UserPromptSubmit', 'PreToolUse', 'PostToolUse'):
             entries = self.entries(event)
             self.assertEqual(len(entries), 1)
             self.assertIn('codex_adapter.py', entries[0]['command'])
             self.assertTrue(entries[0]['command'].endswith(event))
+
+    def test_native_web_open_uses_shared_cache_without_granting_permission(self):
+        args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}
+        self.assertEqual(self.tool('webrun', args), {})
+        with mock.patch.dict(os.environ, self.env):
+            url = args['open'][0]['ref_id']
+            docs_cache.store_fact(docs_cache.cache_key(url, None), url, 'shared Claude answer', 'claude',
+                                  source={'reference_only': True, 'question': 'Explain --dry-run.'})
+        output = self.tool('webrun', args)
+        self.assertEqual(output['permissionDecision'], 'deny')
+        self.assertIn('shared Claude answer', output['permissionDecisionReason'])
+        self.assertEqual(self.tool('webrun', args), {})
+        self.assertEqual(self.tool('webrun', {'search_query': [{'q': 'git commit'}]}), {})
+
+    def test_native_cache_failure_preserves_tool_permissions(self):
+        with mock.patch.object(docs_cache, 'codex_pre', side_effect=PermissionError('unavailable')), \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            output = codex_adapter.run_hook('PreToolUse', {
+                **self.payload, 'tool_name': 'webrun', 'tool_input': {'open': [{'ref_id': 'https://example.com'}]},
+            })
+        self.assertIsNone(output)
+
+    def test_native_distiller_notice_waits_for_actual_final_response(self):
+        with mock.patch.dict(os.environ, self.env):
+            docs_cache.set_status('worker unavailable')
+        output = self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
+                             tool_response='')[0]
+        notice = output['hookSpecificOutput']['additionalContext']
+        for _ in range(2):
+            self.assertEqual(self.invoke('Stop', last_assistant_message='Done.')[0]['decision'], 'block')
+        self.assertEqual(self.invoke('Stop', last_assistant_message='Done.'), [{}])
+        self.assertEqual(self.invoke('Stop', last_assistant_message=notice), [{}])
+        self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
+                                     tool_response=''), [{}])
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         text = self.prompt('why is this different')

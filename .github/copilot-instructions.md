@@ -14,7 +14,7 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
 - Claude Code uses `hooks/hooks.json`, which wires `UserPromptSubmit`,
-  `PreToolUse`, and `Stop` events. Codex uses `.codex-plugin/plugin.json` and
+  `PreToolUse`, `PostToolUse`, and `Stop` events. Codex uses `.codex-plugin/plugin.json` and
   `hooks/codex-hooks.json`; Copilot uses `.github/plugin/plugin.json` and
   `hooks/copilot-hooks.json`. Their adapters share `hook_adapter_common.py`
   for ordered execution of the shared manifest and patch parsing.
@@ -36,6 +36,10 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
   hooks handle question state, documentation reminders, optional graphify
   context, and final-response punctuation.
+- `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
+  Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
+  Codex excerpts are reference-only; never turn their byte or line counts into
+  page coverage. Keep bypass and notice state separate by harness and session.
 - `skills/*/SKILL.md` contains both workflow and behavior instructions with
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
