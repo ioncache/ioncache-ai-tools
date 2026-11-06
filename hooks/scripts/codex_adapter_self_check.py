@@ -98,7 +98,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_native_web_open_uses_shared_cache_without_granting_permission(self):
         args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}
-        self.assertEqual(self.tool('webrun', args), {})
+        self.assertEqual(self.invoke('PreToolUse', tool_name='webrun', tool_input=args), [{}])
         with mock.patch.dict(os.environ, self.env):
             url = args['open'][0]['ref_id']
             docs_cache.store_fact(docs_cache.cache_key(url, None), url, 'shared Claude answer', 'claude',
@@ -106,8 +106,9 @@ class CodexAdapterTests(unittest.TestCase):
         output = self.tool('webrun', args)
         self.assertEqual(output['permissionDecision'], 'deny')
         self.assertIn('shared Claude answer', output['permissionDecisionReason'])
-        self.assertEqual(self.tool('webrun', args), {})
-        self.assertEqual(self.tool('webrun', {'search_query': [{'q': 'git commit'}]}), {})
+        self.assertEqual(self.invoke('PreToolUse', tool_name='webrun', tool_input=args), [{}])
+        self.assertEqual(self.invoke('PreToolUse', tool_name='webrun',
+                                     tool_input={'search_query': [{'q': 'git commit'}]}), [{}])
 
     def test_native_cache_failure_preserves_tool_permissions(self):
         with mock.patch.object(docs_cache, 'codex_pre', side_effect=PermissionError('unavailable')), \
