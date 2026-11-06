@@ -29,63 +29,52 @@ to the change. Out-of-scope does not mean invalid.
 
 ## Review method
 
-Establish the objective, applicable project standards, existing exceptions,
-and snapshot before evaluating code. Do a distinct pass for every applicable
-standard and a final cross-cutting correctness pass. Do not skip standards
-or stop after finding a few issues. Report coverage limitations honestly;
-no pass can guarantee exhaustive bug detection.
+Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md). They define
+the shared review standards, human report, and evidence handback.
 
-Use independent read-only subagents for substantial independent standards
-passes. Give each the same objective, snapshot, relevant standards, scope,
-and required evidence format. Keep a continuous call-chain investigation
-together rather than splitting it between agents. Small checks can remain
-with the coordinator. Respect configured model/effort defaults.
+If assigned a bounded specialist pass, perform only that pass and return its
+evidence. Do not start another review or spawn agents. An assigned coordinator
+or flat adjudicator follows its role in [ORCHESTRATION.md](ORCHESTRATION.md),
+not this entry point again.
 
-If a caller already coordinates workers, follow the assigned pass without
-spawning another layer. Return findings and coverage to that coordinator.
-Do not assume identical delegation tools across hosts. If required agents
-are unavailable, disclose the limitation rather than claiming delegation.
+Otherwise the invoking agent owns scope, permissions, and the execution-mode
+decision. Handle a review inline only when all required evidence fits a single
+direct read and no substantial independent pass is needed. Explicit requests
+for independent agents override this shortcut.
 
-Collect all required results before reporting. A failed or partial worker
-does not count as a clean pass. The coordinator reconciles duplicates and
-performs the integration-level correctness review across specialist boundaries.
-Check that the reviewed code did not change while workers were reading it.
+For substantial reviews, use [ORCHESTRATION.md](ORCHESTRATION.md) to launch a
+dedicated coordinator in fresh context when the host can deliver all child
+results to it. Otherwise the invoking agent launches and collects specialists,
+then sends their reports to a separate flat adjudicator. Keep continuous
+call-chain investigations together. Do not create an external runner to
+work around missing native capabilities.
 
-## Criteria
+The invoking agent selects the coordinator/adjudicator model before launch.
+The coordinator selects worker models under the shared runtime-selection
+policy. Preserve configured defaults when discovery, suitability evidence,
+or permission to override is unavailable. Never ship or invent a model ranking.
 
-- Does each new file, abstraction, function, and test serve the objective?
-  Flag unnecessary duplication, unrelated behavior, and unjustified abstraction.
-- Do parameter, return, error, and side-effect contracts match actual callers?
-  Trace affected call sites rather than judging signatures in isolation.
-- Are correctness, security, performance, edge cases, and failure behavior sound?
-  Support findings with reachable scenarios and evidence.
-- Do usage documentation, examples, and stated business rules match the contract?
-  Readable implementation is not a substitute for caller-facing documentation.
-- Are project-specific standards and exceptions respected? Do not retroactively
-  impose unrelated conventions on untouched code in a change review.
+Reuse the caller's snapshot. For a standalone Git review, resolve
+`../../scripts/review_ledger.py` relative to this installed skill and run:
 
-Distinguish a finding's truth, scope, severity, and proposed action. A real
-issue is not invalid because it is pre-existing, inconvenient, or expensive
-to fix. Treat slight low-risk worsening as a suggestion; explain why serious
-correctness, security, or data regressions need correction.
+```sh
+python3 -B "/absolute/plugin/scripts/review_ledger.py" fingerprint
+```
 
-## Output
+Run from the consuming worktree, including a subdirectory. Pass the returned
+root and snapshot identity to every reviewer. Repeat after adjudication;
+different identities mean incomplete review, not permission to adopt a new
+target. Keep output in the caller's context or private storage outside the
+reviewed tree. This command creates neither a ledger nor a snapshot store.
 
-Return one consolidated table:
+Fingerprints cover the whole worktree, so unrelated drift also invalidates
+them. They exclude ignored inputs and `.review-loop/`, store symlink target
+text rather than target content, and reject submodules and special files.
+Non-Git or required excluded inputs need an explicit alternative identity
+and coverage limitation; never present them as protected by this fingerprint.
 
-| ID | File | Issue Summary | Severity | Required Action |
-| --- | --- | --- | --- | --- |
-
-Use a short standard prefix plus a number, or `COR<N>` for correctness.
-Severity is High (correctness/security), Medium (reliability/contracts/
-standards), or Low (style/cosmetic). Explain the minimal correction or
-specific no-fix reason without conflating invalidity and scope.
-
-Provide evidence with each finding: behavior, triggering conditions,
-requirement, and affected callers or documentation. For a loop coordinator,
-also return a stable underlying-issue key, duplicate/recurrence references,
-and coverage per pass. Do not silently drop ignored findings whose rationale
-is contradicted by new evidence.
-
-Finish with counts by severity and required action, plus incomplete coverage
-or failed passes. Do not claim a clean review when required work is missing.
+Check the returned handback against the request, all required assignments,
+and the final snapshot. Independently validate coordinator-originated
+findings, investigate gaps or contradictions, and preserve rejected candidates
+for a calling loop. Do not repeat completed specialist investigations merely
+because their adjudicated results returned to the invoking agent.
