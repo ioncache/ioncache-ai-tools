@@ -85,6 +85,9 @@ The cache stores facts, not fetched pages. Facts expire after seven days, with
 up to three facts per URL/chunk and a 20 MB entry budget.
 Each summary is limited to 150 whitespace-separated words. Overlong output is
 rejected and reported as a distiller failure, not truncated into partial facts.
+URL metadata in new entries and log records omits userinfo, query strings, and
+fragments. Cache keys still hash the full normalized URL. Existing files are
+not scrubbed; clear the cache to remove previously stored URL metadata.
 
 Only requests with an explicit positive `max_length` participate. A cached
 chunk must start at the same offset and cover at least the requested length.
@@ -98,11 +101,12 @@ consume Copilot usage separately. Their model choice is currently fixed in code.
 The plugin suppresses its own adapters in distiller runs; update installed
 copies too when testing with a live checkout.
 
-Distiller problems must appear in the assistant's final response, including in
-`--silent` mode. Post-tool hooks supply the notice as context; the stop hook
-requests a corrected answer if it omits the notice. A problem is marked as
-reported only after the current root response contains it, once per distinct
-problem per session. Fetch permissions stay unchanged.
+Post-tool hooks supply distiller problems as context for the assistant's final
+response, including in `--silent` mode. The stop hook requests a corrected answer
+if it omits the notice, with at most two retries per distinct problem per session.
+After that, the notice remains pending for post-tool delivery without further
+stop blocks. A problem is marked as reported only after the current root response
+contains it. Fetch permissions stay unchanged.
 Inspect `events.jsonl` for misses, hits, bypasses, stores, and distiller outcomes;
 `distill-status.json` holds the latest problem. Removing the cache's contents
 resets it. The cache's storage limits do not govern the CLI's own session history.

@@ -141,13 +141,16 @@ A summary can miss a later question even when the original chunk covered it.
 The bypass is the escape hatch; its rate measures these misses.
 
 Location: `${XDG_CACHE_HOME:-~/.cache}/ioncache-ai-tools/docs-cache/`. The root
-directory is 0700; files are 0600. Each `entries/<sha256>.json` holds a normalized
-URL and up to three facts with `fact`, `fetched_at`, `harness`, and `length`.
+directory is 0700; files are 0600. Each `entries/<sha256>.json` holds a normalized,
+redacted URL and up to three facts with `fact`, `fetched_at`, `harness`, and `length`.
+New entry and log URLs omit userinfo, query strings, and fragments. Existing
+files are not scrubbed; clearing the cache removes old metadata.
 Writes use temporary files and atomic replacement.
 
 The key hashes normalized URL plus `start_index`, not `max_length`. Normalization
 lowercases the host and drops `www.`, fragments, trailing slashes, and
-`.md`/`.htm`/`.html` suffixes. Query strings and versioned paths remain distinct.
+`.md`/`.htm`/`.html` suffixes. Redaction applies only to persisted URL metadata,
+not key inputs. Query strings and versioned paths remain distinct.
 Coverage is recorded separately as the requested length, reduced if the worker
 truncates the input. Unknown lengths never mean "whole page".
 
@@ -197,8 +200,10 @@ also persist there. A clean run clears the status.
 On a subsequent tool result, Copilot's adapter adds the notice to model context
 without discarding shared post-tool context. The stop hook checks the current
 root response after other shared stop guards pass. If the notice is missing,
-it requests a corrected final answer containing the diagnostic verbatim.
-This makes the notice part of the assistant response, including under `--silent`,
+it requests a corrected final answer containing the diagnostic verbatim, up to
+twice per session and problem digest. Retry counts persist across hook processes
+and turns. Exhausted notices stay pending for post-tool delivery without further
+stop blocks. Delivery uses the assistant response, including under `--silent`,
 rather than relying on terminal hook stderr.
 
 The `.notified` marker is written only after that response contains the notice,
@@ -219,7 +224,10 @@ Fetch permissions and the cache's fail-open behavior are unchanged.
 - **Total size cap:** about 20 MB of entries. When writing would go over it,
   delete the entries with the oldest modification time.
 - **Session state:** remove session files older than seven days during eviction.
-- **Errors:** an entry that fails to parse is deleted and treated as a miss.
+- **Concurrent writes:** skip files that disappear during eviction and reuse
+  captured metadata rather than repeatedly reading it.
+- **Errors:** an entry that fails to parse or contains malformed fact fields is
+  deleted and treated as a miss, allowing a later store to replace it.
 - **Manual reset:** deleting the cache directory is safe at any time.
 
 ## Out of scope

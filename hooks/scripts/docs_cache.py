@@ -26,6 +26,7 @@ MAX_FACTS_PER_KEY = 3
 MAX_FACT_WORDS = 150
 MAX_CACHE_BYTES = 20 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
+MAX_NOTICE_BLOCKS = 2
 # Leave headroom below Linux's per-argument limit, including prompt metadata.
 MAX_PROMPT_BYTES = 100_000
 DISTILL_TIMEOUT_SECONDS = 90
@@ -65,6 +66,11 @@ def normalize_url(url):
     return parts.netloc.lower().removeprefix('www.') + path + query
 
 
+def redacted_url(url):
+    parts = urlsplit(url or '')
+    return parts._replace(netloc=parts.netloc.rsplit('@', 1)[-1], query='', fragment='').geturl()
+
+
 def is_volatile(url):
     parts = urlsplit(url)
     if VOLATILE.search(parts.path):
@@ -96,7 +102,7 @@ def log_event(event, url, harness):
     log = cache_dir() / 'events.jsonl'
     if log.exists() and log.stat().st_size > MAX_LOG_BYTES:
         os.replace(log, log.with_suffix('.jsonl.1'))
-    line = json.dumps({'ts': int(time.time()), 'event': event, 'harness': harness, 'url': url})
+    line = json.dumps({'ts': int(time.time()), 'event': event, 'harness': harness, 'url': redacted_url(url)})
     fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     with os.fdopen(fd, 'a', encoding='utf-8') as handle:
         handle.write(line + '\n')
@@ -109,11 +115,11 @@ def fresh_facts(key, now=None):
     now = now or time.time()
     try:
         facts = json.loads(path.read_text(encoding='utf-8'))['facts']
-    except (ValueError, KeyError, TypeError):
+        return [fact for fact in facts if now - fact['fetched_at'] < TTL_SECONDS
+                and len(fact['fact'].split()) <= MAX_FACT_WORDS]
+    except (ValueError, KeyError, TypeError, AttributeError):
         path.unlink(missing_ok=True)
         return []
-    return [fact for fact in facts if now - fact['fetched_at'] < TTL_SECONDS
-            and len(fact['fact'].split()) <= MAX_FACT_WORDS]
 
 
 def covers(cached_length, requested_length):
@@ -128,23 +134,30 @@ def store_fact(key, url, fact, harness, length=None, now=None):
     path = cache_dir() / 'entries' / f'{key}.json'
     facts = fresh_facts(key, now)
     facts.insert(0, {'fact': fact, 'fetched_at': now, 'harness': harness, 'length': length})
-    write_private(path, json.dumps({'url': normalize_url(url), 'facts': facts[:MAX_FACTS_PER_KEY]}))
+    write_private(path, json.dumps({'url': normalize_url(redacted_url(url)), 'facts': facts[:MAX_FACTS_PER_KEY]}))
     evict(now)
 
 
 def evict(now=None):
     now = now or time.time()
     root = cache_dir()
+    entries = []
     # A file's mtime is its newest fact, so an old file holds only expired facts.
     for path in [*(root / 'sessions').iterdir(), *(root / 'entries').glob('*.json')]:
-        if now - path.stat().st_mtime > TTL_SECONDS:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        if now - info.st_mtime > TTL_SECONDS:
             path.unlink(missing_ok=True)
-    entries = sorted((root / 'entries').glob('*.json'), key=lambda p: p.stat().st_mtime)
-    total = sum(p.stat().st_size for p in entries)
-    for path in entries:
+        elif path.parent.name == 'entries':
+            entries.append((info.st_mtime, info.st_size, path))
+    entries.sort()
+    total = sum(size for _, size, _ in entries)
+    for _, size, path in entries:
         if total <= MAX_CACHE_BYTES:
             break
-        total -= path.stat().st_size
+        total -= size
         path.unlink(missing_ok=True)
 
 
@@ -251,6 +264,11 @@ def copilot_stop(data):
     if notice['text'] in response:
         write_private(notice['marker'], notice['digest'])
         return None
+    retries = notice['marker'].with_suffix(f'.{notice["digest"]}.retries')
+    attempts = int(retries.read_text()) if retries.exists() else 0
+    if attempts >= MAX_NOTICE_BLOCKS:
+        return None
+    write_private(retries, str(attempts + 1))
     return {
         'decision': 'block',
         'reason': (

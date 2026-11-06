@@ -112,7 +112,7 @@ class CopilotAdapterTests(unittest.TestCase):
         graph.write_text('{}')
         self.assertIn('graphify query', self.prompt('Investigate the flow')['modifiedTransformedPrompt'])
 
-    def test_web_fetch_served_from_docs_cache_and_faults_fail_open(self):
+    def test_web_fetch_served_from_docs_cache_and_corruption_recovers(self):
         url = 'https://git-scm.com/docs/git-commit'
         args = json.dumps({'url': url, 'max_length': 20000})
         self.assertEqual(self.tool('web_fetch', args), {})
@@ -127,6 +127,16 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('web_fetch', args), {}, 'repeat must fetch live')
         (entries / f'{key}.json').write_text(json.dumps({'facts': [{'fetched_at': 'bad'}]}))
         output, stderr = self.invoke('preToolUse', toolName='web_fetch', toolArgs=args)
+        self.assertEqual(output, {})
+        self.assertEqual(stderr, '')
+        self.assertFalse((entries / f'{key}.json').exists())
+
+    def test_docs_cache_io_errors_still_fail_open(self):
+        url = 'https://git-scm.com/docs/git-commit'
+        entries = self.home / '.cache/ioncache-ai-tools/docs-cache/entries'
+        (entries / f'{docs_cache.cache_key(url, None)}.json').mkdir(parents=True)
+        output, stderr = self.invoke('preToolUse', toolName='web_fetch',
+                                     toolArgs={'url': url, 'max_length': 20000})
         self.assertEqual(output, {})
         self.assertIn('docs-cache:', stderr)
 
@@ -148,6 +158,27 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertIn(notice, blocked['reason'])
         self.assertFalse(marker.exists())
         path = self.write_events(self.transcript_events(f'Fetch completed.\n\n{notice}'))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertTrue(marker.exists())
+        self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
+
+    def test_docs_cache_notice_retries_are_bounded_across_processes(self):
+        status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
+        status.parent.mkdir(parents=True)
+        status.write_text(json.dumps({'problem': 'Not logged in', 'ts': time.time()}))
+        payload = {'toolName': 'bash', 'toolArgs': {'command': 'true'},
+                   'toolResult': {'resultType': 'success', 'textResultForLlm': ''}}
+        notice = self.invoke('postToolUse', **payload)[0]['additionalContext']
+        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
+        path = self.write_events(self.transcript_events('Done.'))
+        for _ in range(2):
+            self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        path = self.write_events(self.transcript_events('Another turn without the diagnostic.'))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.invoke('postToolUse', **payload)[0]['additionalContext'], notice)
+        path = self.write_events(self.transcript_events(f'Done.\n\n{notice}'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertTrue(marker.exists())
         self.assertEqual(self.invoke('postToolUse', **payload)[0], {})

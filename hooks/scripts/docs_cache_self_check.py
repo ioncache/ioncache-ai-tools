@@ -36,6 +36,23 @@ class DocsCacheTests(unittest.TestCase):
             'https://git-scm.com/docs/git-commit#_options')}
         self.assertEqual(same, {'git-scm.com/docs/git-commit'})
 
+    def test_url_metadata_is_redacted_without_merging_cache_keys(self):
+        for host in ('docs.example.com:8443', '[2001:db8::1]:8443'):
+            with self.subTest(host=host):
+                url = f'https://reader:password-secret@{host}/guide.html?token=query-secret#fragment-secret'
+                self.assertIsNone(docs_cache.copilot_pre(fetch(url)))
+                key = docs_cache.cache_key(url, None)
+                docs_cache.store_fact(key, url, 'source-specific fact', 'copilot', length=20000)
+                self.assertIn('source-specific fact', docs_cache.copilot_pre(fetch(url))['permissionDecisionReason'])
+                for other in (url.replace('password-secret', 'other-password'),
+                              url.replace('query-secret', 'other-token')):
+                    self.assertIsNone(docs_cache.copilot_pre(fetch(other)))
+                root = docs_cache.cache_dir()
+                entry = json.loads((root / 'entries' / f'{key}.json').read_text())
+                self.assertEqual(entry['url'], f'{host}/guide')
+                events = [json.loads(line) for line in (root / 'events.jsonl').read_text().splitlines()]
+                self.assertTrue(all(event['url'] == f'https://{host}/guide.html' for event in events[-4:]))
+
     def test_volatile_pages(self):
         self.assertTrue(docs_cache.is_volatile('https://fusionauth.io/docs/release-notes/'))
         self.assertTrue(docs_cache.is_volatile('https://github.com/o/r/releases/tag/v1'))
@@ -116,9 +133,47 @@ class DocsCacheTests(unittest.TestCase):
         self.assertLess(len(remaining), 5)
         self.assertTrue(docs_cache.fresh_facts(docs_cache.cache_key(f'{URL}4', None)))
 
+    def test_store_tolerates_files_disappearing_during_eviction(self):
+        root = docs_cache.cache_dir()
+        stat = Path.stat
+        for sub, name in (('sessions', '.tmp-moving'), ('entries', 'evicted.json')):
+            with self.subTest(sub=sub):
+                removed = root / sub / name
+                removed.write_text('concurrent file')
+                expired = root / 'sessions' / 'expired-session'
+                expired.write_text('old state')
+                old = time.time() - docs_cache.TTL_SECONDS - 1
+                os.utime(expired, (old, old))
+
+                def disappear(path, *args, **kwargs):
+                    if path == removed:
+                        path.unlink(missing_ok=True)
+                    return stat(path, *args, **kwargs)
+
+                with mock.patch.object(Path, 'stat', disappear):
+                    self.run_distill(stdout='stored despite concurrent eviction')
+                self.assertFalse(removed.exists())
+                self.assertFalse(expired.exists())
+                self.assertEqual(docs_cache.fresh_facts(self.key)[0]['fact'], 'stored despite concurrent eviction')
+                self.assertIsNone(self.notice())
+
     def test_corrupt_entry_is_a_miss(self):
         (docs_cache.cache_dir() / 'entries' / f'{self.key}.json').write_text('{not json')
         self.assertIsNone(docs_cache.copilot_pre(fetch()))
+
+    def test_malformed_facts_are_removed_and_can_be_refilled(self):
+        path = docs_cache.cache_dir() / 'entries' / f'{self.key}.json'
+        for facts in (None, [None], [{'fetched_at': 'bad'}], [{'fact': 'missing timestamp'}],
+                      [{'fetched_at': time.time(), 'fact': None}]):
+            with self.subTest(facts=facts):
+                malformed = json.dumps({'facts': facts})
+                path.write_text(malformed)
+                self.assertIsNone(docs_cache.copilot_pre(fetch()))
+                self.assertFalse(path.exists())
+                path.write_text(malformed)
+                self.run_distill(stdout='recovered fact')
+                self.assertEqual(docs_cache.fresh_facts(self.key)[0]['fact'], 'recovered fact')
+                self.assertIsNone(self.notice())
 
     def test_files_are_private(self):
         docs_cache.store_fact(self.key, URL, 'fact', 'copilot')
@@ -189,6 +244,19 @@ class DocsCacheTests(unittest.TestCase):
         self.assertIn('Not logged in', self.notice(session='s2'))
         self.run_distill(which=None)
         self.assertIn('not found on PATH', self.notice())
+
+    def test_stop_retry_budget_is_per_session_and_problem(self):
+        data = {'sessionId': 's1', 'last_assistant_message': 'Done.'}
+        docs_cache.set_status('first problem')
+        for _ in range(2):
+            self.assertEqual(docs_cache.copilot_stop(data)['decision'], 'block')
+        self.assertIsNone(docs_cache.copilot_stop(data))
+        self.assertEqual(docs_cache.copilot_stop({**data, 'sessionId': 's2'})['decision'], 'block')
+        docs_cache.set_status('second problem')
+        self.assertEqual(docs_cache.copilot_stop(data)['decision'], 'block')
+        docs_cache.set_status('first problem')
+        self.assertIsNone(docs_cache.copilot_stop(data), 'returning to an old problem must not reset its budget')
+        self.assertIn('first problem', self.notice())
 
     def test_notice_does_not_conflict_with_punctuation_guard(self):
         self.run_distill(returncode=1, stderr=f'Not logged in{chr(0x2014)}sign in again.')
