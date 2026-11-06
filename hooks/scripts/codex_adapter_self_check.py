@@ -130,6 +130,19 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
+    def test_null_stop_response_preserves_notice_delivery_and_retry_limit(self):
+        with mock.patch.dict(os.environ, self.env):
+            docs_cache.set_status('worker unavailable')
+            notice = docs_cache.distiller_notice(f'codex-{self.payload["session_id"]}')
+        for _ in range(2):
+            output = self.invoke('Stop', last_assistant_message=None)[0]
+            self.assertEqual(output.get('decision'), 'block', output)
+            self.assertIn(notice, output['reason'])
+        self.assertEqual(self.invoke('Stop', last_assistant_message=None), [{}])
+        self.assertEqual(self.invoke('Stop', last_assistant_message=notice.replace(' ', '\n')), [{}])
+        self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
+                                     tool_response=''), [{}])
+
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         text = self.prompt('why is this different')
         self.assertIn('answer-questions skill', text)
