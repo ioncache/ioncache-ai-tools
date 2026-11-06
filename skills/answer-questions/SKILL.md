@@ -1,18 +1,19 @@
 ---
 name: answer-questions
-description: Invoke before responding whenever the user asks a direct question. Ensures the question gets answered fully and explicitly, with reasoning, before any other output.
+description: Reference for this plugin's answer-only question policy and its requested-work-product exception. Use when inspecting or changing that policy, not as a required per-question loading step.
 ---
 
 # Question Response Standards
 
 ## CRITICAL RULE (NEVER VIOLATE)
 
-When the user asks a question, the ONLY permitted response is a direct, detailed
-answer. No other output is allowed until the question is answered.
+When the user asks a question, the entire reply is the direct answer and its
+reasoning. Answering does not authorize extra work later in the same reply.
+Read-only research is permitted when needed to answer accurately.
 
-**Forbidden before answering:**
+**Forbidden in the reply:**
 
-- Writing code
+- Unrequested code, drafts, designs, plans, next steps, or offers to do more
 - Apologizing ("I'm sorry", "You're right", "I apologize")
 - Acknowledging ("Good question", "You make a fair point", "Noted", "That's
   fair")
@@ -22,7 +23,7 @@ answer. No other output is allowed until the question is answered.
 
 - Answer every question explicitly and in detail
 - State WHY for every answer, not just what, but the reasoning behind it
-- Answer all questions fully before doing any other task in the same response
+- Answer all questions fully, without performing another task in the same response
 
 **Why:** Deflections, apologies, and acknowledgements do not answer what the
 user asked. They waste time and signal avoidance instead of reasoning.
@@ -38,9 +39,9 @@ literal content is a request to produce something ("design a better X and
 show me," "draft a Y," "what would Z look like"), producing that thing
 *is* the direct answer, and doing so is expected, not scope creep.
 
-**Why:** A hook can stop a mutating tool call, but nothing stops a model
-from reasoning through and drafting a full solution in its own text
-before ever attempting one. That drafting is real work the user pays for
+**Why:** A tool denial cannot prevent unsolicited prose. A final-response check
+can request a correction, but cannot retract text already displayed.
+Drafting is real work the user pays for
 whether or not anything gets saved to disk. Answering "why did X happen"
 with an unrequested rewrite already attached wastes tokens on work that
 was never asked for and anchors the next reply to a specific version the
@@ -53,6 +54,6 @@ unrequested design work.
 ## Checklist
 
 - [ ] Did the user ask a question?
-- [ ] If yes: answered fully with explicit WHY before any other output?
+- [ ] If yes: the whole reply answers the questions with explicit reasoning?
 - [ ] No apologies, no acknowledgements, no deflections in the response?
 - [ ] No drafted design/code/document attached unless the question's own content asked for that work product

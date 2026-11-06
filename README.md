@@ -57,18 +57,145 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 
 | Guard | Effect |
 | --- | --- |
-| Questions first | Blocks edits after a question until a subsequent non-question prompt |
-| Documentation first | Reminds the agent to verify external API and tool details |
-| Scope and current state | Reminds the agent to do only the requested work and check status before claiming it |
+| Answer-only questions | Blocks recognized mutations for the whole question turn; checks replies for unsolicited work |
+| Documentation first | Checks third-party specifics against observed documentation, including applicable cached facts |
+| Scope and current state | Checks mutation scope and claims against the request and current-turn observations |
 | Process termination | Blocks recognized process-kill commands until the rule is disabled |
 | Lockfiles | Blocks direct edits; use the package manager |
 | Worktrees | Directs creation through the setup-aware `create-worktree` skill |
 | Punctuation | Fixes or rejects em-dashes |
-| Graphify | Prefers an existing project knowledge graph for discovery |
+| Graphify | Gates code discovery on a graph query when the project has a graph; permits bounded failure fallback |
 
 While a question is pending, GraphQL calls with `operationName`, body files,
 duplicate queries, or unrecognized options are blocked. Use one inline query.
 Patches with ambiguous file-header whitespace are rejected.
+
+### Context and turn enforcement
+
+Ordinary prompts add no built-in reminder text after initialization.
+Question turns add a 204-character answer-only contract, not a request to
+reload a skill. The default bootstrap is 635 characters and runs at session
+initialization, context recovery, and supported subagent startup. If a host
+misses startup, the first prompt supplies it. Copilot adds a 43-character
+wrapper only when a transformed prompt actually has context to append.
+These counts exclude host formatting and tokens.
+
+| Prompt | Previous shared payload | New routine payload |
+| --- | ---: | ---: |
+| Ordinary, no graph | 1,141 characters | 0 characters |
+| Ordinary, graph present | 1,334 characters | 0 characters |
+| Question, no graph | 1,641 characters | 204 characters |
+| Question, graph present | 1,834 characters | 204 characters |
+
+`turn_guard.py` records requests, assistant proposals, bounded tool observations,
+documentation and decisions outside the conversation. Assistant proposals
+provide context for later approval; they do not authorize work themselves.
+It reuses `EvidenceStore` under
+`~/.cache/ioncache-ai-tools/claim-evidence/`, with a separate `turn-policy`
+namespace. It does not activate the experimental claim-evidence checkpoint
+workflow. These private records can contain source and tool output.
+Session end discards live observations and review decisions but retains request
+context and applicable documentation for resume. A clear resets the active
+request. Older request history and large observations are bounded; omitted
+content is not treated as verified evidence.
+
+Questions retain the conservative classifier: a question mixed with an
+instruction still blocks recognized mutations. The work-product exception
+permits requested drafts or code in the answer, not subsequent file edits.
+Native Stop corrections from this plugin preserve the original question,
+request, and retry budget. Other plugins' synthetic prompts cannot always be
+distinguished from new user messages.
+Copilot records a separate pending-prompt fence before its fallible prompt
+handlers run. A failed update blocks mutations and delegation until a genuine
+request is recorded successfully; old correction feedback cannot clear it.
+This fence survives session end and resume. It cannot cover a hook that never
+starts or cannot establish the fence.
+
+Claude's `MessageDisplay` hook silently records streamed text without changing
+the display or running a model. Copilot retains root assistant prose across
+tool calls through the exact current Stop event. Missing batches, truncated
+text and final-message-only inputs are reported as incomplete coverage, not a
+successful whole-turn check. Codex supplies the final message only: its hook
+documentation explicitly describes the transcript format as unstable, so the
+plugin does not parse it. Earlier prose is checked for question and scope
+violations; later evidence cannot retroactively verify earlier live-state claims.
+
+Compaction preserves the active request and hard question gate. Claude and
+Codex recover context through `SessionStart`. Copilot recovers on the next
+post-tool event, once, without waiting for another prompt. If no tool completes,
+context recovery waits for the next prompt; the stored gates still apply.
+
+Graph gating recognizes discovery tools and source reads. A successful query
+unlocks source inspection for that turn and graph snapshot. A failed query
+permits source fallback. An unavailable graph or executable produces one explanatory denial,
+then permits ordinary discovery on retry. Echoing a command, reading help, or
+querying a different graph does not satisfy the gate. This is a common-action
+guard, not an exhaustive shell interpreter or proof of query relevance.
+
+**Semantic checks make additional model calls and consume the host's usage.**
+`turn_review.py` invokes the same host's CLI for recognized mutations,
+delegations, follow-up agent messages and responses. It does not select a model: the isolated CLI's default
+applies. Claude and Copilot have no tools; Codex disables shell, web and native
+subagents in read-only mode but may expose utility tools. Runs suppress this
+plugin's hooks and execute outside the consuming repository. Claude disables
+customizations; Copilot disables custom instructions; Codex ignores user config.
+The host login must work independently in noninteractive mode.
+
+The checker receives the actual request, candidate and observed evidence,
+including resource identifiers, fetch ages, versions when present, failures and
+truncation. It may reuse applicable documentation, but must not use an older
+observation to certify live state. Mutations invalidate live observations across
+all actors in the session, including parent observations after child writes.
+Tool starts and completions are correlated by native IDs or an unambiguous
+tool/input key. File snapshots taken before and after a read detect changes
+during the read as well as later changes. Unmatched or ambiguous reads cannot
+certify current state. Explicit child startup or resume binds the child to the
+current parent request; an old worker cannot silently inherit new authority.
+Identical semantic decisions are cached until the candidate, request or
+evidence changes. Operational failures are not cached as semantic denials.
+
+Each model call has a 60-second deadline and a 90,000-byte input budget.
+Tool inputs and results are bounded together with their evidence records.
+Older context can be omitted to fit the combined budget, with explicit omission
+metadata. The latest request and proposed candidate are never silently cut.
+Private review payloads travel over stdin, not process arguments.
+Timeouts and catchable cancellation terminate and reap the reviewer process
+group. Cleanup cannot run after an uncatchable kill of its supervising hook.
+Final-response review makes at most two model calls per user turn, even if
+another hook triggers further continuations. Exhausted budgets and unavailable
+turn state produce warnings, not unreviewable correction loops.
+An unavailable or malformed reviewer denies a recognized mutation without
+granting permission. Documentation research stays available. A failed final
+check requests at most one correction per user turn. Further failure produces
+a user-facing warning and records an unverified result, not a successful check.
+There is no portable root-response replacement or hard final-stop mechanism
+across all three hosts. Checks cannot retract streamed prose or undo actions
+that already ran. Semantic judgments can be wrong.
+
+The main conversation gets only bootstrap/turn context and specific denial or
+correction feedback. This reduces accumulating context, not necessarily total
+model usage or latency. The isolated CLI can retain its own session history;
+Copilot does not provide the ephemeral mode used for Claude and Codex here.
+Host tool coverage also limits observation: Codex hosted search bypasses local
+tool hooks, and Copilot's built-in general-purpose agent has no subagent
+start/stop events. Identified child tool events initialize child state when
+startup omitted the identity. Anonymous child stops warn without consuming the
+parent's review budget. Unobserved activity is not a verified receipt.
+
+Hook contracts and CLI isolation options were checked against:
+
+- https://code.claude.com/docs/en/hooks
+- https://code.claude.com/docs/en/hooks#messagedisplay
+- https://code.claude.com/docs/en/sub-agents#resume-subagents
+- https://code.claude.com/docs/en/cli-reference
+- https://learn.chatgpt.com/docs/hooks
+- https://learn.chatgpt.com/docs/non-interactive-mode
+- https://docs.github.com/en/copilot/reference/hooks-reference
+- https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+- https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/run-cli-programmatically
+- https://github.com/github/copilot-sdk/blob/main/docs/features/streaming-events.md
+- https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
+- https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
 
 ### Documentation lookup cache
 
@@ -77,7 +204,7 @@ documentation fetches. Claude uses `WebFetch`, Codex uses single-URL
 `web.run` opens, and Copilot uses `web_fetch`.
 A cache hit supplies the source URL and fetch date instead of downloading the
 page again. Repeating the identical call bypasses that hit once and fetches live.
-The documentation reminder permits reusing verified facts in the conversation
+The documentation policy permits reusing verified facts in the conversation
 or a fresh cache hit when they cover the needed detail and version.
 
 The cache lives at
@@ -119,12 +246,13 @@ native subagent tools and runs read-only, but can still expose utility tools.
 The plugin suppresses its own adapters in distiller runs; update installed
 copies too when testing with a live checkout.
 
-Post-tool hooks supply distiller problems as context for the assistant's final
-response, including in `--silent` mode. The stop hook requests a corrected answer
-if it omits the notice, with at most two retries per distinct problem per session.
-After that, the notice remains pending for post-tool delivery without further
-stop blocks. A problem is marked as reported only after the current root response
-contains it. Fetch permissions stay unchanged.
+Post-tool and Stop hooks emit a diagnostic once per distinct problem and
+harness/session, until notification-state expiry. Claude and Codex use
+`systemMessage`; Copilot uses display-only progress output. Diagnostics do not
+become model context, force answer rewrites, or require unrelated prose in a
+question's answer. Silent or noninteractive host interfaces can suppress UI
+warnings; inspect the persistent status and event files in that case.
+Fetch permissions stay unchanged.
 Inspect `events.jsonl` for misses, hits, bypasses, stores, and distiller outcomes;
 `distill-status.json` holds the latest problem. Removing the cache's contents
 resets it. The cache's storage limits do not govern the CLI's own session history.
@@ -238,8 +366,8 @@ Available IDs:
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `fix_emdash` | Em-dashes in edits and shell input |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
-| `scope-exactly-what-asked` | Scope reminder |
-| `verify-state-before-claiming` | Current-state reminder |
+| `scope-exactly-what-asked` | Startup scope policy and semantic scope check |
+| `verify-state-before-claiming` | Startup state policy and live-state claim check |
 
 ## Writing and coding skills
 

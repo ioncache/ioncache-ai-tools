@@ -1,6 +1,41 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" sessionStart",
+        "timeoutSec": 30
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" subagentStart",
+        "timeoutSec": 30
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" subagentStop",
+        "timeoutSec": 90
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" preCompact",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" postToolUseFailure",
+        "timeoutSec": 30
+      }
+    ],
     "userPromptTransformed": [
       {
         "type": "command",
@@ -12,14 +47,14 @@
       {
         "type": "command",
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" preToolUse",
-        "timeoutSec": 30
+        "timeoutSec": 90
       }
     ],
     "agentStop": [
       {
         "type": "command",
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" agentStop",
-        "timeoutSec": 10
+        "timeoutSec": 90
       }
     ],
     "sessionEnd": [
@@ -33,7 +68,7 @@
       {
         "type": "command",
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" postToolUse",
-        "timeoutSec": 10
+        "timeoutSec": 30
       }
     ]
   }

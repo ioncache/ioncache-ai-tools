@@ -16,6 +16,7 @@ import uuid
 
 import codex_adapter
 import docs_cache
+from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
 EM_DASH = chr(0x2014)
@@ -38,7 +39,11 @@ class CodexAdapterTests(unittest.TestCase):
             'COPILOT_HOME': str(self.home / '.copilot'),
             'XDG_CACHE_HOME': str(self.home / '.cache'),
             'PYTHONDONTWRITEBYTECODE': '1',
+            'PATH': install_reviewers(self.root),
         }
+        patcher = mock.patch.dict(os.environ, self.env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.payload = {
             'session_id': f'self-check-{uuid.uuid4()}',
             'cwd': str(self.project),
@@ -71,7 +76,7 @@ class CodexAdapterTests(unittest.TestCase):
             return [future.result() for future in futures]
 
     def test_adapter_stays_out_of_docs_distiller_runs(self):
-        self.assertIn('Never state or rely on specifics', self.prompt('Implement it'))
+        self.assertIn('documentation-backed', self.prompt('Implement it'))
         self.env['IONCACHE_DOCS_DISTILLER'] = '1'
         self.assertEqual(self.prompt('Implement it'), '')
 
@@ -96,6 +101,21 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertIn('codex_adapter.py', entries[0]['command'])
             self.assertTrue(entries[0]['command'].endswith(event))
 
+    def test_lifecycle_and_stop_correction_preserve_original_question(self):
+        self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='startup')))
+        self.assertEqual(self.prompt('Why does this happen?').count('Question turn:'), 1)
+        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Unrequested draft."}'
+        output = self.invoke('Stop', last_assistant_message='A new design.')[0]
+        self.assertEqual(output['decision'], 'block')
+        self.assertEqual(self.prompt(output['reason']), '')
+        self.assertTrue(self.marker.exists())
+        self.invoke('PreCompact')
+        self.assertIn('Question turn:', str(self.invoke('SessionStart', source='compact')))
+        output = self.invoke('Stop', last_assistant_message='A new design.', stop_hook_active=True)[0]
+        self.assertIn('did not verify', output['systemMessage'])
+        self.assertNotIn('decision', output)
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH})['permissionDecision'], 'deny')
+
     def test_native_web_open_uses_shared_cache_without_granting_permission(self):
         args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}
         self.assertEqual(self.invoke('PreToolUse', tool_name='webrun', tool_input=args), [{}])
@@ -118,37 +138,33 @@ class CodexAdapterTests(unittest.TestCase):
             })
         self.assertIsNone(output)
 
-    def test_native_distiller_notice_waits_for_actual_final_response(self):
+    def test_native_distiller_notice_is_display_only_and_deduplicated(self):
         with mock.patch.dict(os.environ, self.env):
             docs_cache.set_status('worker unavailable')
         output = self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                              tool_response='')[0]
-        notice = output['hookSpecificOutput']['additionalContext']
+        self.assertIn('worker unavailable', output['systemMessage'])
+        self.assertNotIn('hookSpecificOutput', output)
         for _ in range(2):
-            self.assertEqual(self.invoke('Stop', last_assistant_message='Done.')[0]['decision'], 'block')
-        self.assertEqual(self.invoke('Stop', last_assistant_message='Done.'), [{}])
-        self.assertEqual(self.invoke('Stop', last_assistant_message=notice), [{}])
+            self.assertEqual(self.invoke('Stop', last_assistant_message='Done.'), [{}])
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
-    def test_null_stop_response_preserves_notice_delivery_and_retry_limit(self):
+    def test_null_stop_response_does_not_require_a_cache_notice_in_prose(self):
         with mock.patch.dict(os.environ, self.env):
             docs_cache.set_status('worker unavailable')
-            notice = docs_cache.distiller_notice(f'codex-{self.payload["session_id"]}')
-        for _ in range(2):
-            output = self.invoke('Stop', last_assistant_message=None)[0]
-            self.assertEqual(output.get('decision'), 'block', output)
-            self.assertIn(notice, output['reason'])
+        output = self.invoke('Stop', last_assistant_message=None)[0]
+        self.assertIn('worker unavailable', output['systemMessage'])
+        self.assertNotIn('decision', output)
         self.assertEqual(self.invoke('Stop', last_assistant_message=None), [{}])
-        self.assertEqual(self.invoke('Stop', last_assistant_message=notice.replace(' ', '\n')), [{}])
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         text = self.prompt('why is this different')
-        self.assertIn('answer-questions skill', text)
+        self.assertIn('Question turn: answer and reasoning only', text)
         self.assertTrue(self.marker.exists())
-        self.assertNotIn('answer-questions skill', self.prompt('Implement the change'))
+        self.assertEqual(self.prompt('Implement the change'), '')
         self.assertFalse(self.marker.exists())
 
     def test_prompt_preserves_all_reminders_and_consumer_cwd(self):
@@ -157,7 +173,7 @@ class CodexAdapterTests(unittest.TestCase):
         graph.write_text('{}')
         text = self.prompt('Implement the change')
         self.assertIn('graphify query', text)
-        self.assertIn('Never state or rely on specifics', text)
+        self.assertIn('documentation-backed', text)
         for name in ('scope-exactly-what-asked', 'verify-state-before-claiming'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)

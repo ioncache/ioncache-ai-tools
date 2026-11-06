@@ -69,7 +69,7 @@ def run_hook(event, data):
         return prompt_submit(data)
     if event == 'PreToolUse':
         return pre_tool_use(data)
-    if event in ('PostToolUse', 'SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart', 'Stop'):
+    if event in ('PostToolUse', 'SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart', 'SubagentStop', 'Stop'):
         outputs = run_shared_hooks(event, {**data, 'evidence_model_output': event == 'PostToolUse'})
         blocked = next((output for output in outputs if output.get('decision') == 'block'), None)
         if blocked:
@@ -83,12 +83,13 @@ def run_hook(event, data):
             output['hookSpecificOutput']['additionalContext'] for output in outputs
             if output.get('hookSpecificOutput', {}).get('additionalContext')
         ]
-        if messages:
-            return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': '\n\n'.join(messages)}}
         warnings = [output['systemMessage'] for output in outputs if output.get('systemMessage')]
+        result = {}
+        if messages:
+            result['hookSpecificOutput'] = {'hookEventName': event, 'additionalContext': '\n\n'.join(messages)}
         if warnings:
-            return {'systemMessage': '\n\n'.join(warnings)}
-        return None
+            result['systemMessage'] = '\n\n'.join(warnings)
+        return result or None
     raise ValueError(f'unsupported Codex event: {event}')
 
 

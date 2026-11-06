@@ -40,17 +40,21 @@ def main():
     if EM_DASH in text:
         idx = text.index(EM_DASH)
         snippet = text[max(0, idx - 40) : idx + 20]
+        reason = (
+            "This turn's response contains an em-dash, which is "
+            "banned in all output per project/user instructions. "
+            f"Found near: ...{snippet}... "
+            "Rewrite the response using a comma, period, "
+            "parentheses, or colon instead, then stop again."
+        )
+        if input_data.get('cwd') and input_data.get('session_id'):
+            from turn_guard import remember_continuation
+            remember_continuation(input_data, reason)
         print(
             json.dumps(
                 {
                     "decision": "block",
-                    "reason": (
-                        "This turn's response contains an em-dash, which is "
-                        "banned in all output per project/user instructions. "
-                        f"Found near: ...{snippet}... "
-                        "Rewrite the response using a comma, period, "
-                        "parentheses, or colon instead, then stop again."
-                    ),
+                    "reason": reason,
                 }
             )
         )

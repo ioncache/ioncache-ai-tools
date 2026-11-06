@@ -15,6 +15,9 @@ import uuid
 import copilot_adapter
 import docs_cache
 import hook_adapter_common
+import turn_guard
+from classify_question import marker_path
+from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
 EM_DASH = chr(0x2014)
@@ -36,7 +39,12 @@ class CopilotAdapterTests(unittest.TestCase):
             'CODEX_HOME': str(self.home / '.codex'),
             'XDG_CACHE_HOME': str(self.home / '.cache'),
             'PYTHONDONTWRITEBYTECODE': '1',
+            'PATH': install_reviewers(self.root),
         }
+        patcher = mock.patch.dict(os.environ, self.env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.progress = []
         self.payload = {
             'sessionId': f'self-check-{uuid.uuid4()}',
             'cwd': str(self.project),
@@ -44,6 +52,8 @@ class CopilotAdapterTests(unittest.TestCase):
         }
         self.marker = Path(f'/tmp/.ioncache-pending-question-copilot-{self.payload["sessionId"]}')
         self.addCleanup(lambda: self.marker.unlink(missing_ok=True))
+        pending = marker_path(copilot_adapter.shared_input(self.payload), 'prompt')
+        self.addCleanup(lambda: pending.unlink(missing_ok=True))
 
     def invoke(self, event, **fields):
         result = subprocess.run(
@@ -52,7 +62,11 @@ class CopilotAdapterTests(unittest.TestCase):
             capture_output=True, env=self.env, cwd=self.root, timeout=15,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout) if result.stdout.strip() else {}, result.stderr
+        outputs = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        self.progress.extend(item['message'] for item in outputs if item.get('type') == 'progress')
+        decisions = [item for item in outputs if item.get('type') != 'progress']
+        self.assertLessEqual(len(decisions), 1)
+        return decisions[0] if decisions else {}, result.stderr
 
     def prompt(self, prompt):
         return self.invoke('userPromptTransformed', prompt=prompt, transformedPrompt='expanded prompt')[0]
@@ -89,6 +103,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(hooks['version'], 1)
         self.assertEqual(set(hooks['hooks']), {
             'userPromptTransformed', 'preToolUse', 'postToolUse', 'agentStop', 'sessionEnd',
+            'sessionStart', 'preCompact', 'subagentStart', 'subagentStop', 'postToolUseFailure',
         })
         self.assertFalse((ROOT / 'skills/claim-evidence/SKILL.md').exists())
         for event, entries in hooks['hooks'].items():
@@ -96,21 +111,110 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIn('${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py', entries[0]['bash'])
             self.assertTrue(entries[0]['bash'].endswith(event))
 
-    def test_prompt_preserves_transformation_and_injects_shared_reminders(self):
+    def test_prompt_preserves_transformation_and_bootstraps_only_once(self):
         output = self.prompt('Implement the feature')
         text = output['modifiedTransformedPrompt']
         self.assertTrue(text.startswith('expanded prompt\n\n'))
-        self.assertIn('Never state or rely on specifics', text)
+        self.assertIn('documentation-backed', text)
         self.assertIn('ioncache-ai-tools', text)
         for name in ('scope-exactly-what-asked', 'verify-state-before-claiming'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
+        self.assertEqual(self.prompt('Continue the feature'), {})
+
+    def test_failed_prompt_update_cannot_reuse_old_authorization(self):
+        self.prompt('Implement the requested file')
+        question = {**self.payload, 'prompt': 'Why is this different?', 'transformedPrompt': 'Why is this different?'}
+        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('database unavailable')):
+            with self.assertRaises(RuntimeError):
+                copilot_adapter.transform_prompt(question)
+        for name, args in (('create', {'path': 'x', 'file_text': 'y'}),
+                           ('write_agent', {'agent_id': 'old', 'message': 'Implement the old change'})):
+            self.assertEqual(self.tool(name, args).get('permissionDecision'), 'deny')
+        self.prompt('Implement the newly requested file')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+
+    def test_stop_supplies_visible_prose_before_tools(self):
+        self.prompt('Why does this happen?')
+        events = self.transcript_events('The final explanation.')
+        events[2:2] = [
+            {'type': 'assistant.message', 'data': {'content': 'Here is an unsolicited plan.', 'toolRequests': [{'name': 'view'}]}},
+            {'type': 'assistant.turn_start', 'data': {'turnId': 'second'}},
+        ]
+        path = self.write_events(events)
+        with mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[]) as shared:
+            copilot_adapter.run_hook('agentStop', {**self.payload, 'transcriptPath': str(path)})
+        stop_input = next(call.args[1] for call in shared.call_args_list if call.args[0] == 'Stop')
+        self.assertIn('Here is an unsolicited plan.', json.dumps(stop_input))
+
+    def test_failed_prompt_fence_survives_old_feedback_and_resume(self):
+        self.prompt('Implement the change')
+        turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'old feedback')
+        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('unavailable')):
+            with self.assertRaises(RuntimeError):
+                copilot_adapter.transform_prompt({**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'})
+        with self.assertRaises(RuntimeError):
+            copilot_adapter.transform_prompt({**self.payload, 'prompt': 'old feedback', 'transformedPrompt': 'old feedback'})
+        self.invoke('sessionEnd')
+        self.invoke('sessionStart', source='resume')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+
+    def test_dangling_prompt_fence_cannot_reopen_authorization(self):
+        self.prompt('Implement the change')
+        path = marker_path(copilot_adapter.shared_input(self.payload), 'prompt')
+        path.symlink_to(self.root / 'missing')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}).get('permissionDecision'), 'deny')
+
+    def test_mid_turn_compaction_recovers_on_native_post_tool_output(self):
+        self.prompt('Why does this happen?')
+        self.invoke('preCompact')
+        fields = {'toolName': 'view', 'toolArgs': {'path': 'source.py'},
+                  'toolResult': {'resultType': 'success', 'textResultForLlm': 'source'}}
+        output, _ = self.invoke('postToolUse', **fields)
+        self.assertIn('Question turn:', output['additionalContext'])
+        self.assertEqual(self.invoke('postToolUse', **fields)[0], {})
+
+    def test_stop_continuation_retains_earlier_visible_prose(self):
+        self.prompt('Why does this happen?')
+        turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'owned feedback')
+        events = self.transcript_events('Unsolicited plan.')
+        events[-1]['data']['input'] = {**self.payload, 'timestamp': 123455}
+        events.extend([
+            {'type': 'user.message', 'data': {'content': 'owned feedback'}},
+            {'type': 'assistant.turn_start', 'data': {}},
+            {'type': 'assistant.message', 'data': {'content': 'The answer.'}},
+            {'type': 'hook.start', 'data': {'hookType': 'agentStop', 'input': self.payload}},
+        ])
+        path = self.write_events(events)
+        result = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
+        self.assertIn('Unsolicited plan.', result['_assistant_messages'])
 
     def test_graphify_uses_consumer_cwd(self):
         graph = self.project / 'graphify-out/graph.json'
         graph.parent.mkdir()
         graph.write_text('{}')
         self.assertIn('graphify query', self.prompt('Investigate the flow')['modifiedTransformedPrompt'])
+
+    def test_lifecycle_context_is_not_discarded_or_repeated_per_prompt(self):
+        output, _ = self.invoke('sessionStart', source='startup')
+        self.assertIn('documentation-backed', output['additionalContext'])
+        self.assertEqual(self.prompt('Implement the change'), {})
+        self.assertEqual(self.invoke('sessionStart', source='resume')[0], {})
+        self.assertIn('documentation-backed', self.invoke('subagentStart', agentName='explore')[0]['additionalContext'])
+        self.assertEqual(self.invoke('preCompact')[0], {})
+        self.assertIn('documentation-backed', self.prompt('Continue')['modifiedTransformedPrompt'])
+
+    def test_stop_correction_preserves_question_mode(self):
+        self.prompt('Why is this different?')
+        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Unrequested draft."}'
+        path = self.write_events(self.transcript_events('Unrequested draft.'))
+        output = self.invoke('agentStop', transcriptPath=str(path))[0]
+        self.assertEqual(output['decision'], 'block')
+        self.assertEqual(self.prompt(output['reason']), {})
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
+        self.assertIn('did not verify', self.progress[-1])
 
     def test_web_fetch_served_from_docs_cache_and_corruption_recovers(self):
         url = 'https://git-scm.com/docs/git-commit'
@@ -140,107 +244,81 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(output, {})
         self.assertIn('docs-cache:', stderr)
 
-    def test_docs_cache_problem_must_appear_in_final_response(self):
+    def test_docs_cache_problem_uses_display_only_progress_once(self):
         status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
         status.parent.mkdir(parents=True)
         status.write_text(json.dumps({'problem': 'Not logged in', 'ts': time.time()}))
         payload = {'toolName': 'bash', 'toolArgs': {'command': 'true'},
                    'toolResult': {'resultType': 'success', 'textResultForLlm': ''}}
         output, stderr = self.invoke('postToolUse', **payload)
-        notice = output['additionalContext']
+        self.assertEqual(output, {})
+        notice = self.progress[-1]
         self.assertIn('Not logged in', notice)
         self.assertEqual(stderr, '')
-        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
-        self.assertFalse(marker.exists())
         path = self.write_events(self.transcript_events('Fetch completed.'))
-        blocked = self.invoke('agentStop', transcriptPath=str(path))[0]
-        self.assertEqual(blocked['decision'], 'block')
-        self.assertIn(notice, blocked['reason'])
-        self.assertFalse(marker.exists())
-        path = self.write_events(self.transcript_events(f'Fetch completed.\n\n{notice}'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertTrue(marker.exists())
         self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
+        self.assertEqual(self.progress, [notice])
 
-    def test_docs_cache_notice_retries_are_bounded_across_processes(self):
+    def test_docs_cache_deduplication_survives_processes_and_user_turns(self):
         status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
         status.parent.mkdir(parents=True)
         status.write_text(json.dumps({'problem': 'Not logged in', 'ts': time.time()}))
         payload = {'toolName': 'bash', 'toolArgs': {'command': 'true'},
                    'toolResult': {'resultType': 'success', 'textResultForLlm': ''}}
-        notice = self.invoke('postToolUse', **payload)[0]['additionalContext']
-        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
+        self.invoke('postToolUse', **payload)
+        notice = self.progress[-1]
         path = self.write_events(self.transcript_events('Done.'))
         for _ in range(2):
-            self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+            self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         path = self.write_events(self.transcript_events('Another turn without the diagnostic.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertFalse(marker.exists())
-        self.assertEqual(self.invoke('postToolUse', **payload)[0]['additionalContext'], notice)
-        path = self.write_events(self.transcript_events(f'Done.\n\n{notice}'))
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertTrue(marker.exists())
         self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
+        self.assertEqual(self.progress, [notice])
 
-    def test_docs_cache_notice_retries_survive_eviction_during_read(self):
+    def test_docs_cache_new_problem_gets_a_new_display_notice(self):
         with mock.patch.dict(os.environ, self.env):
             docs_cache.set_status('Not logged in')
             data = {**self.payload, 'last_assistant_message': 'Done.'}
-            docs_cache.copilot_stop(data)
-            notice = docs_cache.pending_notice(self.payload['sessionId'])
-            retries = next(notice['marker'].parent.glob('*.retries'))
-            os.utime(retries, (0, 0))
-            read_text = Path.read_text
+            self.assertIn('Not logged in', docs_cache.copilot_stop(data)['systemMessage'])
+            self.assertIsNone(docs_cache.copilot_stop(data))
+            docs_cache.set_status('Executable missing')
+            self.assertIn('Executable missing', docs_cache.copilot_stop(data)['systemMessage'])
 
-            def evict_before_read(path, *args, **kwargs):
-                if path == retries:
-                    docs_cache.evict()
-                return read_text(path, *args, **kwargs)
-
-            with mock.patch.object(Path, 'read_text', evict_before_read), \
-                    mock.patch.object(sys, 'stderr'):
-                output = copilot_adapter.docs_cache_hook(docs_cache.copilot_stop, data)
-            self.assertEqual((output or {}).get('decision'), 'block')
-            self.assertIn(notice['text'], output['reason'])
-            self.assertEqual(retries.read_text(), '1')
-            self.assertFalse(notice['marker'].exists())
-
-    def test_docs_cache_retry_read_permission_errors_remain_fail_open(self):
+    def test_docs_cache_notice_storage_errors_remain_fail_open(self):
         with mock.patch.dict(os.environ, self.env):
             docs_cache.set_status('Not logged in')
             data = {**self.payload, 'last_assistant_message': 'Done.'}
-            docs_cache.copilot_stop(data)
             notice = docs_cache.pending_notice(self.payload['sessionId'])
-            retries = next(notice['marker'].parent.glob('*.retries'))
-            read_text = Path.read_text
-
-            def deny_counter_read(path, *args, **kwargs):
-                if path == retries:
-                    raise PermissionError('retry counter is unreadable')
-                return read_text(path, *args, **kwargs)
-
-            with mock.patch.object(Path, 'read_text', deny_counter_read), \
+            with mock.patch.object(docs_cache.os, 'open', side_effect=PermissionError('unavailable')), \
                     mock.patch.object(sys, 'stderr'):
                 output = copilot_adapter.docs_cache_hook(docs_cache.copilot_stop, data)
             self.assertIsNone(output)
-            self.assertEqual(retries.read_text(), '1')
             self.assertFalse(notice['marker'].exists())
 
-    def test_docs_cache_acknowledgment_waits_for_other_stop_guards(self):
+    def test_failed_shared_hook_does_not_consume_an_undelivered_notice(self):
+        docs_cache.set_status('worker unavailable')
+        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('fixture failure')):
+            with self.assertRaises(RuntimeError):
+                copilot_adapter.run_hook('postToolUse', {
+                    **self.payload, 'toolName': 'bash', 'toolArgs': {'command': 'true'},
+                    'toolResult': {'resultType': 'success', 'textResultForLlm': ''},
+                })
+        self.assertIsNotNone(docs_cache.pending_notice(self.payload['sessionId']))
+
+    def test_docs_cache_warning_does_not_depend_on_response_punctuation(self):
         status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
         status.parent.mkdir(parents=True)
         status.write_text(json.dumps({'problem': f'Not logged in{EM_DASH}retry', 'ts': time.time()}))
-        notice = self.invoke('postToolUse', toolName='bash', toolArgs={'command': 'true'},
-                             toolResult={'resultType': 'success', 'textResultForLlm': ''})[0]['additionalContext']
+        self.invoke('postToolUse', toolName='bash', toolArgs={'command': 'true'},
+                    toolResult={'resultType': 'success', 'textResultForLlm': ''})
+        notice = self.progress[-1]
         self.assertNotIn(EM_DASH, notice)
-        marker = status.parent / 'sessions' / f'{self.payload["sessionId"]}.notified'
         path = self.write_events(self.transcript_events(f'{notice}\nBad{EM_DASH}punctuation'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
-        self.assertFalse(marker.exists())
-        path = self.write_events(self.transcript_events(notice))
+        path = self.write_events(self.transcript_events('Clean requested answer.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertTrue(marker.exists())
+        self.assertEqual(self.progress, [notice])
 
     def test_adapter_stays_out_of_docs_distiller_runs(self):
         self.env['IONCACHE_DOCS_DISTILLER'] = '1'
@@ -248,7 +326,7 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_question_blocks_mutations_until_non_question_prompt(self):
         text = self.prompt('why is this behavior different')['modifiedTransformedPrompt']
-        self.assertIn('answer-questions', text)
+        self.assertIn('Question turn: answer and reasoning only', text)
         self.assertTrue(self.marker.exists())
         for name, args in [
             ('create', {'path': 'x', 'file_text': 'y'}),
@@ -438,7 +516,7 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_shared_deadline_expires_before_native_timeout(self):
         with (
-            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 21]),
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 81]),
             mock.patch.object(hook_adapter_common.subprocess, 'run') as run,
             self.assertRaisesRegex(TimeoutError, 'internal deadline'),
         ):
@@ -448,11 +526,11 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_shared_deadline_reduces_remaining_handler_budget(self):
         result = subprocess.CompletedProcess(['python3', 'hook.py'], 0, '', '')
         with (
-            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 19, 19.5]),
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 78, 79, 79.5]),
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1, 0.5])
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5])
 
 
 if __name__ == '__main__':

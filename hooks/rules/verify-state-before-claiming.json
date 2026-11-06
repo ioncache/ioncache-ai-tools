@@ -1,6 +1,6 @@
 {
-  "event": "UserPromptSubmit",
+  "event": "SessionStart",
   "matcher": { "type": "always" },
   "action": "inject",
-  "message": "Never state the current status of anything (a PR, CI, a file, a branch) from memory or an earlier turn. Check it again in this turn before claiming it."
+  "message": "Current-state claims require successful observations of that resource in this turn, after relevant mutations."
 }

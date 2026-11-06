@@ -13,8 +13,8 @@ Python uses the standard library; JavaScript uses CommonJS and Node built-ins.
 Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
-- Claude Code uses `hooks/hooks.json`, which wires `UserPromptSubmit`,
-  `PreToolUse`, `PostToolUse`, and `Stop` events. Codex uses `.codex-plugin/plugin.json` and
+- Claude Code uses `hooks/hooks.json` for lifecycle, prompt, display, tool and Stop
+  events. Codex uses `.codex-plugin/plugin.json` and
   `hooks/codex-hooks.json`; Copilot uses `.github/plugin/plugin.json` and
   `hooks/copilot-hooks.json`. Their adapters share `hook_adapter_common.py`
   for ordered execution of the shared manifest and patch parsing.
@@ -25,8 +25,10 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   native inputs and outputs. Use `userPromptTransformed`, not
   `userPromptSubmitted`, for reminders: Copilot drops the latter's command
   output. The adapter preserves transformed prompt content and adds context.
+  Fence prompt processing before running shared handlers because this event
+  cannot block. Failed updates must not reuse old authorization.
 - Claude and Codex launch matching hooks concurrently. Emit classification
-  and its skill reminder from one handler, not a separate marker reader.
+  and its compact turn contract from one handler, not a separate marker reader.
   Codex registers one adapter per prompt/tool event. Both adapters pass
   `apply_patch` to the shared hooks once using `tool_input.command`; the
   engine checks all targets and added lines with one rules/config load.
@@ -34,8 +36,16 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   Adapter errors exit 2 to block; safe calls leave permissions unchanged.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, config
   resolution, and output merging. Rules live in `hooks/rules/`; standalone
-  hooks handle question state, documentation reminders, optional graphify
-  context, and final-response punctuation.
+  `turn_guard.py` keeps turn state and observed evidence in the existing
+  `EvidenceStore`, using the `turn-policy` namespace. `turn_review.py` runs
+  bounded semantic checks; the store itself remains mechanical.
+  Invalidate live evidence across actors after mutations. Correlate tool starts
+  with completions; post-read file metadata alone cannot certify returned bytes.
+  Keep review payloads on stdin. Cache semantic verdicts, not runtime failures.
+  Claude display batches and Copilot events retain earlier visible prose.
+  Codex final-only coverage must remain explicit; its transcript schema is
+  not a stable hook interface.
+  Final-response punctuation remains a separate guard.
 - `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
@@ -61,8 +71,11 @@ Run from the repository root:
 ```sh
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
+python3 hooks/scripts/turn_guard_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
+python3 hooks/scripts/docs_cache_self_check.py < /dev/null
+python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 ```
@@ -92,7 +105,7 @@ Syntax and manifest checks used by CI:
 
 ```sh
 python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py scripts/*.py
-for f in hooks/scripts/*.js scripts/*.js; do node --check "$f" || exit 1; done
+for f in scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
          .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
@@ -141,8 +154,11 @@ construct the character with `chr(0x2014)` to pass this source check.
   propagate to `main()`, which logs and exits 2; a readable empty directory
   or no enabled rules for an event remains valid. Engine-wide errors and
   watchdog expiry also log and exit 2.
-  Shared adapter execution has an internal deadline before the
-  native hook timeout (20 seconds for prompt/tool hooks, five for Stop).
+  Shared adapter execution has an internal deadline before the native hook
+  timeout: 80 seconds for pre-tool/final checks, 20 for other events. The
+  reviewer subprocess has a 60-second timeout and no tool-writing permissions.
+  Self-checks install isolated fake reviewer executables; never let offline
+  adapter tests launch a real model against fixture data.
 - Disable config is read fresh on every invocation. For each tool, resolve
   `(global disabled + project disabled) - project enabled`, then union all
   tools' results. Claude uses global/project
@@ -160,12 +176,16 @@ construct the character with `chr(0x2014)` to pass this source check.
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an
   exhaustive shell interpreter.
-- Question gating spans two scripts: `classify_question.py` writes
-  `/tmp/.ioncache-pending-question-{session_id}` and requests the skill;
-  `block_pending_question.py` denies recognized mutations while it exists.
-  Keep classification and its reminder together. Read-only lookups remain
-  allowed. The marker is cleared by a
-  subsequent non-question prompt, not by detecting an assistant answer.
+- `turn_guard.py` invokes the question classifier and emits its turn contract
+  from the same handler that updates question state and the marker.
+  `block_pending_question.py` denies recognized mutations for the whole turn.
+  A subsequent non-question user prompt clears the marker; plugin-generated
+  corrections preserve it. Resume/compaction must not reset correction budgets.
+  Native child identities isolate state; do not infer identity from agent type.
+- Cache diagnostics use user-facing `systemMessage` or Copilot progress
+  output, never repeated `additionalContext` or mandatory final-answer prose.
+  Keep progress parsing at the Copilot boundary; shared handlers emit one JSON
+  object. Record cache evidence without turning its summary into page coverage.
 - Claude/Codex final-response checks use `last_assistant_message`. Copilot
   lacks this field, so its adapter waits for the exact current `agentStop`
   record in `events.jsonl` before reading the latest root assistant text.

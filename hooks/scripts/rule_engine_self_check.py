@@ -385,8 +385,13 @@ def main():
 
     # Real pilot rules load correctly for UserPromptSubmit
     real_user_prompt_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'UserPromptSubmit')]
-    assert 'scope-exactly-what-asked.json' in real_user_prompt_rules
-    assert 'verify-state-before-claiming.json' in real_user_prompt_rules
+    assert 'scope-exactly-what-asked.json' not in real_user_prompt_rules
+    assert 'verify-state-before-claiming.json' not in real_user_prompt_rules
+    startup_rules = load_rules_for_event(RULES_DIR, 'SessionStart')
+    assert {rule['name'] for rule in startup_rules} == {
+        'scope-exactly-what-asked.json', 'verify-state-before-claiming.json',
+    }
+    assert run_rules(startup_rules, 'SessionStart', {})['hookSpecificOutput']['hookEventName'] == 'SessionStart'
 
     # never_kill_without_asking: exercises the shipped module directly, a
     # tokenizing scripted rule (not a regex Pattern rule), since matching

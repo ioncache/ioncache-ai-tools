@@ -1,29 +1,13 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: denies mutating tool calls while a question is pending.
+"""Deny recognized mutations for the whole question turn, not just its start.
 
-Paired with classify_question.py (UserPromptSubmit). That hook writes a
-per-session marker file when the latest user message reads as a pure
-question; this hook denies mutating tool calls for the rest of the turn
-while that marker exists. Only the next UserPromptSubmit firing clears it,
-so retrying a different tool does not bypass the block - the assistant has
-to answer in text first.
-
-Read-only/investigative tools (Read, Grep, graphify query, git log/diff/
-show, a `gh api graphql` query rather than a mutation, etc.) are allowed
-even while a question is pending, since answering a question well often
-requires looking things up - the rule this enforces is "don't act before
-answering," not "don't use any tool at all."
-
-Bash matching applies a fixed pattern list at tokenized command positions.
-It catches common ways of mutating state, not every way. Known, accepted
-gap: an interpreter one-liner or shell construct not in the list (an
-uncommon shell, an obscure redirect form) can still slip through
-unmatched.
+Read-only research remains available. A new non-question user prompt clears
+the restriction; plugin-generated corrections do not. Shell matching catches
+common accidental actions, not every possible interpreter or shell construct.
 """
 
 import json
 import os
-import pathlib
 import re
 import shlex
 import sqlite3
@@ -32,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evidence_review import review_metadata_request  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
+from classify_question import marker_path  # noqa: E402
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
     without_redirections,
@@ -58,7 +43,7 @@ BASH_MUTATION_PATTERNS = re.compile(
     r"pr\s+(create|merge|close|edit)|"
     r"issue\s+(create|close|edit)|repo\s+(delete|create)"
     r")\b|"
-    r"\brm\s|\bmv\s|"
+    r"\b(rm|mv|cp|mkdir|touch|chmod|chown)\s|"
     r"\bnpm\s+(install|uninstall|remove|update)\b|"
     # node -e/--eval and python -c run arbitrary code that could write
     # anything; treated as mutating outright rather than trying to parse
@@ -254,6 +239,10 @@ def _mutating_shell_command(simple_command):
 def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
+    if isinstance(tool_name, str) and tool_name.startswith('mcp'):
+        operation = re.split(r'__|[.-]', tool_name.lower())[-1]
+        if re.match(r'^(create|update|delete|edit|write|remove|merge|push)(?:_|$)', operation):
+            return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
         simple_commands = split_into_simple_commands(tokenize_command(command))
@@ -290,12 +279,11 @@ def allows_review_metadata(data):
 
 def main():
     data = json.load(sys.stdin)
-    session_id = data.get("session_id", "unknown")
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
-    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
-    if not flag_path.exists():
+    flags = (marker_path(data), marker_path({**data, 'agent_id': None}))
+    if not any(flag.exists() for flag in flags):
         return
 
     if not is_mutating(tool_name, tool_input):
@@ -317,9 +305,9 @@ def main():
                     # no way to tell a misfire from a real block, and no way
                     # past it.
                     "permissionDecisionReason": (
-                        "BLOCKED: classified as a question, answer it in plain "
-                        "text first. Read-only calls still work. If that was an "
-                        "instruction, not a question, say so and it goes through."
+                        "BLOCKED: classified as a question. This turn is answer-only, "
+                        "not answer-then-act. Read-only research remains available. "
+                        "A new non-question user instruction clears this restriction."
                     ),
                 }
             }

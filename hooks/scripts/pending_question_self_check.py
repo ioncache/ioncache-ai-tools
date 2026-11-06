@@ -16,12 +16,13 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from classify_question import has_question  # noqa: E402
+from classify_question import QUESTION_CONTRACT, has_question  # noqa: E402
 from block_pending_question import is_mutating  # noqa: E402
 
 # (message, expected has_question() result, note). Real messages pulled
@@ -161,8 +162,8 @@ MUTATION_FIXTURES = [
     (
         'Bash',
         {'command': 'touch /tmp/x'},
-        False,
-        'touch is not in the mutation pattern list; known, accepted gap, not asserted as mutating',
+        True,
+        'creating files is a mutation even without a redirect',
     ),
     ('Bash', {'command': 'gh pr view --json number'}, False, 'gh pr view is read-only'),
     (
@@ -447,27 +448,29 @@ def main():
     # up the flag file classify_question.py writes as a side effect.
     session_id = f'self-check-{uuid.uuid4()}'
     flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
-    try:
-        result = subprocess.run(
-            [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
-            input=json.dumps({'session_id': session_id, 'prompt': 'why is this broken'}),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        output = json.loads(result.stdout)
-        hook_output = output.get('hookSpecificOutput') or {}
-        if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
-            failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
-        if 'answer-questions' not in hook_output.get('additionalContext', ''):
-            failures.append('classification must emit its own skill reminder without another racing hook')
-        manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
-        manifest = json.loads(manifest_path.read_text())
-        commands = [hook['command'] for group in manifest['hooks']['UserPromptSubmit'] for hook in group['hooks']]
-        if any('require_answer_questions_skill.py' in command for command in commands):
-            failures.append('a separate marker reader can race Claude prompt classification')
-    finally:
-        flag_path.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix='question-check-') as home:
+        try:
+            result = subprocess.run(
+                [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
+                input=json.dumps({'session_id': session_id, 'cwd': home, 'prompt': 'why is this broken'}),
+                env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output = json.loads(result.stdout)
+            hook_output = output.get('hookSpecificOutput') or {}
+            if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
+                failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
+            if QUESTION_CONTRACT not in hook_output.get('additionalContext', ''):
+                failures.append('classification must emit the answer-only contract without another racing hook')
+            manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
+            manifest = json.loads(manifest_path.read_text())
+            commands = [hook['command'] for group in manifest['hooks']['UserPromptSubmit'] for hook in group['hooks']]
+            if any('require_answer_questions_skill.py' in command for command in commands):
+                failures.append('a separate marker reader can race Claude prompt classification')
+        finally:
+            flag_path.unlink(missing_ok=True)
 
     if failures:
         print(f'{len(failures)} failure(s):', file=sys.stderr)
