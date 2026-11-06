@@ -240,8 +240,12 @@ def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
     if isinstance(tool_name, str) and tool_name.startswith('mcp'):
-        operation = re.split(r'__|[.-]', tool_name.lower())[-1]
-        if re.match(r'^(create|update|delete|edit|write|remove|merge|push)(?:_|$)', operation):
+        operations = (
+            tool_name.lower().rsplit('__', 1)[-1],
+            re.split(r'__|[.-]', tool_name.lower())[-1],
+        )
+        if any(re.match(r'^(create|update|delete|edit|write|remove|merge|push)(?:[_.-]|$)', operation)
+               for operation in operations):
             return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")

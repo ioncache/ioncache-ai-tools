@@ -98,6 +98,9 @@ Session end discards live observations and review decisions but retains request
 context and applicable documentation for resume. A clear resets the active
 request. Older request history and large observations are bounded; omitted
 content is not treated as verified evidence.
+Assistant history reserves space for the final response before retaining earlier
+prose. It records truncation separately for each, so omitted earlier prose does
+not erase a complete final proposal needed for later approval.
 
 Questions retain the conservative classifier: a question mixed with an
 instruction still blocks recognized mutations. The work-product exception
@@ -140,6 +143,16 @@ subagents in read-only mode but may expose utility tools. Runs suppress this
 plugin's hooks and execute outside the consuming repository. Claude disables
 customizations; Copilot disables custom instructions; Codex ignores user config.
 The host login must work independently in noninteractive mode.
+
+The reviewer executable on `PATH` must support all isolation options used by
+the plugin. Claude's `--safe-mode` requires Claude Code 2.1.169 or later:
+https://github.com/anthropics/claude-code/releases/tag/v2.1.169.
+Codex's `--ignore-user-config` requires Codex 0.122.0 or later:
+https://github.com/openai/codex/releases/tag/rust-v0.122.0.
+These are the minimum versions for those flags, not a compatibility guarantee
+for every hook event. Use a current supported CLI. Recognized unsupported-option
+errors include an upgrade instruction instead of a generic checker failure.
+The hook does not retry with weaker isolation.
 
 The checker receives the actual request, candidate and observed evidence,
 including resource identifiers, fetch ages, versions when present, failures and

@@ -48,8 +48,11 @@ def main():
             "parentheses, or colon instead, then stop again."
         )
         if input_data.get('cwd') and input_data.get('session_id'):
-            from turn_guard import remember_continuation
-            remember_continuation(input_data, reason)
+            try:
+                from turn_guard import remember_continuation
+                remember_continuation(input_data, reason)
+            except Exception as error:
+                print(f'block-emdash: continuation recording failed ({type(error).__name__})', file=sys.stderr)
         print(
             json.dumps(
                 {

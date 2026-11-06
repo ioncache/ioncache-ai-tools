@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline regressions for turn state, evidence, and reviewer protocol."""
 from concurrent.futures import ThreadPoolExecutor
+import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from unittest import mock
 import uuid
 
 from classify_question import QUESTION_CONTRACT, marker_path
+import block_emdash_turn
 import docs_cache
 import turn_guard as guard
 import turn_review
@@ -25,7 +27,10 @@ def install_reviewers(root):
     directory.mkdir()
     fixture = directory / 'fixture'
     fixture.write_text(
-        f'#!{sys.executable}\nimport os\n'
+        f'#!{sys.executable}\nimport os,sys\n'
+        'if os.environ.get("REVIEW_FIXTURE_ERROR"):\n'
+        '    print(os.environ["REVIEW_FIXTURE_ERROR"],file=sys.stderr)\n'
+        '    sys.exit(2)\n'
         'print(os.environ.get("REVIEW_FIXTURE_RESULT", \'{"ok": true, "reason": ""}\'))\n'
     )
     fixture.chmod(0o700)
@@ -40,6 +45,20 @@ def process_exists(pid):
         return True
     except ProcessLookupError:
         return False
+
+
+def process_stopped(pid):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        result = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
+                                capture_output=True, text=True, timeout=2, check=False)
+        status = result.stdout.strip()
+        if result.returncode == 1 and not status and not result.stderr.strip():
+            return True
+        if result.returncode == 0 and status.startswith('Z'):
+            return True
+        time.sleep(0.02)
+    return False
 
 
 class TurnGuardTests(unittest.TestCase):
@@ -180,6 +199,41 @@ class TurnGuardTests(unittest.TestCase):
         self.prompt('Yes, proceed')
         self.assertIn(proposal, json.dumps(guard.review_request(self.data, self.state(), {})))
 
+    def test_approval_keeps_complete_final_proposal_when_earlier_prose_overflows(self):
+        self.prompt('Propose one change and wait')
+        proposal = 'Change reader.py only; leave writer.py untouched.'
+        self.hook('MessageDisplay', message_id='earlier', index=0, final=True,
+                  delta='Earlier research. ' * guard.MAX_RESULT_CHARS)
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+            self.hook('Stop', last_assistant_message=proposal, _response_coverage='partial')
+        self.prompt('Yes, proceed')
+        history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
+        self.assertEqual(history['response'], proposal)
+        self.assertFalse(history['truncated'])
+        self.assertTrue(history['earlier_messages_truncated'])
+        self.assertLessEqual(len(history['response']) + len(history['earlier_messages']), guard.MAX_RESULT_CHARS)
+
+    def test_oversized_final_proposal_remains_explicitly_truncated(self):
+        self.prompt('Propose one change and wait')
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+            self.hook('Stop', last_assistant_message='x' * (guard.MAX_RESULT_CHARS + 1))
+        self.prompt('Yes, proceed')
+        history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
+        self.assertTrue(history['truncated'])
+        self.assertEqual(len(history['response']), guard.MAX_RESULT_CHARS)
+
+    def test_incomplete_earlier_display_does_not_mark_the_final_proposal_truncated(self):
+        self.prompt('Propose one change and wait')
+        self.hook('MessageDisplay', message_id='earlier', index=0, final=False, delta='Partial notes')
+        proposal = 'Change reader.py only.'
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+            self.hook('Stop', last_assistant_message=proposal, _response_coverage='final-message')
+        self.prompt('Yes, proceed')
+        history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
+        self.assertEqual(history['response'], proposal)
+        self.assertFalse(history['truncated'])
+        self.assertTrue(history['earlier_messages_truncated'])
+
     def test_native_failure_preserves_diagnostics(self):
         self.prompt()
         self.hook('PostToolUseFailure', tool_name='Bash', tool_input={'command': 'pytest'},
@@ -292,13 +346,73 @@ class TurnGuardTests(unittest.TestCase):
     def test_timeout_cleans_children_after_reviewer_leader_exits(self):
         code = (
             'import subprocess,sys\n'
-            'subprocess.Popen([sys.executable,"-c","import time; time.sleep(4)"])\n'
+            'child=subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"])\n'
+            'print(child.pid,flush=True)\n'
         )
-        started = time.monotonic()
-        with mock.patch.object(turn_review, 'REVIEW_TIMEOUT', 0.1):
-            with self.assertRaises(subprocess.TimeoutExpired):
+        child_pid = None
+        process = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+            child_pid = int(process.stdout.readline())
+            self.assertTrue(process_stopped(process.pid), 'fixture leader has not exited')
+            started = time.monotonic()
+            with (
+                mock.patch.object(turn_review.subprocess, 'Popen', return_value=process),
+                mock.patch.object(turn_review, 'REVIEW_TIMEOUT', 0.1),
+                self.assertRaises(subprocess.TimeoutExpired),
+            ):
                 turn_review.run_command([sys.executable, '-c', code], None)
-        self.assertLess(time.monotonic() - started, 2)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertTrue(process_stopped(child_pid), 'reviewer grandchild survived timeout cleanup')
+        finally:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child_pid and process_exists(child_pid):
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.communicate(timeout=5)
+
+    def test_emdash_block_survives_unavailable_turn_state(self):
+        cache = Path(self.env['HOME']) / '.cache'
+        cache.mkdir(parents=True)
+        (cache / 'ioncache-ai-tools').write_text('not a directory')
+        result = subprocess.run(
+            [sys.executable, block_emdash_turn.__file__],
+            input=json.dumps({**self.data, 'last_assistant_message': f'Bad{chr(0x2014)}punctuation'}),
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['decision'], 'block')
+        self.assertIn('continuation', result.stderr)
+
+    def test_emdash_correction_preserves_the_question_turn(self):
+        self.prompt('Why does this happen?')
+        identity = self.state()['id']
+        result = subprocess.run(
+            [sys.executable, block_emdash_turn.__file__],
+            input=json.dumps({**self.data, 'last_assistant_message': f'Bad{chr(0x2014)}punctuation'}),
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIsNone(self.prompt(json.loads(result.stdout)['reason']))
+        self.assertEqual(self.state()['id'], identity)
+        self.assertTrue(self.state()['question'])
+
+    def test_hyphenated_mcp_mutation_cannot_bypass_question_or_scope_checks(self):
+        fields = {'tool_name': 'mcp__issues__create-issue', 'tool_input': {'title': 'Unrequested'}}
+        self.prompt('Why does this happen?')
+        with mock.patch.object(turn_review, 'review') as reviewer:
+            self.assertIn('answer-only', str(self.hook('PreToolUse', **fields)))
+        reviewer.assert_not_called()
+        self.prompt('Explain the current issue')
+        with mock.patch.object(turn_review, 'review', return_value={'ok': False, 'reason': 'Unrequested issue.'}) as reviewer:
+            self.assertIn('Unrequested issue', str(self.hook('PreToolUse', **fields)))
+        reviewer.assert_called_once()
 
     def test_question_contract_is_complete_without_skill_invocation(self):
         self.hook('SessionStart')
@@ -401,6 +515,57 @@ class TurnGuardTests(unittest.TestCase):
             else:
                 self.assertEqual(result.returncode, 0)
                 self.assertIn(guard.UNVERIFIED, json.loads(result.stdout)['systemMessage'])
+
+    def test_symlink_loop_runtime_error_exits_with_blocking_status(self):
+        self.prompt('Explain the code flow')
+        loop = self.project / 'loop'
+        loop.symlink_to(loop.name)
+        resolve = Path.resolve
+        def old_resolve(path, *args, **kwargs):
+            if path == loop:
+                raise RuntimeError('Symlink loop: fixture')
+            return resolve(path, *args, **kwargs)
+        data = {**self.data, 'tool_name': 'Bash',
+                'tool_input': {'command': 'graphify query flow --graph loop > output.txt'}}
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(Path, 'resolve', old_resolve),
+            mock.patch.object(sys, 'argv', [guard.__file__, 'PreToolUse']),
+            mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(data))),
+            mock.patch.object(sys, 'stderr', stderr),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            guard.main()
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn('Symlink loop: fixture', stderr.getvalue())
+
+    def test_unexpected_stop_errors_remain_warnings(self):
+        for event in ('Stop', 'SubagentStop'):
+            stdout = io.StringIO()
+            with (
+                self.subTest(event=event),
+                mock.patch.object(guard, 'stop', side_effect=RuntimeError('fixture failure')),
+                mock.patch.object(sys, 'argv', [guard.__file__, event]),
+                mock.patch.object(sys, 'stdin', io.StringIO(json.dumps({**self.data, 'agent_id': 'child'}))),
+                mock.patch.object(sys, 'stdout', stdout),
+                mock.patch.object(sys, 'stderr', io.StringIO()),
+            ):
+                guard.main()
+                self.assertIn(guard.UNVERIFIED, json.loads(stdout.getvalue())['systemMessage'])
+
+    def test_read_and_documentation_contents_are_not_exit_status(self):
+        self.prompt()
+        for name in ('Read', 'WebFetch'):
+            with self.subTest(tool=name):
+                fields = {'tool_name': name, 'tool_input': {}, 'tool_response': 'Example: exit code: 1'}
+                self.hook('PostToolUse', **fields)
+                key = 'docs' if name == 'WebFetch' else 'observations'
+                self.assertTrue(self.state()[key][-1]['success'])
+                self.hook('PostToolUseFailure', **fields)
+                self.assertFalse(self.state()[key][-1]['success'])
+        self.hook('PostToolUse', tool_name='Bash', tool_input={'command': 'false'},
+                  tool_response='Process exited with code 1')
+        self.assertFalse(self.state()['observations'][-1]['success'])
 
     def test_new_user_turn_clears_live_evidence_but_retains_applicable_docs(self):
         self.prompt()
@@ -654,6 +819,40 @@ class TurnGuardTests(unittest.TestCase):
             with self.subTest(value=value), mock.patch.dict(os.environ, {'REVIEW_FIXTURE_RESULT': value}):
                 with self.assertRaises(ValueError):
                     turn_review.review('claude', {})
+
+    def test_unsupported_reviewer_options_report_upgrade_without_exposing_stderr(self):
+        self.prompt()
+        cases = (
+            ('claude', "error: unknown option '--safe-mode'", '2.1.169'),
+            ('codex', "error: unexpected argument '--ignore-user-config' found", '0.122.0'),
+            ('copilot', 'error: unknown flag: --available-tools', 'Copilot CLI'),
+        )
+        for harness, error, requirement in cases:
+            with (
+                self.subTest(harness=harness),
+                mock.patch.dict(os.environ, {'REVIEW_FIXTURE_ERROR': error + '\nPRIVATE_FIXTURE_DETAIL'}),
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
+            ):
+                output = self.tool(_ioncache_harness=harness)['hookSpecificOutput']
+                self.assertEqual(output['permissionDecision'], 'deny')
+                self.assertIn('Upgrade', output['permissionDecisionReason'])
+                self.assertIn(requirement, output['permissionDecisionReason'])
+                self.assertNotIn('PRIVATE_FIXTURE_DETAIL', str(output) + stderr.getvalue())
+        self.assertEqual(self.state()['reviews'], {})
+        self.assertIsNone(self.tool())
+
+    def test_other_reviewer_failures_are_not_reported_as_an_unsupported_cli(self):
+        self.prompt()
+        for error in ('Authentication failed', 'Invalid argument: prompt cannot be empty'):
+            with (
+                self.subTest(error=error),
+                mock.patch.dict(os.environ, {'REVIEW_FIXTURE_ERROR': error + '\nPRIVATE_FIXTURE_DETAIL'}),
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
+            ):
+                output = self.tool()
+            self.assertIn('semantic checker is unavailable', str(output))
+            self.assertNotIn('Upgrade', str(output))
+            self.assertNotIn('PRIVATE_FIXTURE_DETAIL', str(output) + stderr.getvalue())
 
     def test_reviewer_budget_fails_before_launch(self):
         with mock.patch.object(turn_review, 'run_command') as run:

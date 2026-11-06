@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run all checks, or pass CopilotAdapterTests.test_name for one test."""
+import io
 import json
 import os
 from pathlib import Path
@@ -153,8 +154,10 @@ class CopilotAdapterTests(unittest.TestCase):
         with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('unavailable')):
             with self.assertRaises(RuntimeError):
                 copilot_adapter.transform_prompt({**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'})
-        with self.assertRaises(RuntimeError):
+        stderr = io.StringIO()
+        with mock.patch.object(sys, 'stderr', stderr), self.assertRaisesRegex(RuntimeError, 'turn_guard.py exited with 2'):
             copilot_adapter.transform_prompt({**self.payload, 'prompt': 'old feedback', 'transformedPrompt': 'old feedback'})
+        self.assertIn('turn-guard: the current user request has not been recorded', stderr.getvalue())
         self.invoke('sessionEnd')
         self.invoke('sessionStart', source='resume')
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
@@ -173,6 +176,21 @@ class CopilotAdapterTests(unittest.TestCase):
         output, _ = self.invoke('postToolUse', **fields)
         self.assertIn('Question turn:', output['additionalContext'])
         self.assertEqual(self.invoke('postToolUse', **fields)[0], {})
+
+    def test_successful_view_does_not_parse_file_contents_as_exit_status(self):
+        self.prompt('Explain this file')
+        path = self.project / 'failure-example.txt'
+        path.write_text('The example fails with exit code: 1.')
+        fields = {'toolName': 'view', 'toolArgs': {'path': str(path)}}
+        self.invoke('preToolUse', **fields)
+        self.invoke('postToolUse', **fields, toolResult={
+            'resultType': 'success', 'textResultForLlm': path.read_text(),
+        })
+        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
+            state = store.get(turn_guard.CATEGORY, 'state')
+        observation = turn_guard.current_observations(state)[-1]
+        self.assertTrue(observation['success'])
+        self.assertTrue(observation['unchanged'])
 
     def test_stop_continuation_retains_earlier_visible_prose(self):
         self.prompt('Why does this happen?')

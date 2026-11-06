@@ -182,6 +182,8 @@ def prior_history(previous):
     if response is not None:
         history.append({
             'request': previous['prompt'], 'response': response, 'truncated': truncated,
+            'earlier_messages': previous.get('last_earlier_response', ''),
+            'earlier_messages_truncated': previous.get('earlier_response_truncated', False),
         })
     incomplete = False
     while history and len(json.dumps(history)) > MAX_HISTORY_CHARS:
@@ -250,6 +252,7 @@ def child_state(parent):
         'continuations': [], 'stop_attempts': 0, 'stop_checks': 0, 'bootstrapped': False,
         'parent_turn': parent['id'],
         'pending_tools': {}, 'last_response': None,
+        'last_earlier_response': '', 'earlier_response_truncated': False,
         'messages': [], 'messages_truncated': False,
     }
 
@@ -299,7 +302,7 @@ def result_status(data):
         if data.get('tool_name') == 'WebFetch' and 'code' in result:
             return type(result['code']) is int and 200 <= result['code'] < 300
         result = result.get('textResultForLlm', result.get('stdout', ''))
-    if isinstance(result, str):
+    if data.get('tool_name') == 'Bash' and isinstance(result, str):
         exit_code = re.search(r'(?:Process exited with code|exit code[: ]+)\s*(-?\d+)', result, re.I)
         if exit_code:
             return exit_code[1] == '0'
@@ -467,6 +470,9 @@ def check_candidate(data, state, candidate):
         result = turn_review.review(data.get('_ioncache_harness', 'claude'), request)
     except turn_review.ReviewInputTooLarge:
         return key, {'ok': False, 'reason': 'The current request and candidate exceed the review input budget; use smaller changes.'}
+    except turn_review.UnsupportedReviewerCLI as error:
+        print(f'turn-guard: {error}', file=sys.stderr)
+        return key, {'ok': False, 'reason': str(error)}
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'turn-guard: semantic checker failed ({type(error).__name__})', file=sys.stderr)
         return key, {'ok': False, 'reason': 'The semantic checker is unavailable or returned invalid output.'}
@@ -584,11 +590,12 @@ def response_candidate(data, state, response):
 
 def remember_response(data, state, response):
     candidate = response_candidate(data, state, response)
-    visible = '\n\n'.join(filter(None, (candidate['earlier_messages'], response)))
-    state['last_response'] = visible[:MAX_RESULT_CHARS]
-    state['response_truncated'] = (
-        len(visible) > MAX_RESULT_CHARS or state.get('messages_truncated', False)
-        or data.get('_response_coverage') == 'partial'
+    state['last_response'] = response[:MAX_RESULT_CHARS]
+    state['response_truncated'] = len(response) > MAX_RESULT_CHARS
+    remaining = MAX_RESULT_CHARS - len(state['last_response'])
+    state['last_earlier_response'] = candidate['earlier_messages'][:remaining]
+    state['earlier_response_truncated'] = (
+        len(candidate['earlier_messages']) > remaining or candidate['coverage'] != 'observed-turn'
     )
 
 
@@ -687,7 +694,7 @@ def main():
         output = run_hook(sys.argv[1], json.load(sys.stdin))
         if output:
             print(json.dumps(output))
-    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+    except Exception as error:
         print(f'turn-guard: {error}', file=sys.stderr)
         if len(sys.argv) > 1 and sys.argv[1] in ('Stop', 'SubagentStop'):
             print(json.dumps({'systemMessage': UNVERIFIED + 'turn state or hook input is unavailable.'}))
