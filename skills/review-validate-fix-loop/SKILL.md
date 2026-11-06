@@ -17,6 +17,10 @@ Examples: `review-validate-fix-loop branch --max-loops 4`,
 `review-validate-fix-loop repository --max-fix-cycles 2`.
 Do not accept model, effort, cost, or persistent-config options in this version.
 Report invalid arguments without starting a run. Do not silently ignore them.
+Conversational review-role model selections and existing harness settings
+are not invocation flags. Apply them through the
+[review selection policy](../review-code/ORCHESTRATION.md), subject to host
+restrictions. Fixing-phase model controls remain outside this interface.
 
 Resolve `../../scripts/review_ledger.py` relative to this installed skill,
 not the current working directory or an assumed host environment variable.
@@ -27,11 +31,15 @@ Git worktree. Read its `--help` if invocation details are unclear.
 
 1. Resolve the target, objective, and comparison base using the workflow.
    Initialize one ledger, or inspect the explicitly selected resumed run.
-2. Start a full review through `review-code`. Use independent read-only
-   subagents for substantial standards passes, plus cross-cutting correctness.
-   The coordinator owns all launches; do not require nested delegation.
-3. Collect findings and validate them against requirements and actual callers.
-   Record each candidate, duplicate observation, decision, reason, and evidence.
+2. Record `start_review` before any full-review launch, then invoke
+   `review-code` with the pinned request and ledger snapshot. In nested mode
+   the review coordinator owns specialist launches. In flat mode the loop
+   launches and collects workers, then delegates adjudication. The loop owns
+   the request, all ledger writes, and limits in both modes.
+3. Check the evidence handback, adopting independent coordinator validation
+   of specialist findings rather than repeating every investigation. Validate
+   coordinator-originated findings separately. Record each candidate,
+   duplicate observation, decision, reason, and evidence through the protocol.
 4. Declare an authorized batch of files and findings before fixing. Use one
    code writer. Run relevant checks, then delegate an independent focused
    review of the correction delta and its affected callers.
@@ -56,12 +64,15 @@ Tests can have side effects; run only operations within granted permissions.
 If required capabilities or permissions are unavailable, record a blocked
 outcome rather than bypassing them or claiming complete coverage.
 
-Use the host's native delegation tools and configured model defaults.
-Give workers the objective, scope, snapshot, relevant standards and ledger
-history, read-only role, and explicit completion conditions. Wait for all
-required results. Failed or partial workers are not clean reviews.
+Use the host's native delegation tools and the
+[shared orchestration instructions](../review-code/ORCHESTRATION.md).
+Resolve permitted review-role selections from current evidence; otherwise
+preserve configured defaults and disclose the limitation. Supply the
+[review contract](../review-code/CONTRACTS.md), including relevant ledger
+history and explicit completion conditions. Failed or partial workers are
+not clean reviews.
 
-Only the coordinator updates the ledger through its helper. Never hand-edit
+Only the outer loop updates the ledger through its helper. Never hand-edit
 state, reset counters, or create a replacement run to evade a limit. Use
 snapshot checks before trusting evidence, especially on resumption.
 These are best-effort agent instructions, not a hard workflow boundary.

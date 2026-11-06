@@ -25,10 +25,14 @@ runs need isolated worktrees or a terminal prior run.
 
 ## Review and validate
 
-Start with `start_review`, which increments the outer count before any worker
-launch. Use `review-code` with the recorded base and current snapshot. Divide
-independent standards passes among read-only agents; do not delegate a single
-trace merely to add agents. Retain an integration-level correctness pass.
+Start with `start_review`, which increments the outer count before launching
+the review coordinator or any worker. Use `review-code` with the recorded
+base and current ledger snapshot; do not create a second run or snapshot.
+Follow the [shared orchestration instructions](../review-code/ORCHESTRATION.md):
+the dedicated review coordinator owns specialist launches in nested mode;
+the loop owns launches and collection in flat mode, then uses a separate
+adjudicator. Keep the small-review shortcut and cross-cutting correctness
+pass. The outer loop remains the sole ledger writer and owns limits and fixes.
 
 Record every candidate through `finding`, including low-confidence candidates
 that require validation. Use an underlying-behavior key consistently within
@@ -40,12 +44,19 @@ worker, coverage evidence, and verification checks. If a worker fails or a
 required check cannot be performed, record `stop` with an incomplete outcome.
 Do not fabricate a successful pass or label an unavailable check unnecessary.
 
-Validate findings independently of the reviewer where practical. Record a
-`decision` for every pending finding. A reachable failure, caller contract,
-documented standard, or unmet usage-documentation requirement can validate an
-issue. Model agreement alone cannot. Distinguish truth from scope and risk
-acceptance. New evidence can reopen an ignored or resolved entry; repeat
-wording alone should not re-report it as new.
+Coordinator/adjudicator assessment supplies independent validation of
+specialist findings. Check the handback for evidence completeness, matching
+assignments and snapshots, and unresolved contradictions. Investigate gaps,
+not every completed investigation again. Independently validate findings
+originating from the coordinator/adjudicator. Inline review must not claim
+independent validation that did not happen.
+
+Record a `decision` for every pending finding after `review_done`, following
+the [handback mapping](LEDGER.md#review-handback-mapping). A reachable failure,
+caller contract, documented standard, or unmet usage-documentation requirement
+can validate an issue. Model agreement alone cannot. Distinguish truth from
+scope and risk acceptance. New evidence can reopen an ignored or resolved
+entry; repeat wording alone should not re-report it as new.
 
 The agent can decide to ignore a valid or uncertain issue with a specific
 reason, evidence, and residual risk. It must not ask the user to adjudicate
@@ -65,10 +76,12 @@ resolution. The helper rejects changes outside the declared files or changed
 HEAD/index metadata. It never reverts code to resolve such conflicts.
 
 Use `diff` with the cycle's `before` and `after` snapshots for focused review.
-The reviewer checks each attempted correction, affected callers, regression
-risk, weakened checks, and unrelated changes. All outstanding inner-cycle
-findings remain relevant, not only the latest changed lines. Record candidates
-and `fixes_reviewed`, then validate the new candidates in this same cycle.
+Use the same review boundary with a `focused` request. Include each attempted
+correction, affected callers, regression risk, weakened checks, and unrelated
+changes. All outstanding inner-cycle findings remain relevant, not only the
+latest changed lines. Do not silently expand this into a full review. Record
+candidates and `fixes_reviewed`, then validate the new candidates in this same
+cycle using the same specialist/coordinator ownership rules.
 
 For each applied fix, record `fixed` only with passing relevant verification
 and completed review-fixes, or record `fix_failed` when it is not resolved.
@@ -107,6 +120,10 @@ changing its evidence snapshot, finding history, or consumed allowances.
 Do not delete the ledger or reconstruct an earlier worktree just to abandon it.
 
 Stop for unrecoverable errors, missing capabilities, or oscillating fixes.
+Use `blocked` for recoverable worker/capability failures and `interrupted`
+for interruptions. Use terminal `failed` for unrecoverable errors or
+`stalled` when further progress is abandoned. Do not copy a worker's `failed`
+outcome into the run outcome without deciding whether the run can resume.
 Do not repeatedly relaunch a failing worker within a phase to evade counts.
 The coordinator's ledger reasons record the failure and its consequences.
 Malformed storage, missing evidence, or helper errors must be surfaced.

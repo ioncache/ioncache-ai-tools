@@ -48,9 +48,11 @@ arguments, and intermediate and final reports. Upgrade `review-code`
 while preserving its standalone read-only use.
 
 A small ledger helper is recommended to validate and persist the record
-reliably. There are no per-phase effort or model options. Respect existing
-harness and agent settings. Loop counts must not be presented as token or
-spending limits.
+reliably. There are no per-phase effort or model invocation flags.
+Review-role selection follows the shared orchestration policy, including
+configured defaults when discovery, suitability evidence, or override
+permission is unavailable. Respect existing harness and agent settings.
+Loop counts must not be presented as token or spending limits.
 
 The workflow, ledger, and termination contracts below define this phase.
 Cost-budget requirements and optional enhancements are outside its scope.
@@ -66,7 +68,8 @@ The implementation uses the following choices:
   pinned merge-base, including local edits. If no local default-branch ref
   exists, explicitly narrow to changes since `HEAD`; lookup errors must
   not be mistaken for absent references.
-- `scripts/review_ledger.py` provides `init`, `apply`, `status`, and `diff`.
+- `scripts/review_ledger.py` provides `init`, `apply`, `status`, and `diff`,
+  plus a storeless `fingerprint` command for standalone reviews.
   Events go through stdin with an expected revision. Schema version 1 stores
   run metadata, snapshots, and ordered events; `review_loop_state.py` derives
   current state by replay rather than maintaining a second editable summary.
@@ -80,9 +83,11 @@ The implementation uses the following choices:
 - Run artifacts are retained locally, never automatically committed or
   uploaded. The helper creates private-by-default storage without modifying
   consuming projects' ignore files.
-- The coordinator uses native read-only agents for substantial independent
-  passes, retains integration review, and uses one code writer. No model or
-  effort overrides are supplied.
+- Shared review instructions select conditional nested coordination or flat
+  adjudication for substantial independent passes and retain integration
+  review. The outer loop owns one code writer and all ledger updates.
+  Review-role overrides require current evidence and permission; otherwise
+  configured defaults remain in effect. Live execution acceptance is pending.
 
 The [workflow reference](../skills/review-validate-fix-loop/WORKFLOW.md) and
 [ledger protocol](../skills/review-validate-fix-loop/LEDGER.md) document the
@@ -149,8 +154,8 @@ either committed phase:
 
 | Enhancement | Possible scope |
 | --- | --- |
-| Per-phase effort controls | Separate reasoning-effort choices for review, validation, fixing, and review-fixes. |
-| Per-phase model controls | Optional model overrides for individual phases. |
+| Fixing-phase effort controls | Separate effort choices for code correction beyond review-role selection. |
+| Fixing-phase model controls | Optional model overrides for code correction beyond review-role selection. |
 | Token limits | Token-consumption caps in addition to monetary and loop-count budgets. |
 | Parallel fixing | Isolated concurrent corrections with an explicit integration policy. |
 | Narrow enforcement hooks | Mechanical guards against accidental writes or other invalid phase actions. |
@@ -280,10 +285,13 @@ rules. Readable implementation does not remove those needs. Neither a
 coverage percentage nor an unsupported label such as "boilerplate" is
 sufficient to accept or reject a documentation finding.
 
-A separate validator should challenge the finding rather than repeat the
-reviewer's explanation. Agent agreement, even across different models,
-does not establish validity. Uncertain requirements are not an invitation
-to invent intent or to pause for a user decision.
+The review coordinator or flat adjudicator independently validates specialist
+findings. The outer loop checks evidence completeness and investigates gaps
+or contradictions rather than repeating every investigation. It independently
+validates coordinator-originated findings before adopting them. Inline review
+must not claim independence it did not have. Agent agreement does not establish
+validity. Uncertain requirements are not an invitation to invent intent or to
+pause for a user decision.
 
 Investigate uncertainty within the available allowance. If the agent
 decides not to change the code, record the unresolved evidence, residual
@@ -321,11 +329,17 @@ issues. Every fix/review-fixes cycle consumes the inner allowance.
 
 ## Agent coordination
 
-The coordinator owns scope, work allocation, finding reconciliation,
-ledger updates, phase transitions, and reporting.
+The outer loop owns scope, ledger updates, fixes, limits, phase transitions,
+and workflow reporting. The shared review boundary owns pass allocation,
+evidence adjudication, and the consolidated review handback.
 
-Prefer flat orchestration: the coordinator launches each phase's workers.
+The 2026-11-06 review-orchestration decision supersedes the flat-by-default
+preference: use a dedicated coordinator for substantial reviews when native
+nested result collection is supported. In flat mode the outer loop still
+launches and collects specialists, then invokes a separate adjudicator.
 Do not require identical nested-agent capabilities across harnesses.
+The shared instructions implement this conditional policy; approved live
+trials must establish host support before claiming verified execution.
 
 Independent review passes can run concurrently with read-only tools.
 Validation can also be delegated where findings are independent. Supply
@@ -359,10 +373,12 @@ starts. These are parameters for that run, not defaults for future runs.
 Resumption preserves them and the consumed allowances. Do not silently
 raise a limit or reset counters to make a run finish.
 
-There are no separate review, validation, fixing, or review-fixes effort
-arguments in the first version. Per-phase model overrides are also
-deferred. Different phases remain distinct even without separate settings.
-Existing settings never authorize broader edits or skipped standards.
+There are no separate model or effort invocation flags. Existing harness
+settings and explicit conversational review-role selections follow
+[skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md),
+subject to higher-priority policy. Fixing-phase overrides remain deferred.
+Different phases remain distinct even without separate settings. Existing
+settings never authorize broader edits or skipped standards.
 
 This follows the invocation-argument pattern illustrated by Claude's
 [bundled code-review command](https://code.claude.com/docs/en/commands)

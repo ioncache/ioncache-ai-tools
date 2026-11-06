@@ -44,9 +44,16 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
   for consuming projects, not necessarily this plugin's implementation stack.
+  `skills/review-code/` shares `CRITERIA.md`, `CONTRACTS.md`, and
+  `ORCHESTRATION.md` between standalone review and the review/fix caller.
+  Leaf assignments must not re-enter the skill or spawn another review layer.
 - `scripts/review_ledger.py` persists per-run review history and snapshots;
-  `review_loop_state.py` validates transitions by replay. The loop skill owns
-  agent coordination. Keep ledger checks mechanical, not semantic judgments.
+  `review_loop_state.py` validates transitions by replay. Its storeless
+  `fingerprint` command reuses the snapshot implementation for standalone
+  reviews. The outer loop owns ledger writes, fixes, and limits; shared review
+  instructions own conditional nested coordination or flat adjudication.
+  Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
+  to schema-1 evidence fields rather than adding event fields.
 - The `create-worktree` skill invokes `scripts/create-worktree.js`, which wraps
   `git worktree add` and applies the main worktree's `.worktree-setup.json`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
@@ -69,7 +76,8 @@ python3 scripts/review_ledger_self_check.py
 
 These checks run in CI; the Node self-test exercises worktree setup and path
 containment. Extend the existing assertion-based self-checks for changes to
-their respective behavior.
+their respective behavior. The ledger self-check also exercises standalone
+fingerprints, review-handback event fixtures, and packaged review references.
 
 Run one Copilot adapter test with:
 

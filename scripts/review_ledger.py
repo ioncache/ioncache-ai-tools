@@ -5,6 +5,7 @@ Run in the consuming Git worktree, never the installed plugin directory.
 `init` saves a baseline; `apply` reads one event from stdin and atomically
 appends it at the requested revision. `status` reconciles current file hashes
 without modifying history. `diff` reads saved snapshots, not a remote PR.
+`fingerprint` hashes the current worktree without creating a run or storing blobs.
 
 JSON goes to stdout. Invalid input, stale evidence, unsupported files and
 storage errors go to stderr with exit 2. No command edits project code, invokes
@@ -152,6 +153,13 @@ def changed(before, after):
     """Include additions, deletions, content, and mode changes in fix-scope checks."""
     return sorted(name for name in before["files"].keys() | after["files"].keys()
                   if before["files"].get(name) != after["files"].get(name))
+
+
+def fingerprint(_args, root):
+    """Detect drift without requiring standalone reviewers to create a ledger."""
+    current = snapshot(root)
+    require(current == snapshot(root), "Worktree changed during fingerprint")
+    return {"root": str(root), "snapshot": digest(encode(current)), "manifest": current}
 
 
 def validate_snapshots(ledger, folder):
@@ -344,6 +352,7 @@ def parser():
     """Require run intent and explicit write revisions at the CLI boundary."""
     cli = argparse.ArgumentParser(description=__doc__)
     commands = cli.add_subparsers(dest="command", required=True)
+    commands.add_parser("fingerprint", help="Hash the current worktree without storing snapshots")
     create = commands.add_parser("init", help="Start a new run in the current worktree")
     create.add_argument("--objective", required=True)
     create.add_argument("--scope", required=True)
@@ -366,7 +375,8 @@ def main():
     args = parser().parse_args()
     try:
         root = worktree()
-        handlers = {"init": init, "apply": append, "status": status, "diff": diff}
+        handlers = {"init": init, "apply": append, "status": status, "diff": diff,
+                    "fingerprint": fingerprint}
         if args.command in ("init", "apply"):
             base = safe_path(root, ".review-loop")
             base.mkdir(exist_ok=True, mode=0o700)

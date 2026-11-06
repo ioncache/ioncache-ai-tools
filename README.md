@@ -168,6 +168,56 @@ The review/fix loop defaults to three review loops and three fix cycles per
 loop. It supports resuming a run, but does not authorize commits, pushes, or PR
 comments. Keep `.review-loop/` artifacts private: they can contain source.
 
+### Review coordination
+
+`review-code` uses shared criteria, role instructions, and evidence contracts:
+[skills/review-code/CRITERIA.md](skills/review-code/CRITERIA.md),
+[skills/review-code/ORCHESTRATION.md](skills/review-code/ORCHESTRATION.md), and
+[skills/review-code/CONTRACTS.md](skills/review-code/CONTRACTS.md).
+
+Small reviews stay inline when all evidence fits one direct read and no
+substantial independent pass is needed. Explicit independence requests take
+precedence. For substantial reviews, the invoking agent can delegate to a
+fresh-context coordinator that collects specialists, validates their findings,
+and returns one handback. If nested result collection is unsupported or
+unverified, the invoking agent collects workers and uses a separate flat
+adjudicator. Missing required independence blocks the review.
+
+The invoking agent selects the coordinator model before launch. Worker
+selections follow the same evidence-based policy, without shipped model names
+or rankings. Explicit conversational role/model requests and harness settings
+remain subject to host policy; the loop adds no model/effort flags. When
+account discovery, suitability evidence, or permission to override is missing,
+the instructions preserve configured defaults and disclose the limitation.
+This fallback is not automatic runtime model selection.
+
+The outer review/fix loop remains the only ledger writer and owns fixes and
+limits. It adopts coordinator validation of specialist findings after checking
+evidence completeness, independently validates coordinator-originated findings,
+and maps the handback into the existing schema-1 protocol. Recoverable worker
+failures stop as blocked, not automatically as terminal failures.
+
+Standalone Git reviews run this from the consuming worktree:
+
+```sh
+python3 -B "/absolute/plugin/scripts/review_ledger.py" fingerprint
+```
+
+It returns the canonical root, snapshot ID, and file-hash manifest without
+creating a ledger or storing source blobs.
+Compare IDs before and after adjudication. Coverage is whole-worktree and
+includes tracked and non-ignored untracked files, HEAD, index, and file modes.
+Ignored files and `.review-loop/` are excluded; symlinks record target text,
+not dereferenced content. Submodules and special files fail explicitly.
+
+These shared instructions and mechanical checks are implemented, but supervised
+launch-to-handback trials are still pending. No host-specific agent descriptors
+or manifest migrations have been added. Nested/flat execution and automatic
+model selection are not yet acceptance-verified on any host. Their rollout
+remains gated by the trials in
+[docs/review-orchestration-plan.md](docs/review-orchestration-plan.md).
+The dependency-review and review/triage workflows keep their existing policies.
+
 ### `.worktree-setup.json`
 
 Configure setup at the repository root. The worktree skill creates generic

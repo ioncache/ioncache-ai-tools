@@ -22,9 +22,20 @@ decisions and progress in a durable per-run `REVIEW_LEDGER`. It includes
 autonomous decisions, subagents, nested fix/review-fixes cycles, separate
 outer and inner loop limits, and invocation-only parameters. Exhausting
 the inner limit with actionable issues stops the whole run. Cost budgeting
-is required follow-up work; per-phase model and effort options are deferred.
+is required follow-up work; fixing-phase model and effort controls are deferred.
 The skill and ledger helper are implemented. Supervised cross-harness
 evaluation remains separate from automated ledger checks.
+
+Shared review coordination instructions and storeless fingerprints are
+implemented under
+[skills/review-code/](../skills/review-code/SKILL.md). The adopted design prefers
+a dedicated coordinator when nested result collection is supported, with flat
+adjudication as fallback. Review-role model selection requires current
+availability and suitability evidence and otherwise preserves configured
+defaults. Automatic selection, host-specific packaging, and live execution
+acceptance remain gated on approved trials; they are not delivered by the
+mechanical checks. See
+[docs/review-orchestration-plan.md](review-orchestration-plan.md).
 
 ### Rule candidates
 

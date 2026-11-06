@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,19 @@ HELPER = Path(__file__).with_name("review_ledger.py")
 PASSES = [{"name": "correctness", "worker": "independent-reviewer",
            "result": "complete", "evidence": "Traced fixture callers and requirements"}]
 CHECKS = [{"name": "fixture check", "result": "passed", "evidence": "Fixture assertion passed"}]
+
+
+def coordinated_pass(snapshot, mode):
+    return {**PASSES[0], "worker": f"{mode}-specialist",
+            "evidence": json.dumps({
+                "assignment": "correctness", "snapshot": snapshot, "mode": mode,
+                "selection": {"requested": "configured default", "selected": "configured default",
+                              "actual": "unknown", "reason": "Discovery unavailable in fixture",
+                              "availability_source": "unavailable",
+                              "suitability_source": "unavailable", "constraints": [],
+                              "limitations": ["Actual model not exposed"]},
+                "coverage": ["Traced app.txt against fixture requirements"],
+                "limitations": []})}
 
 
 class ReviewLedgerTests(unittest.TestCase):
@@ -101,6 +115,139 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("fix_done", results={"F001": {"result": result, "evidence": "Edited fixture"}},
                   checks=CHECKS)
         self.send("fixes_reviewed", passes=PASSES)
+
+    def test_fingerprint_is_storeless_and_root_relative(self):
+        before = self.git("status", "--porcelain")
+        initial = self.cli(["fingerprint"])
+        nested = self.root / "source folder"
+        nested.mkdir()
+        self.cwd = nested
+        self.assertEqual(self.cli(["fingerprint"]), initial)
+        self.assertEqual(initial["root"], str(self.root))
+        self.assertIn("app.txt", initial["manifest"]["files"])
+        self.assertEqual(self.git("status", "--porcelain"), before)
+        self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_fingerprint_detects_dirty_added_and_deleted_inputs(self):
+        initial = self.cli(["fingerprint"])
+        (self.root / "app.txt").write_text("dirty\n")
+        dirty = self.cli(["fingerprint"])
+        self.assertNotEqual(dirty["snapshot"], initial["snapshot"])
+        (self.root / "new.txt").write_text("untracked\n")
+        added = self.cli(["fingerprint"])
+        self.assertNotEqual(added["snapshot"], dirty["snapshot"])
+        self.assertIn("new.txt", added["manifest"]["files"])
+        (self.root / "app.txt").unlink()
+        deleted = self.cli(["fingerprint"])
+        self.assertNotEqual(deleted["snapshot"], added["snapshot"])
+        self.assertNotIn("app.txt", deleted["manifest"]["files"])
+        (self.root / "ignored.txt").write_text("excluded\n")
+        self.assertEqual(self.cli(["fingerprint"]), deleted)
+        self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_fingerprint_tracks_index_and_head_without_content_changes(self):
+        (self.root / "app.txt").write_text("dirty\n")
+        before = self.cli(["fingerprint"])
+        self.git("add", "app.txt")
+        staged = self.cli(["fingerprint"])
+        self.assertEqual(staged["manifest"]["files"], before["manifest"]["files"])
+        self.assertNotEqual(staged["snapshot"], before["snapshot"])
+        self.git("commit", "-qm", "fixture staging")
+        committed = self.cli(["fingerprint"])
+        self.assertEqual(committed["manifest"]["files"], staged["manifest"]["files"])
+        self.assertNotEqual(committed["snapshot"], staged["snapshot"])
+        self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_fingerprint_rejects_drift_and_unsupported_files_without_storage(self):
+        with patch("review_ledger.snapshot", side_effect=[{"head": "before"}, {"head": "after"}]):
+            with self.assertRaisesRegex(review_ledger.LedgerError, "changed during fingerprint"):
+                review_ledger.fingerprint(None, self.root)
+        (self.root / "app.txt").unlink()
+        os.mkfifo(self.root / "app.txt")
+        self.assertIn("Unsupported", self.cli(["fingerprint"], ok=False))
+        self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_coordinated_handbacks_preserve_schema_one_evidence(self):
+        for mode in ("nested", "flat"):
+            self.init()
+            self.send("start_review")
+            full_pass = coordinated_pass(self.state["snapshot"], mode)
+            for origin in ("specialist", "coordinator"):
+                self.send("finding", key=f"{origin}-boundary", summary="Fixture boundary mismatch",
+                          locations=["app.txt:1"], severity="High",
+                          evidence=[f"origin={origin}; assignment=correctness; mode={mode}"])
+            self.finding("specialist-boundary")
+            self.reject("decision", id="F002", validation="invalid", disposition="ignored",
+                        severity="High", evidence=["Caller validation waits for completed passes"])
+            self.send("review_done", passes=[full_pass], checks=CHECKS)
+            self.send("decision", id="F001", validation="valid", disposition="open", severity="High",
+                      evidence=["validator=review-adjudicator; traced specialist evidence"])
+            self.send("decision", id="F002", validation="invalid", disposition="ignored",
+                      severity="High", evidence=["validator=outer-loop; checked integration claim"])
+            self.send("start_fix", findings=["F001"], files=["app.txt"])
+            (self.root / "app.txt").write_text(f"corrected {mode}\n")
+            self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Correction"}},
+                      checks=CHECKS)
+            focused_pass = coordinated_pass(self.state["snapshot"], mode)
+            self.send("fixes_reviewed", passes=[focused_pass])
+            self.decide(disposition="fixed")
+            self.send("advance")
+            self.review()
+            self.send("advance")
+            report = self.cli(["status", self.ledger])
+            self.assertEqual(report["outcome"], "completed")
+            self.assertEqual(len(report["loops"]), 2)
+            self.assertEqual(len(report["loops"][0]["cycles"]), 1)
+            self.assertEqual(report["loops"][0]["review"]["passes"], [full_pass])
+            self.assertEqual(report["loops"][0]["cycles"][0]["review"]["passes"], [focused_pass])
+            self.assertEqual(len(report["findings"]["F001"]["observations"]), 2)
+            self.assertEqual(report["findings"]["F002"]["validation"], "invalid")
+            self.assertIn("validator=outer-loop",
+                          report["findings"]["F002"]["decisions"][0]["evidence"][0])
+            self.assertEqual(json.loads(Path(self.ledger).read_text())["schema"], 1)
+
+    def test_incomplete_handbacks_preserve_diagnostics_and_resumability(self):
+        for outcome in ("blocked", "interrupted", "failed", "stalled"):
+            self.init()
+            self.send("start_review")
+            self.finding("received-before-failure")
+            reason = json.dumps({"assignment": "correctness", "outcome": "failed",
+                                 "selection": "configured default; actual unknown",
+                                 "coverage": "partial", "diagnostics": "Fixture worker unavailable"})
+            self.send("stop", outcome=outcome, reason=reason)
+            report = self.cli(["status", self.ledger])
+            self.assertEqual(report["stop_reason"], reason)
+            self.assertEqual(report["findings"]["F001"]["validation"], "pending")
+            self.assertNotIn("review_done", [event["type"] for event in report["history"]])
+            if outcome in ("blocked", "interrupted"):
+                self.send("resume")
+                self.assertEqual(self.state["phase"], "reviewing")
+                self.assertEqual(len(self.state["loops"]), 1)
+                self.send("stop", outcome="failed")
+            else:
+                self.reject("resume")
+
+    def test_incomplete_focused_handback_resumes_the_same_fix_cycle(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        (self.root / "app.txt").write_text("corrected\n")
+        self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Correction"}},
+                  checks=CHECKS)
+        self.finding("pending-integration-assessment")
+        self.send("stop", outcome="blocked", reason="Focused specialist report unavailable")
+        self.send("resume")
+        self.assertEqual(self.state["phase"], "reviewing_fixes")
+        self.assertEqual(len(self.state["loops"]), 1)
+        self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
+        self.reject("start_review")
+        self.send("fixes_reviewed", passes=[coordinated_pass(self.state["snapshot"], "flat")])
+        self.decide("F002", validation="invalid", disposition="ignored")
+        self.decide(disposition="fixed")
+        self.send("advance")
+        self.assertEqual(self.state["phase"], "ready_review")
 
     def test_ledger_commands_from_subdirectories(self):
         """Changing the launch directory must not select a different run."""
@@ -532,6 +679,20 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(report["outcome"], "completed")
         self.assertEqual(report["findings"]["F001"]["disposition"], "fixed")
         self.assertEqual(report["usage"], "not_collected")
+
+
+class ReviewInstructionTests(unittest.TestCase):
+    def test_shared_references_are_packaged(self):
+        root = HELPER.parent.parent
+        documents = [*(root / "skills" / "review-code").glob("*.md"),
+                     *(root / "skills" / "review-validate-fix-loop").glob("*.md")]
+        for document in documents:
+            for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
+                if link.startswith(("https://", "http://", "#")):
+                    continue
+                target = (document.parent / link.split("#", 1)[0]).resolve()
+                self.assertIn(root, target.parents, f"{document}: escaping reference {link}")
+                self.assertTrue(target.is_file(), f"{document}: missing reference {link}")
 
 
 if __name__ == "__main__":
