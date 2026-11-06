@@ -1,8 +1,7 @@
 # Docs lookup cache plan
 
-Status: Copilot-first implementation. Claude Code and Codex fetch integration
-remain deferred. This document describes the implemented design and the
-remaining rollout work.
+Scope: implement and validate the shared cache in Claude Code, Codex, and
+Copilot CLI. All three fetch integrations are required for completion.
 
 ## Goal
 
@@ -11,8 +10,8 @@ Stop repeating the same documentation lookup when a recent result already exists
 Requirement: the cache stores a distilled answer (the specific facts the lookup established, plus source and date), never the page or the full fetch result.
 
 Scope: one machine-wide cache for Claude Code, Codex, and Copilot CLI, across
-sessions and projects. Only Copilot fetch hooks are wired up in this phase.
-Bypass state and problem-notification deduplication are per session.
+sessions and projects. Bypass state and problem-notification deduplication
+are separate per harness and session.
 
 ## Measured baseline
 
@@ -107,14 +106,28 @@ Source: `~/.copilot/session-state/*/events.jsonl`, 2026-05-01 to 2026-11-05. Alm
 
 ### 1. Store distilled results outside the main context
 
-`hooks/scripts/docs_cache.py` owns the shared cache and worker. Copilot's
-`postToolUse` adapter reads `toolArgs` and a successful
-`toolResult.textResultForLlm`, then starts a detached Python worker. The hook
-returns without waiting for model inference. Fetched text travels over stdin;
-the cache never writes that text to a file.
+`hooks/scripts/docs_cache.py` owns the shared cache and worker. Each native
+post-tool hook starts the same detached Python worker and returns without
+waiting for model inference. Fetched text travels over stdin; the cache never
+writes that text to a file.
 
-The worker uses the originating harness's CLI and login. Command builders
-exist for Copilot, Claude Code, and Codex, but only Copilot submits jobs.
+- Claude's `WebFetch` hook reads `tool_input.url`, `tool_input.prompt`, and
+  a successful `tool_response.result`. The result is already a question-specific
+  extraction, not the raw page. Response byte counts are not chunk coverage.
+- Copilot's `postToolUse` adapter reads `toolArgs` and a successful
+  `toolResult.textResultForLlm`.
+- Codex's `webrun` hook accepts a single literal HTTP(S) URL in `open`.
+  It extracts line-prefixed page text from `tool_response`'s `input_text`
+  item after verifying the source URL and page header. Citation IDs and source
+  metadata are not passed to the distiller as page text. These excerpts can be
+  truncated, so line counts are never represented as character coverage.
+
+Codex searches, mixed or batched calls, reference IDs, and nonzero line
+continuations stay live. Hosted search does not emit the local tool hooks;
+this integration uses the native local `web.run` path.
+
+The worker uses the originating harness's CLI and login. All three harnesses
+submit jobs through their native post-tool hooks.
 Copilot uses `gpt-6-luna` with low reasoning effort; the other builders specify
 Haiku for Claude and `gpt-6-luna` for Codex. Model choices are fixed in code.
 The distiller prompt aims for 100 words, with a hard storage limit of 150
@@ -135,14 +148,19 @@ return immediately in those runs. The Copilot command disables tools, custom
 instructions, and built-in MCP servers. Older installed plugin copies without
 the guard still need updating. Cache retention does not control the harness's
 own session history.
+Claude uses safe mode with an empty tool list. Codex ignores user configuration
+and disables web, shell, and native subagents in a read-only sandbox. It can
+still expose utility tools; do not describe its distiller as tool-free.
 
-Copilot jobs have no question, so summaries describe the fetched chunk generally.
+Copilot and Codex jobs have no question, so summaries describe the fetched excerpt generally.
 A summary can miss a later question even when the original chunk covered it.
 The bypass is the escape hatch; its rate measures these misses.
 
 Location: `${XDG_CACHE_HOME:-~/.cache}/ioncache-ai-tools/docs-cache/`. The root
 directory is 0700; files are 0600. Each `entries/<sha256>.json` holds a normalized,
 redacted URL and up to three facts with `fact`, `fetched_at`, `harness`, and `length`.
+Claude and Codex facts also carry `reference_only: true`. Claude facts retain
+the extraction `question`, so readers can see what the answer actually covers.
 New entry and log URLs omit userinfo, query strings, and fragments. Existing
 files are not scrubbed; clearing the cache removes old metadata.
 Writes use temporary files and atomic replacement.
@@ -153,6 +171,9 @@ lowercases the host and drops `www.`, fragments, trailing slashes, and
 not key inputs. Query strings and versioned paths remain distinct.
 Coverage is recorded separately as the requested length, reduced if the worker
 truncates the input. Unknown lengths never mean "whole page".
+Reference-only summaries are candidates for URL-level lookups across all three
+harnesses, not claims to cover a particular chunk. The assistant checks whether
+the facts answer its question and repeats the identical call if they do not.
 
 Both reading and writing skip raw requests and volatile URLs: release notes,
 changelogs, `/latest`, what's-new pages, GitHub releases, and
@@ -162,16 +183,21 @@ empty results are not distilled. Copilot requests without an explicit positive
 
 ### 2. Serve hits: PreToolUse on WebFetch
 
-A fresh entry must match the URL/chunk key and cover at least the requested
-length. The adapter runs shared permission hooks first; only an otherwise
-unchanged call reaches the cache. A hit denies the fetch with facts, source,
-fetch dates, and instructions to repeat the identical call for live results.
-At most three facts appear.
+A Copilot chunk must match the URL/chunk key and cover at least the requested
+length. URL-level lookups can also use reference-only summaries. Claude and
+Codex read the shared facts for the URL's initial chunk, including Copilot facts.
+A hit denies the fetch with facts, source, fetch dates, any extraction question,
+and instructions to repeat the identical call for live results. It explicitly
+identifies the results as facts, not a complete page. At most three facts appear.
+
+Copilot and Codex run shared permission hooks first; only an otherwise
+unchanged call reaches the cache. Claude runs its cache hook alongside the
+existing guards. Cache misses and failures never emit an allow decision.
 
 Bypass state hashes the complete fetch arguments, independent of the reusable
 entry key. Changing `max_length` does not consume another request's bypass.
 Repeating a denied call permits one live fetch, then the next call may hit again.
-This state is isolated by session.
+This state is isolated by harness and session.
 
 Cache exceptions and uncertain coverage leave normal fetch permissions unchanged.
 The cache must not turn an operational failure into a documentation gate.
@@ -246,9 +272,10 @@ final-response notice enforcement, acknowledgment after other stop guards,
 and distiller guards. The validation workflow includes the cache self-check.
 
 Run `.github/workflows/validate.yml` steps on Ubuntu 24.04 as a non-root user.
-Live Copilot checks should exercise miss/store, a cross-session hit, and a
-bypass using a scratch `XDG_CACHE_HOME`. Do not install, publish, or bump a
-version until the Copilot-first changes are ready for an authorized release.
+Live checks must exercise miss/store, a cross-session hit, and an identical-call
+bypass in each of Claude Code, Codex, and Copilot using scratch `XDG_CACHE_HOME`
+directories. Each harness must also consume facts produced by another harness.
+Do not install, publish, or bump a version without authorization.
 
 Live acceptance checks must keep the original strict assertions: every stored
 summary has at most 150 words, and a pending diagnostic appears in captured
@@ -256,16 +283,23 @@ stdout with `--silent`. Exercise miss/store, a cross-session hit, and an
 identical-call bypass. Also check a response with no preceding tool call so
 the stop hook, not just post-tool context, must surface the diagnostic.
 
-Deferred work:
+Acceptance includes real native hook payloads, not just direct Python calls.
+Claude must register pre-tool, post-tool, and stop handlers in `hooks/hooks.json`.
+Codex must register all three events in `hooks/codex-hooks.json`. Its installed
+hooks need the normal Codex trust review; isolated verification can supply the
+same vetted definitions inline without changing the user's configuration.
 
-- Wire Claude Code fetch hooks and decide how its lookup question affects keys.
-- Wire Codex fetching to the same cache.
+Possible follow-up work outside the required three-harness integration:
+
 - Decide whether model choices need configuration.
 - Measure real background-job cost, saved context, and bypass frequency.
 - Check how host session retention affects repeated background runs.
 
 ## References
 
+- [Claude hook payloads and decisions](https://code.claude.com/docs/en/hooks)
+- [Claude WebFetch behavior](https://code.claude.com/docs/en/tools-reference#webfetch-tool-behavior)
+- [Codex hook payloads, trust, and tool coverage](https://learn.chatgpt.com/docs/hooks)
 - [Copilot hook payloads and decisions](https://docs.github.com/en/copilot/reference/hooks-reference)
 - [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/cli-command-reference)
 - [Python subprocess handling](https://docs.python.org/3/library/subprocess.html)

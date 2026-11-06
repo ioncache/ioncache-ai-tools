@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 
+import docs_cache
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 
@@ -51,12 +52,14 @@ def pre_tool_use(data):
             }}
         # Codex requires allow with updatedInput, unlike Claude's rewrite-only protocol.
         rewrite['hookSpecificOutput']['permissionDecision'] = 'allow'
-    return rewrite
+        return rewrite
+    return docs_cache.native_hook('codex', 'PreToolUse', data)
 
 
 def run_hook(event, data):
     if not isinstance(data, dict):
         raise ValueError('Codex hook input must be an object')
+    data = {**data, '_ioncache_harness': 'codex'}
     session_id = data.get('session_id')
     if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', session_id):
         raise ValueError('missing or invalid Codex session_id')
@@ -71,6 +74,11 @@ def run_hook(event, data):
         blocked = next((output for output in outputs if output.get('decision') == 'block'), None)
         if blocked:
             return blocked
+        cache_output = docs_cache.native_hook('codex', event, data)
+        if cache_output:
+            if cache_output.get('decision') == 'block':
+                return cache_output
+            outputs.append(cache_output)
         messages = [
             output['hookSpecificOutput']['additionalContext'] for output in outputs
             if output.get('hookSpecificOutput', {}).get('additionalContext')

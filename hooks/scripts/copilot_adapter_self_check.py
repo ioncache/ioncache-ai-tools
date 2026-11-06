@@ -183,6 +183,50 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertTrue(marker.exists())
         self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
 
+    def test_docs_cache_notice_retries_survive_eviction_during_read(self):
+        with mock.patch.dict(os.environ, self.env):
+            docs_cache.set_status('Not logged in')
+            data = {**self.payload, 'last_assistant_message': 'Done.'}
+            docs_cache.copilot_stop(data)
+            notice = docs_cache.pending_notice(self.payload['sessionId'])
+            retries = next(notice['marker'].parent.glob('*.retries'))
+            os.utime(retries, (0, 0))
+            read_text = Path.read_text
+
+            def evict_before_read(path, *args, **kwargs):
+                if path == retries:
+                    docs_cache.evict()
+                return read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, 'read_text', evict_before_read), \
+                    mock.patch.object(sys, 'stderr'):
+                output = copilot_adapter.docs_cache_hook(docs_cache.copilot_stop, data)
+            self.assertEqual((output or {}).get('decision'), 'block')
+            self.assertIn(notice['text'], output['reason'])
+            self.assertEqual(retries.read_text(), '1')
+            self.assertFalse(notice['marker'].exists())
+
+    def test_docs_cache_retry_read_permission_errors_remain_fail_open(self):
+        with mock.patch.dict(os.environ, self.env):
+            docs_cache.set_status('Not logged in')
+            data = {**self.payload, 'last_assistant_message': 'Done.'}
+            docs_cache.copilot_stop(data)
+            notice = docs_cache.pending_notice(self.payload['sessionId'])
+            retries = next(notice['marker'].parent.glob('*.retries'))
+            read_text = Path.read_text
+
+            def deny_counter_read(path, *args, **kwargs):
+                if path == retries:
+                    raise PermissionError('retry counter is unreadable')
+                return read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, 'read_text', deny_counter_read), \
+                    mock.patch.object(sys, 'stderr'):
+                output = copilot_adapter.docs_cache_hook(docs_cache.copilot_stop, data)
+            self.assertIsNone(output)
+            self.assertEqual(retries.read_text(), '1')
+            self.assertFalse(notice['marker'].exists())
+
     def test_docs_cache_acknowledgment_waits_for_other_stop_guards(self):
         status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
         status.parent.mkdir(parents=True)
@@ -408,7 +452,7 @@ class CopilotAdapterTests(unittest.TestCase):
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1])
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 1, 0.5])
 
 
 if __name__ == '__main__':

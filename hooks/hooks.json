@@ -1,5 +1,5 @@
 {
-  "description": "Question-answering and punctuation guards",
+  "description": "Question-answering, documentation caching, and punctuation guards",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -57,6 +57,23 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" PreToolUse"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude PostToolUse",
+            "timeout": 5
           }
         ]
       }
@@ -68,6 +85,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block_emdash_turn.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude Stop",
+            "timeout": 5
           }
         ]
       }

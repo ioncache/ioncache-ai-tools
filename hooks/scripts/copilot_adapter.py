@@ -31,6 +31,7 @@ def shared_input(data):
     if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', session_id):
         raise ValueError('missing or invalid Copilot sessionId')
     return {
+        '_ioncache_harness': 'copilot',
         'session_id': f'copilot-{session_id}',
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),

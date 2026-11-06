@@ -72,7 +72,9 @@ Patches with ambiguous file-header whitespace are rejected.
 
 ### Documentation lookup cache
 
-Copilot CLI caches short facts distilled from successful `web_fetch` results.
+Claude Code, Codex, and Copilot CLI share short facts distilled from successful
+documentation fetches. Claude uses `WebFetch`, Codex uses single-URL
+`web.run` opens, and Copilot uses `web_fetch`.
 A cache hit supplies the source URL and fetch date instead of downloading the
 page again. Repeating the identical call bypasses that hit once and fetches live.
 The documentation reminder permits reusing verified facts in the conversation
@@ -80,7 +82,9 @@ or a fresh cache hit when they cover the needed detail and version.
 
 The cache lives at
 `${XDG_CACHE_HOME:-~/.cache}/ioncache-ai-tools/docs-cache/`, shared across projects
-and sessions. Claude Code and Codex fetch integration is not wired up yet.
+and sessions across all three harnesses. A fact produced by any harness can be
+reused by the others. Bypass and notification state remain separate per harness
+and session.
 The cache stores facts, not fetched pages. Facts expire after seven days, with
 up to three facts per URL/chunk and a 20 MB entry budget.
 Each summary is limited to 150 whitespace-separated words. Overlong output is
@@ -89,15 +93,29 @@ URL metadata in new entries and log records omits userinfo, query strings, and
 fragments. Cache keys still hash the full normalized URL. Existing files are
 not scrubbed; clear the cache to remove previously stored URL metadata.
 
-Only requests with an explicit positive `max_length` participate. A cached
-chunk must start at the same offset and cover at least the requested length.
+Copilot requests need an explicit positive `max_length`. Cached Copilot chunks
+must start at the same offset and cover at least the requested length.
+Claude answers and Codex excerpts are stored as reference-only summaries, not
+as complete pages. URL-level requests can reuse those facts, with the original
+Claude extraction question shown when present. The assistant must fetch live
+if the facts do not answer the required detail.
+
+Codex caches a single literal HTTP(S) URL opened from the beginning through its
+local `web.run` tool (`webrun` in hook payloads). Searches, batched or mixed
+operations, session-local reference IDs, and line continuations stay live.
+Its hosted search path does not emit local tool hooks and is not intercepted.
+Claude redirects and Codex results without an identifiable matching source
+also stay uncached.
 Raw HTML requests, failed or empty results, and volatile pages such as release
 notes, changelogs, and `/latest` always fetch live. Cache faults leave normal
 fetch permissions unchanged.
 
-Distillation runs outside the main context through the local `copilot` CLI,
-using its login and the `gpt-6-luna` model with low reasoning effort. These jobs
-consume Copilot usage separately. Their model choice is currently fixed in code.
+Distillation runs outside the main context through the originating harness's
+CLI and login: Haiku for Claude, and `gpt-6-luna` with low reasoning effort for
+Codex and Copilot. These jobs consume that harness's usage separately.
+Their model choices are currently fixed in code.
+Claude and Copilot distillers disable tools. Codex disables shell, web, and
+native subagent tools and runs read-only, but can still expose utility tools.
 The plugin suppresses its own adapters in distiller runs; update installed
 copies too when testing with a live checkout.
 
