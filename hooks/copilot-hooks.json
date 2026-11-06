@@ -28,6 +28,13 @@
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" sessionEnd",
         "timeoutSec": 5
       }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" postToolUse",
+        "timeoutSec": 10
+      }
     ]
   }
 }

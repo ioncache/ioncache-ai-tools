@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import subprocess
 import sys
 
+from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 
 
@@ -83,6 +85,8 @@ def run_hook(event, data):
 
 
 def main():
+    if os.environ.get(DISTILLER_ENV):
+        return
     try:
         output = run_hook(sys.argv[1], json.load(sys.stdin))
         if output:

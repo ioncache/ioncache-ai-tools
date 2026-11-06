@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 """Translate Copilot CLI events to the existing hooks and their results back."""
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import time
 
+import docs_cache
+from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 
 TRANSCRIPT_WAIT_SECONDS = 2
+
+
+def docs_cache_hook(handler, data):
+    """Swallow cache faults here: this adapter fails closed, the cache must not."""
+    try:
+        return handler(data)
+    except Exception as err:
+        print(f'docs-cache: {err}', file=sys.stderr)
+        if handler is docs_cache.copilot_post:
+            return {'userNotice': f'ioncache-ai-tools docs cache: {str(err)[:500]}'}
+        return None
 
 
 def shared_input(data):
@@ -89,7 +103,7 @@ def pre_tool_use(data):
             if 'updatedInput' in decision:
                 rewrite = decision['updatedInput']
     if rewrite is None:
-        return None
+        return docs_cache_hook(docs_cache.copilot_pre, data)
     if data['toolName'] == 'apply_patch':
         return {
             'permissionDecision': 'deny',
@@ -145,6 +159,7 @@ def run_hook(event, data):
     if event == 'preToolUse':
         return pre_tool_use(data)
     if event == 'postToolUse':
+        notice = docs_cache_hook(docs_cache.copilot_post, data)
         messages = []
         for name, args in normalized_tools(data):
             for output in run_shared_hooks('PostToolUse', {
@@ -154,15 +169,23 @@ def run_hook(event, data):
                 context = output.get('hookSpecificOutput', {}).get('additionalContext')
                 if context:
                     messages.append(context)
+        if notice:
+            messages.append(notice['userNotice'])
         return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
+        response = final_response(data)
         outputs = run_shared_hooks('Stop', {
-            **hook_input, 'last_assistant_message': final_response(data),
+            **hook_input, 'last_assistant_message': response,
         })
         for output in outputs:
             if output.get('systemMessage'):
                 print(output['systemMessage'], file=sys.stderr)
-        return next((output for output in outputs if output.get('decision') == 'block'), None)
+        decision = next((output for output in outputs if output.get('decision') == 'block'), None)
+        if decision:
+            return decision
+        return docs_cache_hook(docs_cache.copilot_stop, {
+            'sessionId': data['sessionId'], 'last_assistant_message': response,
+        })
     if event == 'sessionEnd':
         Path(f'/tmp/.ioncache-pending-question-{hook_input["session_id"]}').unlink(missing_ok=True)
         run_shared_hooks('SessionEnd', hook_input)
@@ -178,6 +201,8 @@ def run_hook(event, data):
 
 
 def main():
+    if os.environ.get(DISTILLER_ENV):
+        return
     try:
         output = run_hook(sys.argv[1], json.load(sys.stdin))
         if output:

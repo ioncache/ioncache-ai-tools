@@ -68,6 +68,11 @@ class CodexAdapterTests(unittest.TestCase):
             futures = [executor.submit(self.run_entry, entry, payload) for entry in self.entries(event)]
             return [future.result() for future in futures]
 
+    def test_adapter_stays_out_of_docs_distiller_runs(self):
+        self.assertIn('Never state or rely on specifics', self.prompt('Implement it'))
+        self.env['IONCACHE_DOCS_DISTILLER'] = '1'
+        self.assertEqual(self.prompt('Implement it'), '')
+
     def prompt(self, text):
         outputs = self.invoke('UserPromptSubmit', prompt=text)
         return '\n\n'.join(
