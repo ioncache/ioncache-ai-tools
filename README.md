@@ -517,6 +517,42 @@ Host-specific setup:
 [Codex](https://learn.chatgpt.com/docs/plugins),
 [Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference).
 
+### Version changes and changelog
+
+Every version change must update [CHANGELOG.md](CHANGELOG.md) with New,
+Updated and Fixed sections. In a feature worktree, commit the intended changes
+first, then run this command with the desired version:
+
+```sh
+npm run release -- 1.8.0
+```
+
+Run `npm ci` first if contributor dependencies are not installed. The helper
+uses [conventional-changelog](https://conventional-changelog.js.org/) with its
+Conventional Commits preset to parse commits and render Markdown. It updates
+all three plugin manifests and prepends release notes from the Git log since
+the commit that introduced the current manifest version. Later metadata-only
+manifest edits do not reset that boundary. No release tags are required.
+The helper requires a clean worktree, full Git history and an increasing
+`MAJOR.MINOR.PATCH` version.
+
+`feat` and `feature` commits become New items, `fix` commits become Fixed
+items, and other commits become Updated items, including legacy subjects
+without a Conventional Commits prefix. Breaking-change markers and footers
+produce a separate BREAKING CHANGES section. Merge commits are excluded to
+avoid duplicating their constituent commits. Reverted commits and their reverts
+remain visible. Each item links to its commit; empty sections say `None.`.
+Review the generated notes for wording and classification, then commit the
+manifests and changelog together. The helper does not commit, tag or push,
+and does not include uncommitted changes.
+
+CI checks that the manifests agree and that the latest changelog entry matches
+their version with all three populated sections. Run the same check locally:
+
+```sh
+npm run release:check
+```
+
 ## Limitations
 
 These are guardrails, not a security boundary. Shell indirection and unsupported
