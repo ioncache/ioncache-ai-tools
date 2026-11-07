@@ -192,6 +192,41 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertTrue(observation['success'])
         self.assertTrue(observation['unchanged'])
 
+    def test_bash_exit_code_text_does_not_override_native_status(self):
+        self.prompt('Inspect the command output')
+        fields = {'toolName': 'bash', 'toolArgs': {'command': 'printf "exit code: 1"'}}
+        for event, result_type, expected in (
+            ('postToolUse', 'success', True), ('postToolUseFailure', 'failure', False),
+        ):
+            with self.subTest(event=event):
+                self.invoke('preToolUse', **fields)
+                self.invoke(event, **fields, toolResult={'resultType': result_type, 'textResultForLlm': 'exit code: 1'})
+                with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
+                    state = store.get(turn_guard.CATEGORY, 'state')
+                self.assertIs(state['observations'][-1]['success'], expected)
+
+    def test_recent_proposal_survives_transcript_capture_limits(self):
+        self.prompt('Propose one change and wait')
+        proposal = 'Change reader.py only; leave writer.py untouched.'
+        events = self.transcript_events('Waiting for approval.')
+        events[2:2] = [
+            {'type': 'assistant.message', 'data': {'content': 'Earlier research. ' + 'x' * turn_guard.MAX_RESPONSE_CHARS}},
+            {'type': 'assistant.message', 'data': {'content': proposal}},
+        ]
+        path = self.write_events(events)
+        response = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
+        self.assertTrue(response['_assistant_messages'][0].startswith('Earlier research.'))
+        self.assertEqual(response['_response_coverage'], 'partial')
+        with mock.patch.object(turn_guard.turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+            turn_guard.run_hook('Stop', {**copilot_adapter.shared_input(self.payload), **response})
+        self.prompt('Yes, proceed')
+        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
+            history = store.get(turn_guard.CATEGORY, 'state')['history'][-1]
+        self.assertIn(proposal, json.dumps(history))
+        retained = next(item for item in history['earlier_messages'] if item['text'] == proposal)
+        self.assertFalse(retained['truncated'])
+        self.assertTrue(history['earlier_messages_omitted'])
+
     def test_stop_continuation_retains_earlier_visible_prose(self):
         self.prompt('Why does this happen?')
         turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'owned feedback')

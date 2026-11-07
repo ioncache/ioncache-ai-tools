@@ -16,6 +16,7 @@ import uuid
 
 import codex_adapter
 import docs_cache
+import turn_guard
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -149,6 +150,21 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertEqual(self.invoke('Stop', last_assistant_message='Done.'), [{}])
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
+
+    def test_native_shell_status_is_not_inferred_from_output(self):
+        self.prompt('Inspect the command output')
+        fields = {'tool_name': 'Bash', 'tool_input': {'command': 'printf fixture'}}
+        for result, expected in (
+            ('exit code: 1', None), ('Process exited with code 0', None),
+            ({'exit_code': 1, 'stdout': 'exit code: 0'}, False),
+            ({'exit_code': 0, 'stdout': 'exit code: 1'}, True),
+        ):
+            with self.subTest(result=result):
+                self.invoke('PreToolUse', **fields)
+                self.invoke('PostToolUse', **fields, tool_response=result)
+                with turn_guard.store_for(self.payload) as store:
+                    state = store.get(turn_guard.CATEGORY, 'state')
+                self.assertIs(state['observations'][-1]['success'], expected)
 
     def test_null_stop_response_does_not_require_a_cache_notice_in_prose(self):
         with mock.patch.dict(os.environ, self.env):

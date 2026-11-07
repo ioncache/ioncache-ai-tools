@@ -98,9 +98,11 @@ Session end discards live observations and review decisions but retains request
 context and applicable documentation for resume. A clear resets the active
 request. Older request history and large observations are bounded; omitted
 content is not treated as verified evidence.
-Assistant history reserves space for the final response before retaining earlier
-prose. It records truncation separately for each, so omitted earlier prose does
-not erase a complete final proposal needed for later approval.
+Assistant history reserves space for the final response, then retains recent
+messages within the remaining budget. A separate bounded recent-message buffer
+preserves proposals after long research without replacing the earlier-prose audit
+buffer. Each retained message records its own completeness; omitting older prose
+does not make a complete recent proposal unusable for later approval.
 
 Questions retain the conservative classifier: a question mixed with an
 instruction still blocks recognized mutations. The work-product exception
@@ -129,7 +131,7 @@ post-tool event, once, without waiting for another prompt. If no tool completes,
 context recovery waits for the next prompt; the stored gates still apply.
 
 Graph gating recognizes discovery tools and source reads. A successful query
-unlocks source inspection for that turn and graph snapshot. A failed query
+unlocks source inspection for that turn and graph snapshot. A failed or unverified query
 permits source fallback. An unavailable graph or executable produces one explanatory denial,
 then permits ordinary discovery on retry. Echoing a command, reading help, or
 querying a different graph does not satisfy the gate. This is a common-action
@@ -164,6 +166,10 @@ tool/input key. File snapshots taken before and after a read detect changes
 during the read as well as later changes. Unmatched or ambiguous reads cannot
 certify current state. Explicit child startup or resume binds the child to the
 current parent request; an old worker cannot silently inherit new authority.
+Shell outcomes use host status metadata, not exit-code phrases in command output.
+Codex 0.163.0's unified-exec hook supplies output without an exit status, so those
+observations record success as unknown and cannot establish successful execution:
+https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/tools/context.rs#L438-L446.
 Identical semantic decisions are cached until the candidate, request or
 evidence changes. Operational failures are not cached as semantic denials.
 

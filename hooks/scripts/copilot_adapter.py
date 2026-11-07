@@ -12,7 +12,7 @@ import docs_cache
 from classify_question import set_marker
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
-from turn_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, store_for
+from turn_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, retain_recent_messages, store_for
 
 TRANSCRIPT_WAIT_SECONDS = 2
 
@@ -142,7 +142,7 @@ def response_context(data):
     with store_for(shared_input(data)) as store:
         state = store.get(CATEGORY, 'state') or {}
     response = {
-        'text': None, 'messages': [], 'complete': False,
+        'text': None, 'messages': [], 'complete': False, 'recent_messages': [], 'recent_messages_omitted': False,
         'continuations': state.get('continuations', []), 'stop': data,
     }
     with Path(data['transcriptPath']).open(encoding='utf-8') as transcript:
@@ -167,7 +167,7 @@ def consume_response_event(response, event):
     if kind == 'user.message':
         response['text'] = None
         if payload.get('content') not in response['continuations']:
-            response.update(messages=[], complete=True)
+            response.update(messages=[], complete=True, recent_messages=[], recent_messages_omitted=False)
     elif kind == 'assistant.turn_start':
         response['text'] = None
     elif kind == 'assistant.message':
@@ -181,6 +181,8 @@ def consume_response_event(response, event):
             return {
                 'last_assistant_message': response['text'],
                 '_assistant_messages': response['messages'],
+                '_recent_assistant_messages': response['recent_messages'],
+                '_recent_messages_omitted': response['recent_messages_omitted'],
                 '_response_coverage': 'turn' if response['complete'] else 'partial',
             }
     return None
@@ -191,6 +193,9 @@ def append_response_message(response, payload):
     response['text'] = None if payload.get('toolRequests') else content
     if not isinstance(content, str) or not content:
         return
+    response['recent_messages'].append({'text': content, 'truncated': False})
+    omitted = retain_recent_messages(response['recent_messages'])
+    response['recent_messages_omitted'] |= omitted
     remaining = max(0, MAX_RESPONSE_CHARS - sum(map(len, response['messages'])))
     response['messages'].append(content[:remaining])
     response['complete'] &= len(content) <= remaining

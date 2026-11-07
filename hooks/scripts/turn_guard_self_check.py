@@ -211,16 +211,20 @@ class TurnGuardTests(unittest.TestCase):
         self.assertEqual(history['response'], proposal)
         self.assertFalse(history['truncated'])
         self.assertTrue(history['earlier_messages_truncated'])
-        self.assertLessEqual(len(history['response']) + len(history['earlier_messages']), guard.MAX_RESULT_CHARS)
+        self.assertLessEqual(len(history['response']) + sum(len(item['text']) for item in history['earlier_messages']),
+                             guard.MAX_RESULT_CHARS)
 
     def test_oversized_final_proposal_remains_explicitly_truncated(self):
         self.prompt('Propose one change and wait')
+        self.hook('MessageDisplay', message_id='earlier', index=0, final=True, delta='An older proposal.')
         with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
             self.hook('Stop', last_assistant_message='x' * (guard.MAX_RESULT_CHARS + 1))
         self.prompt('Yes, proceed')
         history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
         self.assertTrue(history['truncated'])
         self.assertEqual(len(history['response']), guard.MAX_RESULT_CHARS)
+        self.assertTrue(history['earlier_messages'][0]['truncated'])
+        self.assertEqual(history['earlier_messages'][0]['text'], '')
 
     def test_incomplete_earlier_display_does_not_mark_the_final_proposal_truncated(self):
         self.prompt('Propose one change and wait')
@@ -233,6 +237,50 @@ class TurnGuardTests(unittest.TestCase):
         self.assertEqual(history['response'], proposal)
         self.assertFalse(history['truncated'])
         self.assertTrue(history['earlier_messages_truncated'])
+
+    def test_recent_proposal_survives_history_and_display_limits(self):
+        for count, size in ((1, 9000), (1, guard.MAX_RESPONSE_CHARS + 1), (70, 20)):
+            with self.subTest(count=count, size=size):
+                self.prompt('Propose one change and wait')
+                research = 'Earlier research. ' + 'x' * size
+                for index in range(count):
+                    self.hook('MessageDisplay', message_id=f'research-{index}', index=0, final=True, delta=research)
+                proposal = 'Change reader.py only; leave writer.py untouched.'
+                self.hook('MessageDisplay', message_id='proposal', index=0, final=False, delta=proposal[:20])
+                self.hook('MessageDisplay', message_id='proposal', index=1, final=True, delta=proposal[20:])
+                self.hook('MessageDisplay', message_id='final', index=0, final=True, delta='Waiting for approval.')
+                with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}) as reviewer:
+                    self.hook('Stop', last_assistant_message='Waiting for approval.')
+                self.assertTrue(reviewer.call_args.args[1]['candidate']['earlier_messages'].startswith('Earlier research.'))
+                self.prompt('Yes, proceed')
+                history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
+                self.assertIn(proposal, json.dumps(history))
+                retained = next(item for item in history['earlier_messages'] if item['text'] == proposal)
+                self.assertFalse(retained['truncated'])
+                self.assertTrue(history['earlier_messages_omitted'])
+                self.assertLessEqual(len(history['response']) + sum(len(item['text']) for item in history['earlier_messages']),
+                                     guard.MAX_RESULT_CHARS)
+
+    def test_partial_recent_proposal_stays_incomplete(self):
+        for index, text in ((1, 'Missing the proposal prefix.'), (0, 'New proposal. ' * guard.MAX_RESULT_CHARS)):
+            with self.subTest(index=index):
+                self.prompt('Propose one change and wait')
+                self.hook('MessageDisplay', message_id='older', index=0, final=True, delta='An older proposal.')
+                self.hook('MessageDisplay', message_id='proposal', index=index, final=True, delta=text)
+                with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+                    self.hook('Stop', last_assistant_message='Waiting for approval.')
+                self.prompt('Yes, proceed')
+                history = guard.review_request(self.data, self.state(), {})['assistant_context'][-1]
+                self.assertTrue(history['earlier_messages'][-1]['truncated'])
+
+    def test_recent_proposals_do_not_leak_into_new_turns_or_children(self):
+        self.prompt('Propose a change')
+        self.hook('MessageDisplay', message_id='proposal', index=0, final=True, delta='An old proposal.')
+        self.hook('SubagentStart', agent_id='child')
+        with guard.store_for({**self.data, 'agent_id': 'child'}) as store:
+            self.assertEqual(store.get(guard.CATEGORY, 'state')['recent_messages'], [])
+        self.prompt('Explain a separate topic')
+        self.assertEqual(self.state()['recent_messages'], [])
 
     def test_native_failure_preserves_diagnostics(self):
         self.prompt()
@@ -414,6 +462,17 @@ class TurnGuardTests(unittest.TestCase):
             self.assertIn('Unrequested issue', str(self.hook('PreToolUse', **fields)))
         reviewer.assert_called_once()
 
+    def test_read_only_mcp_suffix_does_not_block_or_invalidate_observations(self):
+        self.prompt('What is the latest update?')
+        self.hook('PostToolUse', tool_name='Read', tool_input={'file_path': 'source.py'}, tool_response='source')
+        fields = {'tool_name': 'mcp__srv__get-latest-update', 'tool_input': {}}
+        with mock.patch.object(turn_review, 'review') as reviewer:
+            self.assertIsNone(self.hook('PreToolUse', **fields))
+            self.hook('PostToolUse', **fields, tool_response='Latest update')
+        reviewer.assert_not_called()
+        self.assertEqual(self.state()['mutation'], 0)
+        self.assertEqual([item['tool'] for item in self.state()['observations']], ['Read', fields['tool_name']])
+
     def test_question_contract_is_complete_without_skill_invocation(self):
         self.hook('SessionStart')
         text = self.prompt('Why does this happen?')['hookSpecificOutput']['additionalContext']
@@ -564,7 +623,27 @@ class TurnGuardTests(unittest.TestCase):
                 self.hook('PostToolUseFailure', **fields)
                 self.assertFalse(self.state()[key][-1]['success'])
         self.hook('PostToolUse', tool_name='Bash', tool_input={'command': 'false'},
-                  tool_response='Process exited with code 1')
+                  tool_response={'exit_code': 1, 'stdout': 'Process exited with code 0'})
+        self.assertFalse(self.state()['observations'][-1]['success'])
+
+    def test_shell_status_uses_metadata_not_stdout(self):
+        self.prompt()
+        for harness, result, expected in (
+            ('claude', {'stdout': 'Example: exit code: 1', 'stderr': '', 'interrupted': False}, True),
+            ('copilot', {'resultType': 'success', 'textResultForLlm': 'Example: exit code: 1'}, True),
+            ('copilot', {'resultType': 'failure', 'textResultForLlm': 'exit code: 0'}, False),
+            ('copilot', {'resultType': 'success', 'exit_code': None, 'textResultForLlm': 'Still running'}, None),
+            ('codex', {'exit_code': 0, 'stdout': 'exit code: 1'}, True),
+            ('codex', {'exit_code': 1, 'stdout': 'exit code: 0'}, False),
+            ('codex', 'exit code: 1', None),
+            ('codex', 'Process exited with code 0', None),
+        ):
+            with self.subTest(harness=harness, result=result):
+                self.hook('PostToolUse', _ioncache_harness=harness, tool_name='Bash',
+                          tool_input={'command': 'fixture'}, tool_response=result)
+                self.assertIs(self.state()['observations'][-1]['success'], expected)
+        self.hook('PostToolUseFailure', tool_name='Bash', tool_input={'command': 'fixture'},
+                  tool_response={'stdout': 'exit code: 0'})
         self.assertFalse(self.state()['observations'][-1]['success'])
 
     def test_new_user_turn_clears_live_evidence_but_retains_applicable_docs(self):

@@ -159,7 +159,7 @@ def begin_turn(data):
             'bootstrapped': True, 'continuations': [], 'stop_attempts': 0, 'stop_checks': 0,
             'reviews': {}, 'graph': {},
             'pending_tools': {}, 'history': history, 'messages': [],
-            'messages_truncated': False,
+            'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
             'native_prompt': data.get('prompt_id') or data.get('turn_id'),
         }
         store.put(CATEGORY, ('state', state))
@@ -184,6 +184,7 @@ def prior_history(previous):
             'request': previous['prompt'], 'response': response, 'truncated': truncated,
             'earlier_messages': previous.get('last_earlier_response', ''),
             'earlier_messages_truncated': previous.get('earlier_response_truncated', False),
+            'earlier_messages_omitted': previous.get('earlier_response_omitted', False),
         })
     incomplete = False
     while history and len(json.dumps(history)) > MAX_HISTORY_CHARS:
@@ -252,8 +253,8 @@ def child_state(parent):
         'continuations': [], 'stop_attempts': 0, 'stop_checks': 0, 'bootstrapped': False,
         'parent_turn': parent['id'],
         'pending_tools': {}, 'last_response': None,
-        'last_earlier_response': '', 'earlier_response_truncated': False,
-        'messages': [], 'messages_truncated': False,
+        'last_earlier_response': [], 'earlier_response_truncated': False, 'earlier_response_omitted': False,
+        'messages': [], 'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
     }
 
 
@@ -298,14 +299,11 @@ def result_status(data):
             return False
         for key in ('exit_code', 'exitCode'):
             if key in result:
-                return result[key] == 0
+                return result[key] == 0 if type(result[key]) is int else None
         if data.get('tool_name') == 'WebFetch' and 'code' in result:
             return type(result['code']) is int and 200 <= result['code'] < 300
-        result = result.get('textResultForLlm', result.get('stdout', ''))
-    if data.get('tool_name') == 'Bash' and isinstance(result, str):
-        exit_code = re.search(r'(?:Process exited with code|exit code[: ]+)\s*(-?\d+)', result, re.I)
-        if exit_code:
-            return exit_code[1] == '0'
+    if data.get('tool_name') == 'Bash' and data.get('_ioncache_harness') == 'codex':
+        return None
     return True
 
 
@@ -409,7 +407,7 @@ def record_tool(data):
         if graph_query(data) and state.get('pending_graph') == graph_identity(data):
             state['graph'] = {
                 'identity': graph_identity(data),
-                'fallback': None if item['success'] else 'query failed; use source discovery',
+                'fallback': None if item['success'] else 'query success unverified; use source discovery',
             }
         store.put(CATEGORY, ('state', state))
     if not state.get('bootstrapped'):
@@ -537,6 +535,31 @@ def remember_continuation(data, reason):
             store.put(CATEGORY, ('state', state))
 
 
+def retain_recent_messages(messages, limit=MAX_RESULT_CHARS):
+    omitted = False
+    while len(messages) > 64 or (len(messages) > 1 and sum(len(item['text']) for item in messages) > limit):
+        messages.pop(0)
+        omitted = True
+    if messages and len(messages[0]['text']) > limit:
+        messages[0]['text'] = messages[0]['text'][:limit]
+        messages[0]['truncated'] = True
+    return omitted
+
+
+def record_recent_display(state, data):
+    messages = state.setdefault('recent_messages', [])
+    message = next((item for item in messages if item['id'] == data['message_id']), None)
+    if message is None:
+        message = {'id': data['message_id'], 'text': '', 'next_index': 0, 'final': False, 'truncated': False}
+        messages.append(message)
+    message['truncated'] |= data['index'] != message['next_index']
+    if data['index'] >= message['next_index']:
+        message['text'] += data['delta']
+        message.update(next_index=data['index'] + 1, final=data['final'])
+    omitted = retain_recent_messages(messages)
+    state['recent_messages_omitted'] = state.get('recent_messages_omitted', False) or omitted
+
+
 def record_display(data):
     if (not isinstance(data.get('message_id'), str) or type(data.get('index')) is not int
             or not isinstance(data.get('delta'), str) or type(data.get('final')) is not bool):
@@ -547,6 +570,7 @@ def record_display(data):
             return None
         if data.get('prompt_id') and state.get('native_prompt') != data['prompt_id']:
             return None
+        record_recent_display(state, data)
         messages = state.setdefault('messages', [])
         message = next((item for item in messages if item['id'] == data['message_id']), None)
         if message is None:
@@ -593,9 +617,19 @@ def remember_response(data, state, response):
     state['last_response'] = response[:MAX_RESULT_CHARS]
     state['response_truncated'] = len(response) > MAX_RESULT_CHARS
     remaining = MAX_RESULT_CHARS - len(state['last_response'])
-    state['last_earlier_response'] = candidate['earlier_messages'][:remaining]
-    state['earlier_response_truncated'] = (
-        len(candidate['earlier_messages']) > remaining or candidate['coverage'] != 'observed-turn'
+    recent = data.get('_recent_assistant_messages', state.get('recent_messages'))
+    if recent is None:
+        recent = [{'text': candidate['earlier_messages'], 'truncated': candidate['coverage'] != 'observed-turn'}]
+    messages = [{'text': item['text'], 'truncated': item.get('truncated', False) or not item.get('final', True)}
+                for item in recent]
+    if messages and messages[-1]['text'].rstrip() == response.rstrip():
+        messages.pop()
+    omitted = retain_recent_messages(messages, remaining)
+    state['last_earlier_response'] = messages
+    state['earlier_response_truncated'] = any(item['truncated'] for item in messages)
+    state['earlier_response_omitted'] = (
+        omitted or data.get('_recent_messages_omitted', state.get('recent_messages_omitted', False))
+        or candidate['coverage'] != 'observed-turn'
     )
 
 

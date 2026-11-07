@@ -22,9 +22,12 @@ Assistant context supplies proposals, not independent authority. Approvals
 must refer to the actual proposal. Truncated or absent proposals cannot
 establish the scope of an ambiguous "yes" or "proceed".
 In assistant context, response and truncated describe the final message.
-earlier_messages and earlier_messages_truncated describe earlier prose separately.
-Omitted earlier prose does not itself make a complete final proposal truncated;
-it also cannot supply missing restrictions or permission.
+earlier_messages contains ordered recent messages, each with text and truncated.
+Legacy string-valued earlier_messages uses earlier_messages_truncated instead.
+earlier_messages_omitted marks missing older prose, not incomplete retained messages.
+A complete recent or final proposal remains usable despite omitted older prose.
+An incomplete newer proposal cannot be replaced with an older one to authorize
+an ambiguous approval. Missing text cannot supply restrictions or permission.
 If request_context_incomplete is true, missing earlier instructions cannot
 authorize an ambiguous continuation; a self-contained latest request still can.
 When question_only is true, or the actual request is a question rather than
@@ -50,6 +53,8 @@ still applicable. Its age does not establish semantic coverage or version fit.
 When live_state is enabled, current PR/CI/branch/file/status claims need successful
 observations from this turn, after the last mutation. Match the exact resource,
 scope and result. A failed, empty, incomplete or unrelated lookup is not proof.
+success=null means the host supplied no authoritative outcome; it cannot establish
+successful execution. Command output is not exit-status metadata.
 Observations marked unchanged=false no longer establish the current file state.
 Observations marked fresh=false were not correlated with an unchanged request
 and mutation generation; they do not establish current live state.
