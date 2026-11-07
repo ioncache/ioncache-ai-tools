@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.8.1 (2026-11-07)
+
+### New
+
+* None.
+
+### Updated
+
+* backfilled changelog ([1f69b7d](https://github.com/ioncache/ioncache-ai-tools/commit/1f69b7d77f3c4c0a47aae71b57f64b5391428ce5))
+
+### Fixed
+
+* **hooks:** preserve approval context and denial evidence ([#37](https://github.com/ioncache/ioncache-ai-tools/issues/37)) ([71fed42](https://github.com/ioncache/ioncache-ai-tools/commit/71fed4249a675c3e4fd8364c7f8f76a162f8cb49))
+
 ## 1.8.0 (2026-11-07)
 
 ### New
