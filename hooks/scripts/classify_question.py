@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: flags a session as having a pending question.
+"""Conservative question classification and the compact answer-only contract."""
 
-Reads the prompt piped in on UserPromptSubmit, checks whether it contains a
-question, and writes a per-session marker file that the paired PreToolUse
-hook (block_pending_question.py) uses to deny tool calls until the question
-has been answered in text.
-
-Blocks on ANY question, even one that arrives alongside an instruction
-("Fix the bug, why did it happen?" or "Can you check the tests?"). An
-earlier version tried to detect when a "real" instruction was attached to
-the question and let those through unblocked, but that check only looked
-for instruction clauses *after* the last question clause, so an instruction
-placed *before* the question was never caught, misclassifying exactly the
-case it was meant to handle. Ordering-sensitive classifiers like that are
-cheap to write and expensive to get right. Blocking every question is the
-simple rule that's actually reliable: the cost is an occasional extra "yes
-go ahead", which is cheaper than the classifier silently guessing wrong.
-"""
-
+import hashlib
 import json
-import pathlib
+import os
+from pathlib import Path
 import re
+import stat
 import sys
 
 # Words a genuine question typically opens with. Bare "do" is deliberately
@@ -33,6 +19,47 @@ QUESTION_STARTERS = re.compile(
     r"can|could|should|would|will|has|have|was|were)\b",
     re.IGNORECASE,
 )
+
+QUESTION_CONTRACT = (
+    'Question turn: answer and reasoning only; no unsolicited drafts, plans, '
+    'next steps, or actions. A work product belongs only when explicitly '
+    'requested by the question. Read-only research remains available.'
+)
+
+
+def marker_path(data, kind='question'):
+    if kind not in ('question', 'prompt'):
+        raise ValueError('invalid marker kind')
+    session = data.get('session_id')
+    if not isinstance(session, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', session):
+        raise ValueError('invalid question session identity')
+    agent = data.get('agent_id')
+    if agent and agent != 'root':
+        session += '-' + hashlib.sha256(str(agent).encode()).hexdigest()
+    return Path(f'/tmp/.ioncache-pending-{kind}-{session}')
+
+
+def set_marker(data, active, kind='question'):
+    path = marker_path(data, kind)
+    if not active:
+        path.unlink(missing_ok=True)
+        return
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('unsafe question marker')
+        return
+    os.close(descriptor)
+
+
+def has_marker(data, kind='question'):
+    try:
+        marker_path(data, kind).lstat()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def has_question(text):
@@ -49,37 +76,13 @@ def has_question(text):
 
 
 def main():
+    from turn_guard import begin_turn
+
     data = json.load(sys.stdin)
-    session_id = data.get("session_id", "unknown")
-    prompt = data.get("prompt", "") or ""
-
-    flag_path = pathlib.Path(f"/tmp/.ioncache-pending-question-{session_id}")
-
-    if has_question(prompt):
-        flag_path.write_text("1")
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "UserPromptSubmit",
-                        "additionalContext": (
-                            "This message contains a question. Answer it directly "
-                            "in plain text this turn before taking any action. "
-                            "Mutating tool calls (Edit/Write/NotebookEdit/MultiEdit, "
-                            "and Bash commands recognized as mutating) will be "
-                            "blocked until your next reply, but read-only lookups "
-                            "(Read, Grep, Glob, WebFetch, WebSearch, read-only "
-                            "Bash) stay available, use them if answering well "
-                            "requires checking something first.\n\n"
-                            "Before writing any other output, load and apply "
-                            "this plugin's answer-questions skill to the response."
-                        ),
-                    }
-                }
-            )
-        )
-    elif flag_path.exists():
-        flag_path.unlink()
+    data.setdefault('cwd', str(Path.cwd()))
+    output = begin_turn(data)
+    if output:
+        print(json.dumps(output))
 
 
 if __name__ == "__main__":

@@ -374,8 +374,11 @@ def run_rules(rules, event, hook_input):
 
     if event == 'PreToolUse':
         return merge_pre_tool_use(results)
-    if event == 'UserPromptSubmit':
-        return merge_user_prompt_submit(results)
+    if event in ('UserPromptSubmit', 'SessionStart'):
+        output = merge_user_prompt_submit(results)
+        if output:
+            output['hookSpecificOutput']['hookEventName'] = event
+        return output
     return None
 
 

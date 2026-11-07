@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run all checks, or pass DocsCacheTests.test_name for one test."""
 import io
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -275,12 +276,10 @@ class DocsCacheTests(unittest.TestCase):
         data = {'session_id': 'same-id', 'last_assistant_message': 'Done.'}
         for harness in ('claude', 'codex'):
             with self.subTest(harness=harness):
-                for _ in range(2):
-                    self.assertEqual(docs_cache.native_hook(harness, 'Stop', data)['decision'], 'block')
+                warning = docs_cache.native_hook(harness, 'Stop', data)
+                self.assertIn('worker unavailable', warning['systemMessage'])
+                self.assertNotIn('decision', warning)
                 self.assertIsNone(docs_cache.native_hook(harness, 'Stop', data))
-                notice = docs_cache.native_notice(harness, data)['hookSpecificOutput']['additionalContext']
-                self.assertIsNone(docs_cache.native_hook(
-                    harness, 'Stop', {**data, 'last_assistant_message': notice}))
                 self.assertIsNone(docs_cache.native_notice(harness, data))
 
     def test_claude_cache_hook_does_not_run_again_through_other_adapters(self):
@@ -411,31 +410,32 @@ class DocsCacheTests(unittest.TestCase):
         self.run_distill(returncode=1, stdout='', stderr='Not logged in. Run claude auth login.')
         notice = self.notice()
         self.assertIn('Not logged in', notice)
-        self.assertEqual(self.notice(), notice, 'post-tool context does not prove delivery')
+        self.assertIsNone(self.notice(), 'UI delivery must not repeat after every tool')
         data = {'sessionId': 's1', 'last_assistant_message': 'Done.'}
-        blocked = docs_cache.copilot_stop(data)
-        self.assertEqual(blocked['decision'], 'block')
-        self.assertIn(notice, blocked['reason'])
-        self.assertIsNone(docs_cache.copilot_stop({
-            **data, 'last_assistant_message': 'Done.\n' + notice.replace(' ', '\n'),
-        }))
+        self.assertIsNone(docs_cache.copilot_stop(data))
         self.assertIsNone(self.notice(), 'same problem is reported once per session')
         self.assertIn('Not logged in', self.notice(session='s2'))
         self.run_distill(which=None)
         self.assertIn('not found on PATH', self.notice())
 
-    def test_stop_retry_budget_is_per_session_and_problem(self):
+    def test_notice_deduplication_is_per_session_and_problem(self):
         data = {'sessionId': 's1', 'last_assistant_message': 'Done.'}
         docs_cache.set_status('first problem')
-        for _ in range(2):
-            self.assertEqual(docs_cache.copilot_stop(data)['decision'], 'block')
+        self.assertIn('first problem', docs_cache.copilot_stop(data)['systemMessage'])
         self.assertIsNone(docs_cache.copilot_stop(data))
-        self.assertEqual(docs_cache.copilot_stop({**data, 'sessionId': 's2'})['decision'], 'block')
+        self.assertIn('first problem', docs_cache.copilot_stop({**data, 'sessionId': 's2'})['systemMessage'])
         docs_cache.set_status('second problem')
-        self.assertEqual(docs_cache.copilot_stop(data)['decision'], 'block')
+        self.assertIn('second problem', docs_cache.copilot_stop(data)['systemMessage'])
         docs_cache.set_status('first problem')
         self.assertIsNone(docs_cache.copilot_stop(data), 'returning to an old problem must not reset its budget')
-        self.assertIn('first problem', self.notice())
+        self.assertIsNone(self.notice())
+
+    def test_concurrent_tools_emit_only_one_diagnostic(self):
+        docs_cache.set_status('worker unavailable')
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            outputs = list(executor.map(docs_cache.distiller_notice, ['same-session'] * 8))
+        self.assertEqual(sum(output is not None for output in outputs), 1)
+        self.assertIsNone(docs_cache.copilot_stop({'sessionId': 'same-session'}))
 
     def test_notice_does_not_conflict_with_punctuation_guard(self):
         self.run_distill(returncode=1, stderr=f'Not logged in{chr(0x2014)}sign in again.')

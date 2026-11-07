@@ -9,8 +9,10 @@ import sys
 import time
 
 import docs_cache
+from classify_question import set_marker
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
+from turn_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, retain_recent_messages, store_for
 
 TRANSCRIPT_WAIT_SECONDS = 2
 
@@ -21,8 +23,6 @@ def docs_cache_hook(handler, data):
         return handler(data)
     except Exception as err:
         print(f'docs-cache: {err}', file=sys.stderr)
-        if handler is docs_cache.copilot_post:
-            return {'userNotice': f'ioncache-ai-tools docs cache: {str(err)[:500]}'}
         return None
 
 
@@ -36,15 +36,29 @@ def shared_input(data):
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),
         'agent_id': data.get('agentId'),
+        'source': data.get('source'),
+        'stop_hook_active': data.get('stop_hook_active', False),
+        'transcript_path': data.get('transcriptPath'),
+        'tool_use_id': data.get('toolCallId'),
     }
 
 
+def user_warning(output):
+    message = (output or {}).get('systemMessage') or (output or {}).get('userNotice')
+    if message:
+        print(json.dumps({'type': 'progress', 'message': message}), flush=True)
+
+
 def transform_prompt(data):
+    hook_input = shared_input(data)
+    hook_input['_prompt_was_pending'] = prompt_pending(hook_input)
+    set_marker(hook_input, True, 'prompt')
     messages = []
-    for output in run_shared_hooks('UserPromptSubmit', shared_input(data)):
+    for output in run_shared_hooks('UserPromptSubmit', hook_input):
         context = output.get('hookSpecificOutput', {}).get('additionalContext')
         if context:
             messages.append(context)
+    set_marker(hook_input, False, 'prompt')
     if not messages:
         return None
     return {
@@ -122,10 +136,15 @@ def pre_tool_use(data):
     return {'modifiedArgs': modified}
 
 
-def final_response(data):
+def response_context(data):
     """Wait for this stop invocation to be flushed, never inspect a stale turn."""
     deadline = time.monotonic() + TRANSCRIPT_WAIT_SECONDS
-    text = None
+    with store_for(shared_input(data)) as store:
+        state = store.get(CATEGORY, 'state') or {}
+    response = {
+        'text': None, 'messages': [], 'complete': False, 'recent_messages': [], 'recent_messages_omitted': False,
+        'continuations': state.get('continuations', []), 'stop': data,
+    }
     with Path(data['transcriptPath']).open(encoding='utf-8') as transcript:
         while time.monotonic() < deadline:
             position = transcript.tell()
@@ -134,23 +153,59 @@ def final_response(data):
                 transcript.seek(position)
                 time.sleep(0.05)
                 continue
-            event = json.loads(line)
-            payload = event.get('data', {})
-            if event.get('agentId') or payload.get('parentToolCallId'):
-                continue
-            kind = event.get('type')
-            if kind in ('user.message', 'assistant.turn_start'):
-                text = None
-            elif kind == 'assistant.message' and not payload.get('toolRequests'):
-                text = payload.get('content')
-            elif kind == 'hook.start' and payload.get('hookType') == 'agentStop':
-                invocation = payload.get('input') or {}
-                if (invocation.get('sessionId') == data['sessionId']
-                        and invocation.get('timestamp') == data['timestamp']):
-                    if not isinstance(text, str):
-                        raise ValueError('current stop invocation has no final assistant text')
-                    return text
+            output = consume_response_event(response, json.loads(line))
+            if output:
+                return output
     raise TimeoutError('current Copilot stop invocation was not flushed to the transcript')
+
+
+def consume_response_event(response, event):
+    payload = event.get('data', {})
+    if event.get('agentId') or payload.get('parentToolCallId'):
+        return None
+    kind = event.get('type')
+    if kind == 'user.message':
+        response['text'] = None
+        if payload.get('content') not in response['continuations']:
+            response.update(messages=[], complete=True, recent_messages=[], recent_messages_omitted=False)
+    elif kind == 'assistant.turn_start':
+        response['text'] = None
+    elif kind == 'assistant.message':
+        append_response_message(response, payload)
+    elif kind == 'hook.start' and payload.get('hookType') == 'agentStop':
+        invocation = payload.get('input') or {}
+        if (invocation.get('sessionId') == response['stop']['sessionId']
+                and invocation.get('timestamp') == response['stop']['timestamp']):
+            if not isinstance(response['text'], str):
+                raise ValueError('current stop invocation has no final assistant text')
+            return {
+                'last_assistant_message': response['text'],
+                '_assistant_messages': response['messages'],
+                '_recent_assistant_messages': response['recent_messages'],
+                '_recent_messages_omitted': response['recent_messages_omitted'],
+                '_response_coverage': 'turn' if response['complete'] else 'partial',
+            }
+    return None
+
+
+def append_response_message(response, payload):
+    content = payload.get('content')
+    response['text'] = None if payload.get('toolRequests') else content
+    if not isinstance(content, str) or not content:
+        return
+    response['recent_messages'].append({'text': content, 'truncated': False})
+    omitted = retain_recent_messages(response['recent_messages'])
+    response['recent_messages_omitted'] |= omitted
+    remaining = max(0, MAX_RESPONSE_CHARS - sum(map(len, response['messages'])))
+    response['messages'].append(content[:remaining])
+    response['complete'] &= len(content) <= remaining
+    if len(response['messages']) > 64:
+        del response['messages'][64:]
+        response['complete'] = False
+
+
+def final_response(data):
+    return response_context(data)['last_assistant_message']
 
 
 def run_hook(event, data):
@@ -159,34 +214,36 @@ def run_hook(event, data):
         return transform_prompt(data)
     if event == 'preToolUse':
         return pre_tool_use(data)
-    if event == 'postToolUse':
-        notice = docs_cache_hook(docs_cache.copilot_post, data)
+    if event in ('postToolUse', 'postToolUseFailure'):
         messages = []
+        shared_event = 'PostToolUse' if event == 'postToolUse' else 'PostToolUseFailure'
         for name, args in normalized_tools(data):
-            for output in run_shared_hooks('PostToolUse', {
+            for output in run_shared_hooks(shared_event, {
                 **hook_input, 'tool_name': name, 'tool_input': args,
-                'tool_response': data['toolResult'], 'evidence_model_output': True,
+                'tool_response': data.get('toolResult', {'error': data.get('error')}),
+                'evidence_model_output': True,
             }):
+                user_warning(output)
                 context = output.get('hookSpecificOutput', {}).get('additionalContext')
                 if context:
                     messages.append(context)
-        if notice:
-            messages.append(notice['userNotice'])
+        notice = docs_cache_hook(docs_cache.copilot_post, data) if event == 'postToolUse' else None
+        user_warning(notice)
         return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
-        response = final_response(data)
+        response = response_context(data)
         outputs = run_shared_hooks('Stop', {
-            **hook_input, 'last_assistant_message': response,
+            **hook_input, **response,
         })
         for output in outputs:
-            if output.get('systemMessage'):
-                print(output['systemMessage'], file=sys.stderr)
+            user_warning(output)
         decision = next((output for output in outputs if output.get('decision') == 'block'), None)
         if decision:
             return decision
-        return docs_cache_hook(docs_cache.copilot_stop, {
-            'sessionId': data['sessionId'], 'last_assistant_message': response,
-        })
+        user_warning(docs_cache_hook(docs_cache.copilot_stop, {
+            'sessionId': data['sessionId'], 'last_assistant_message': response['last_assistant_message'],
+        }))
+        return None
     if event == 'sessionEnd':
         Path(f'/tmp/.ioncache-pending-question-{hook_input["session_id"]}').unlink(missing_ok=True)
         run_shared_hooks('SessionEnd', hook_input)
@@ -194,10 +251,18 @@ def run_hook(event, data):
     if event in ('sessionStart', 'preCompact', 'subagentStart', 'subagentStop'):
         shared_event = {
             'sessionStart': 'SessionStart', 'preCompact': 'PreCompact',
-            'subagentStart': 'SubagentStart', 'subagentStop': 'SubagentStart',
+            'subagentStart': 'SubagentStart', 'subagentStop': 'SubagentStop',
         }[event]
-        run_shared_hooks(shared_event, hook_input)
-        return None
+        outputs = run_shared_hooks(shared_event, {
+            **hook_input, 'last_assistant_message': data.get('response'),
+        })
+        for output in outputs:
+            user_warning(output)
+            if output.get('decision') == 'block':
+                return output
+        messages = [item['hookSpecificOutput']['additionalContext'] for item in outputs
+                    if item.get('hookSpecificOutput', {}).get('additionalContext')]
+        return {'additionalContext': '\n\n'.join(messages)} if messages else None
     raise ValueError(f'unsupported Copilot event: {event}')
 
 

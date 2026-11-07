@@ -20,6 +20,7 @@ from evidence_review import check_review, inventory, publication_commands
 from evidence_source import check_native_read, digest, read_page, source_snapshot, source_unit, unit_bounds
 from evidence_store import EvidenceStore, record_page, reference_key
 from hook_adapter_common import run_shared_hooks
+from turn_guard_self_check import install_reviewers
 
 
 class ClaimEvidenceTests(unittest.TestCase):
@@ -32,6 +33,8 @@ class ClaimEvidenceTests(unittest.TestCase):
         self.patch = mock.patch.dict(os.environ, {
             'HOME': str(self.home), 'CODEX_HOME': str(self.home / '.codex'),
             'COPILOT_HOME': str(self.home / '.copilot'),
+            'XDG_CACHE_HOME': str(self.home / '.cache'),
+            'PATH': install_reviewers(self.root),
         })
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -355,7 +358,9 @@ class ClaimEvidenceTests(unittest.TestCase):
         options = claim_evidence.parser().parse_args(['approve', str(path), '--review', str(review_path)])
         receipt = claim_evidence.approval_candidate(options, self.root)[2]
         self.helper(f'approve "{path}" --review "{review_path}"', {'stdout': receipt})
-        self.assertIsNone(self.hook('Stop', last_assistant_message=prepared['artifacts'][0]['text']))
+        output = self.hook('Stop', last_assistant_message=prepared['artifacts'][0]['text'])
+        self.assertNotIn('decision', output)
+        self.assertIn('earlier assistant', output['systemMessage'])
         self.assertTrue(marker.exists())
         self.assertIn('classified as a question', str(self.hook('PreToolUse', **self.request())))
 
@@ -500,13 +505,13 @@ class ClaimEvidenceTests(unittest.TestCase):
     def test_copilot_reports_unverified_stop_completion(self):
         warning = 'Claim evidence: final prose is not mechanically verified.'
         with (
-            mock.patch.object(copilot_adapter, 'final_response', return_value='Unchecked'),
+            mock.patch.object(copilot_adapter, 'response_context', return_value={'last_assistant_message': 'Unchecked'}),
             mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[{'systemMessage': warning}]),
-            mock.patch.object(copilot_adapter.sys, 'stderr', new_callable=io.StringIO) as stderr,
+            mock.patch.object(copilot_adapter.sys, 'stdout', new_callable=io.StringIO) as stdout,
         ):
             output = copilot_adapter.run_hook('agentStop', {'sessionId': 'fixture', 'cwd': str(self.root)})
         self.assertIsNone(output)
-        self.assertIn(warning, stderr.getvalue())
+        self.assertIn(warning, stdout.getvalue())
 
     def test_config_disable_and_discovery_tools_remain_available(self):
         self.assertIsNone(self.hook('PreToolUse', tool_name='Grep', tool_input={'pattern': 'return'}))
