@@ -105,6 +105,19 @@ preserves proposals after long research without replacing the earlier-prose audi
 buffer. Each retained message records its own completeness; omitting older prose
 does not make a complete recent proposal unusable for later approval.
 
+Question-tool proposals and returned answers have their own bounded context,
+separate from live observations. Complete exchanges up to 16,000 serialized
+characters survive ordinary evidence eviction, mutations, compaction and resume.
+Larger exchanges retain explicitly truncated excerpts; retained exchanges share
+a 32,000-character budget, with omissions marked. Successful tool execution is
+not consent: refusals and unavailable-user replies remain visible. Matching
+tool starts and completions establish provenance, not permission. New user
+restrictions still control, and clearing the session clears this context.
+The guard also records its own tool denials without requiring a post-tool event.
+Response checks can explain those historical decisions without treating their
+reasons as proven facts. These receipts do not authorize tools or certify live
+state. Neither kind of record bypasses the semantic check or host permissions.
+
 Questions retain the conservative classifier: a question mixed with an
 instruction still blocks recognized mutations. The work-product exception
 permits requested drafts or code in the answer, not subsequent file edits.
@@ -176,8 +189,9 @@ evidence changes. Operational failures are not cached as semantic denials.
 
 Each model call has a 60-second deadline and a 90,000-byte input budget.
 Tool inputs and results are bounded together with their evidence records.
-Older context can be omitted to fit the combined budget, with explicit omission
-metadata. The latest request and proposed candidate are never silently cut.
+Evidence excerpts and denial receipts yield to request and approval context
+when fitting the combined budget. Older context can then be omitted, with
+explicit omission metadata. The latest request and proposed candidate are never silently cut.
 Private review payloads travel over stdin, not process arguments.
 Timeouts and catchable cancellation terminate and reap the reviewer process
 group. Cleanup cannot run after an uncatchable kill of its supervising hook.
@@ -208,6 +222,7 @@ Hook contracts and CLI isolation options were checked against:
 - https://code.claude.com/docs/en/hooks#messagedisplay
 - https://code.claude.com/docs/en/sub-agents#resume-subagents
 - https://code.claude.com/docs/en/cli-reference
+- https://code.claude.com/docs/en/tools-reference
 - https://learn.chatgpt.com/docs/hooks
 - https://learn.chatgpt.com/docs/non-interactive-mode
 - https://docs.github.com/en/copilot/reference/hooks-reference
@@ -216,6 +231,7 @@ Hook contracts and CLI isolation options were checked against:
 - https://github.com/github/copilot-sdk/blob/main/docs/features/streaming-events.md
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
+- https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/request_user_input_spec.rs
 
 ### Engineering judgment
 

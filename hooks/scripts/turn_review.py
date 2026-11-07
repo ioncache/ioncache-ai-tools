@@ -28,6 +28,18 @@ earlier_messages_omitted marks missing older prose, not incomplete retained mess
 A complete recent or final proposal remains usable despite omitted older prose.
 An incomplete newer proposal cannot be replaced with an older one to authorize
 an ambiguous approval. Missing text cannot supply restrictions or permission.
+user_interactions contains chronological question-tool inputs paired with their
+returned answers, separate from disposable live observations. Only successful,
+correlated, untruncated exchanges can establish approval context, including
+the proposal referenced by a later approval and the user's answer. A successful
+tool result alone is not consent: refusals, cancellation and unavailable-user
+messages grant no permission. These exchanges never override a newer user
+restriction or the hard question gate. interaction_context_incomplete marks
+omitted exchanges; do not infer consent or constraints from missing text.
+hook_decisions records this guard's tool denials for explaining past events.
+It proves only that the hook denied that call with the recorded reason, not
+that the reason's factual assertions were correct or that any action ran.
+Neither historical decisions nor user interactions certify current live state.
 If request_context_incomplete is true, missing earlier instructions cannot
 authorize an ambiguous continuation; a self-contained latest request still can.
 When question_only is true, or the actual request is a question rather than
@@ -84,10 +96,12 @@ def input_size(request):
 
 
 def fit_context(request):
-    fields = ('request_context', 'assistant_context', 'documentation', 'observations')
-    request = {**request, **{key: list(request[key]) for key in fields}, 'omitted_context': []}
+    evidence = ('documentation', 'observations', 'hook_decisions')
+    authority = ('request_context', 'assistant_context', 'user_interactions')
+    fields = (*evidence, *authority)
+    request = {**request, **{key: list(request.get(key, [])) for key in fields}, 'omitted_context': []}
     while input_size(request) > MAX_INPUT_BYTES:
-        populated = [key for key in fields if request[key]]
+        populated = [key for key in evidence if request[key]] or [key for key in authority if request[key]]
         if not populated:
             break
         key = max(populated, key=lambda field: len(json.dumps(request[field])))
@@ -96,6 +110,8 @@ def fit_context(request):
             request['omitted_context'].append(key)
         if key in ('request_context', 'assistant_context'):
             request['request_context_incomplete'] = True
+        if key == 'user_interactions':
+            request['interaction_context_incomplete'] = True
     return request
 
 

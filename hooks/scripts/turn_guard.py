@@ -28,6 +28,7 @@ MAX_INPUT_CHARS = 2_000
 MAX_REQUEST_CHARS = 16_000
 MAX_HISTORY_CHARS = 12_000
 MAX_RESPONSE_CHARS = 16_000
+USER_INPUT_TOOLS = {'AskUserQuestion', 'ask_user', 'request_user_input'}
 BOOTSTRAP = (
     'This session uses documentation-backed third-party specifics, not recalled '
     'API or CLI behavior. Applicable verified documentation can be reused; '
@@ -161,6 +162,9 @@ def begin_turn(data):
             'pending_tools': {}, 'history': history, 'messages': [],
             'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
             'native_prompt': data.get('prompt_id') or data.get('turn_id'),
+            'user_interactions': previous.get('user_interactions', []),
+            'interaction_context_incomplete': previous.get('interaction_context_incomplete', False),
+            'hook_decisions': previous.get('hook_decisions', []),
         }
         store.put(CATEGORY, ('state', state))
         set_marker(data, state['question'])
@@ -255,6 +259,7 @@ def child_state(parent):
         'pending_tools': {}, 'last_response': None,
         'last_earlier_response': [], 'earlier_response_truncated': False, 'earlier_response_omitted': False,
         'messages': [], 'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
+        'hook_decisions': [],
     }
 
 
@@ -337,6 +342,7 @@ def record_start(data):
             entry = {
                 'turn': state['id'], 'mutation': state['mutation'],
                 'file_snapshot': file_snapshot(data), 'ambiguous': key in pending,
+                'invocation': fingerprint([data.get('tool_name'), data.get('tool_input')]),
             }
             state['pending_tools'] = dict([*pending.items()][-63:])
             state['pending_tools'][key] = entry
@@ -352,8 +358,9 @@ def observation(data, state):
     input_truncated = len(encoded_args) > MAX_INPUT_CHARS
     before = state.get('pending_tools', {}).pop(tool_key(data), None)
     snapshot = file_snapshot(data)
-    fresh = bool(before and not before['ambiguous'] and before['turn'] == state['id']
-                 and before['mutation'] == state['mutation'])
+    correlated = bool(before and not before['ambiguous'] and before['turn'] == state['id']
+                      and before.get('invocation') == fingerprint([data.get('tool_name'), args]))
+    fresh = correlated and before['mutation'] == state['mutation']
     unchanged = fresh and (data.get('tool_name') != 'Read'
                            or bool(snapshot and before['file_snapshot'] == snapshot))
     return {
@@ -363,8 +370,23 @@ def observation(data, state):
         'observed_at': time.time(), 'success': result_status(data),
         'result': result[:MAX_RESULT_CHARS],
         'truncated': input_truncated or len(result) > MAX_RESULT_CHARS,
-        'file_snapshot': snapshot, 'unchanged': unchanged, 'fresh': fresh,
+        'file_snapshot': snapshot, 'unchanged': unchanged, 'fresh': fresh, 'correlated': correlated,
     }
+
+
+def record_interaction(state, data, item):
+    if data['tool_name'] not in USER_INPUT_TOOLS:
+        return
+    interaction = {
+        key: item[key] for key in ('tool', 'cwd', 'turn', 'observed_at', 'success', 'correlated')
+    }
+    interaction.update(input=data['tool_input'], result=json.dumps(data.get('tool_response')), truncated=False)
+    if len(json.dumps(interaction)) > MAX_REQUEST_CHARS:
+        interaction.update(input=item['input'], result=item['result'], truncated=True)
+    items = [*state.get('user_interactions', []), interaction]
+    count = len(items)
+    state['user_interactions'] = bounded(items)
+    state['interaction_context_incomplete'] = state.get('interaction_context_incomplete', False) or len(items) < count
 
 
 def file_snapshot(data):
@@ -397,6 +419,7 @@ def record_tool(data):
         if not state or 'id' not in state:
             return None
         item = observation(data, state)
+        record_interaction(state, data, item)
         if is_mutating(data.get('tool_name'), data.get('tool_input')):
             store.put(CATEGORY, ('state', state))
             invalidate_live_state(store)
@@ -448,6 +471,9 @@ def review_request(data, state, candidate):
         'latest_request': state['prompt'], 'request_context': state['requests'][:-1],
         'request_context_incomplete': state.get('request_context_incomplete', False),
         'assistant_context': state.get('history', []),
+        'user_interactions': state.get('user_interactions', []),
+        'interaction_context_incomplete': state.get('interaction_context_incomplete', False),
+        'hook_decisions': state.get('hook_decisions', []) if candidate.get('kind') == 'response' else [],
         'question_only': state['question'],
         'scope': 'scope-exactly-what-asked' not in disabled,
         'live_state': 'verify-state-before-claiming' not in disabled,
@@ -533,6 +559,30 @@ def remember_continuation(data, reason):
         if state and 'id' in state:
             state['continuations'] = [*state.get('continuations', [])[-7:], reason]
             store.put(CATEGORY, ('state', state))
+
+
+def record_denial(data, output):
+    decision = (output or {}).get('hookSpecificOutput', {})
+    if decision.get('permissionDecision') != 'deny':
+        return output
+    try:
+        with store_for(data) as store:
+            state = store.get(CATEGORY, 'state')
+            if not state or 'id' not in state:
+                return output
+            args = json.dumps(data['tool_input'])
+            reason = decision['permissionDecisionReason']
+            item = {
+                'turn': state['id'], 'tool': data['tool_name'], 'tool_use_id': data.get('tool_use_id'),
+                'input': {'excerpt': args[:MAX_INPUT_CHARS]} if len(args) > MAX_INPUT_CHARS else data['tool_input'],
+                'reason': reason[:MAX_RESULT_CHARS], 'observed_at': time.time(),
+                'truncated': len(args) > MAX_INPUT_CHARS or len(reason) > MAX_RESULT_CHARS,
+            }
+            state['hook_decisions'] = bounded([*state.get('hook_decisions', [])[-15:], item])
+            store.put(CATEGORY, ('state', state))
+    except (OSError, ValueError, sqlite3.Error):
+        print('turn-guard: denial evidence could not be recorded', file=sys.stderr)
+    return output
 
 
 def retain_recent_messages(messages, limit=MAX_RESULT_CHARS):
@@ -706,7 +756,7 @@ def run_hook(event, data):
     if event == 'UserPromptSubmit':
         return begin_turn(data)
     if event == 'PreToolUse':
-        return pre_tool(data)
+        return record_denial(data, pre_tool(data))
     if event == 'MessageDisplay':
         return record_display(data)
     if event in ('PostToolUse', 'PostToolUseFailure'):
