@@ -27,7 +27,9 @@ def install_reviewers(root):
     directory.mkdir()
     fixture = directory / 'fixture'
     fixture.write_text(
-        f'#!{sys.executable}\nimport os,sys\n'
+        f'#!{sys.executable}\nimport os,sys\nfrom pathlib import Path\n'
+        'if os.environ.get("REVIEW_FIXTURE_CAPTURE"):\n'
+        '    Path(os.environ["REVIEW_FIXTURE_CAPTURE"]).write_text(sys.stdin.read())\n'
         'if os.environ.get("REVIEW_FIXTURE_ERROR"):\n'
         '    print(os.environ["REVIEW_FIXTURE_ERROR"],file=sys.stderr)\n'
         '    sys.exit(2)\n'
@@ -188,6 +190,143 @@ class TurnGuardTests(unittest.TestCase):
             self.hook('Stop', last_assistant_message=proposal)
         self.prompt('Yes, proceed with that proposal')
         self.assertIn(proposal, json.dumps(guard.review_request(self.data, self.state(), {})))
+
+    def test_tool_approval_preserves_the_full_proposal_after_evidence_churn(self):
+        self.prompt('Propose the fix, get approval, then implement it')
+        proposal = 'Plan details. ' * 400 + 'Edit turn_guard_self_check.py. Do not commit or push.'
+        fields = {'tool_name': 'ask_user', 'tool_use_id': 'approval',
+                  'tool_input': {'message': proposal, 'requestedSchema': {'properties': {}}}}
+        answer = {'resultType': 'success', 'textResultForLlm': 'User responded: Approve this plan'}
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **fields, tool_response=answer)
+        self.tool('PostToolUse', tool_response='written')
+        self.hook('PreCompact')
+        self.prompt('Continue the approved work')
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}) as reviewer:
+            self.tool()
+        request = reviewer.call_args.args[1]
+        interaction = request.get('user_interactions', [{}])[-1]
+        self.assertEqual(interaction.get('input'), fields['tool_input'])
+        self.assertEqual(json.loads(interaction['result']), answer)
+        self.assertTrue(interaction['correlated'])
+        self.assertFalse(interaction['truncated'])
+        self.assertEqual(request['observations'], [])
+
+    def test_denial_is_response_evidence_without_a_post_tool_event(self):
+        self.prompt()
+        reason = 'The approved proposal was not available.'
+        with mock.patch.object(turn_review, 'review', return_value={'ok': False, 'reason': reason}):
+            output = self.tool()
+        self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(self.state()['observations'], [])
+        self.prompt('Why was the edit blocked?')
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}) as reviewer:
+            self.hook('Stop', last_assistant_message='The hook rejected the edit because it lacked the proposal.')
+        decisions = reviewer.call_args.args[1].get('hook_decisions', [])
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0]['tool'], 'Write')
+        self.assertEqual(decisions[0]['reason'], output['hookSpecificOutput']['permissionDecisionReason'])
+        self.assertEqual(decisions[0]['input']['file_path'], 'target.py')
+
+    def test_user_exchanges_keep_refusals_failures_and_missing_provenance(self):
+        self.prompt()
+        fields = {'tool_name': 'ask_user', 'tool_input': {'message': 'Approve the change'}, 'tool_use_id': 'answer'}
+        for event, result, success in (
+            ('PostToolUse', {'resultType': 'success', 'textResultForLlm': 'No, do not edit.'}, True),
+            ('PostToolUse', {'resultType': 'success', 'textResultForLlm': 'The user is unavailable.'}, True),
+            ('PostToolUseFailure', {'error': 'cancelled'}, False),
+        ):
+            with self.subTest(result=result):
+                self.hook('PreToolUse', **fields)
+                self.hook(event, **fields, tool_response=result)
+                item = guard.review_request(self.data, self.state(), {})['user_interactions'][-1]
+                self.assertEqual(json.loads(item['result']), result)
+                self.assertIs(item['success'], success)
+                self.assertTrue(item['correlated'])
+        self.hook('PostToolUse', **fields, tool_response='Yes')
+        self.assertFalse(self.state()['user_interactions'][-1]['correlated'])
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **{**fields, 'tool_input': {'message': 'A different proposal'}}, tool_response='Yes')
+        self.assertFalse(self.state()['user_interactions'][-1]['correlated'])
+
+    def test_user_exchange_survives_mutation_but_not_a_changed_request_in_flight(self):
+        self.prompt()
+        fields = {'tool_name': 'ask_user', 'tool_input': {'message': 'Approve the proposal'}, 'tool_use_id': 'answer'}
+        self.hook('PreToolUse', **fields)
+        self.tool('PostToolUse', tool_response='written')
+        self.hook('PostToolUse', **fields, tool_response='Yes')
+        self.assertTrue(self.state()['user_interactions'][-1]['correlated'])
+        self.assertFalse(self.state()['observations'][-1]['fresh'])
+        self.hook('PreToolUse', **fields)
+        self.prompt('Stop editing and explain the result')
+        self.hook('PostToolUse', **fields, tool_response='Yes')
+        self.assertFalse(self.state()['user_interactions'][-1]['correlated'])
+        request = guard.review_request(self.data, self.state(), {})
+        self.assertEqual(request['latest_request'], 'Stop editing and explain the result')
+
+    def test_user_interaction_retention_is_bounded_and_clear_resets_it(self):
+        self.prompt()
+        for index in range(8):
+            fields = {'tool_name': 'ask_user', 'tool_use_id': str(index),
+                      'tool_input': {'message': 'Plan. ' * 1000}}
+            self.hook('PreToolUse', **fields)
+            self.hook('PostToolUse', **fields, tool_response='Yes')
+        self.assertLessEqual(len(json.dumps(self.state()['user_interactions'])), guard.MAX_EVIDENCE_CHARS)
+        self.assertTrue(self.state()['interaction_context_incomplete'])
+        fields['tool_input']['message'] = 'x' * guard.MAX_EVIDENCE_CHARS
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **fields, tool_response='Yes')
+        self.assertTrue(self.state()['user_interactions'][-1]['truncated'])
+        self.hook('SessionEnd')
+        self.hook('SessionStart', source='resume')
+        self.assertTrue(self.state()['user_interactions'])
+        self.hook('SessionStart', source='clear')
+        self.assertNotIn('user_interactions', self.state())
+
+    def test_budget_fitting_keeps_approval_context_before_disposable_evidence(self):
+        self.prompt()
+        fields = {'tool_name': 'ask_user', 'tool_input': {'message': 'Plan. ' * 2000}}
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **fields, tool_response='Yes, proceed')
+        for name in ('Read', 'WebFetch'):
+            self.hook('PostToolUse', tool_name=name, tool_input={}, tool_response='e' * 6500)
+        candidate = {'kind': 'tool', 'tool': 'Write', 'input': {'content': 'c' * 65_000}}
+        request = guard.review_request(self.data, self.state(), candidate)
+        self.assertLessEqual(turn_review.input_size(request), turn_review.MAX_INPUT_BYTES)
+        self.assertEqual(request['candidate'], candidate)
+        self.assertEqual([item['input'] for item in request['user_interactions']], [fields['tool_input']])
+        self.assertFalse(request['interaction_context_incomplete'])
+        self.assertTrue(request['omitted_context'])
+
+    def test_only_user_input_tools_supply_dialogue_context(self):
+        self.prompt()
+        for name in ('AskUserQuestion', 'ask_user', 'request_user_input', 'Read', 'mcp__other__ask_user'):
+            fields = {'tool_name': name, 'tool_input': {'message': 'A proposal'}, 'tool_use_id': name}
+            self.hook('PreToolUse', **fields)
+            self.hook('PostToolUse', **fields, tool_response='Yes, proceed')
+        self.assertEqual([item['tool'] for item in self.state()['user_interactions']],
+                         ['AskUserQuestion', 'ask_user', 'request_user_input'])
+
+    def test_denial_receipts_do_not_become_tool_authority_or_live_evidence(self):
+        self.prompt()
+        rejected = {'ok': False, 'reason': 'Unrequested change.'}
+        with mock.patch.object(turn_review, 'review', return_value=rejected) as reviewer:
+            for _ in range(20):
+                self.tool()
+        self.assertEqual(reviewer.call_count, 1)
+        self.assertEqual(reviewer.call_args.args[1]['hook_decisions'], [])
+        self.assertEqual(len(self.state()['hook_decisions']), 16)
+        self.assertEqual(self.state()['observations'], [])
+        self.tool('PostToolUse', tool_response='a different authorized write')
+        self.assertTrue(self.state()['hook_decisions'])
+        with mock.patch.object(turn_review, 'review', return_value={'ok': True, 'reason': ''}):
+            self.assertIsNone(self.tool())
+
+    def test_denial_recording_failure_preserves_the_original_denial(self):
+        output = guard.denial('Missing authorization.')
+        with mock.patch.object(guard, 'store_for', side_effect=PermissionError('unavailable')), \
+                mock.patch.object(sys, 'stderr'):
+            self.assertEqual(guard.record_denial(self.data, output), output)
 
     def test_approval_preserves_proposals_before_the_final_message(self):
         self.prompt('Propose one change and wait')

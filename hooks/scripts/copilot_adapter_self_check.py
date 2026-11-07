@@ -227,6 +227,24 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertFalse(retained['truncated'])
         self.assertTrue(history['earlier_messages_omitted'])
 
+    def test_native_approval_keeps_the_tool_proposal_and_user_answer(self):
+        self.prompt('Propose the fix, get approval, then implement it')
+        proposal = 'Plan details. ' * 400 + 'Update the guard self-check. No commits or pushes.'
+        args = {'message': proposal, 'requestedSchema': {'properties': {}}}
+        fields = {'toolName': 'ask_user', 'toolArgs': json.dumps(args), 'toolCallId': 'approval'}
+        answer = {'resultType': 'success', 'textResultForLlm': 'User responded: Approve this plan'}
+        self.invoke('preToolUse', **fields)
+        self.invoke('postToolUse', **fields, toolResult=answer)
+        capture = self.root / 'review-input.txt'
+        self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
+        self.assertEqual(self.tool('create', {'path': 'turn_guard_self_check.py', 'file_text': 'requested change'}), {})
+        request = json.loads(capture.read_text().splitlines()[-1])
+        interaction = request.get('user_interactions', [{}])[-1]
+        self.assertEqual(interaction.get('input'), args)
+        self.assertEqual(json.loads(interaction['result']), answer)
+        self.assertFalse(interaction['truncated'])
+        self.assertTrue(interaction['correlated'])
+
     def test_stop_continuation_retains_earlier_visible_prose(self):
         self.prompt('Why does this happen?')
         turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'owned feedback')
