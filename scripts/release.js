@@ -92,13 +92,12 @@ function readManifests(root) {
  */
 function checkChangelog(text, version) {
   const entries = [...text.matchAll(/^## (.+)$/gm)]
-  const heading = new RegExp(`^${version.replaceAll('.', '\\.')} \\((\\d{4}-\\d{2}-\\d{2})\\)$`)
-  const match = heading.exec(entries[0]?.[1] || '')
-  if (!match) {
+  const match = /^(\d+\.\d+\.\d+) \((\d{4}-\d{2}-\d{2})\)$/.exec(entries[0]?.[1] || '')
+  if (!match || match[1] !== version) {
     throw new Error(`CHANGELOG.md must start with a release entry for ${version}.`)
   }
-  const date = new Date(match[1])
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) {
+  const date = new Date(match[2])
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[2]) {
     throw new Error('The latest changelog entry must have a valid date.')
   }
   const body = text.slice(entries[0].index + entries[0][0].length, entries[1]?.index)
