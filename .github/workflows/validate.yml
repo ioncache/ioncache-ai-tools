@@ -13,6 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install contributor tooling
+        run: npm ci
+
       - name: Validate JSON manifests
         run: |
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
@@ -64,6 +72,12 @@ jobs:
       - name: Run review-ledger self-check
         run: python3 scripts/review_ledger_self_check.py
 
+      - name: Run release self-check
+        run: python3 scripts/release_self_check.py
+
+      - name: Check release changelog
+        run: npm run release:check
+
       - name: Check skill frontmatter
         run: |
           for f in skills/*/SKILL.md; do
@@ -81,7 +95,7 @@ jobs:
           hits = []
           for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js'):
               for path in pathlib.Path('.').glob(pattern):
-                  if '.git' in path.parts:
+                  if '.git' in path.parts or 'node_modules' in path.parts:
                       continue
                   text = path.read_text(errors='ignore')
                   if em_dash in text:

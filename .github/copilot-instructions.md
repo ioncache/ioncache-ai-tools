@@ -7,10 +7,12 @@ rules belong in the plugin's hooks, rules, and skills, not duplicated here.
 
 This repository ships reusable AI-assistant behavior as a plugin for Claude
 Code, Codex, and GitHub Copilot CLI. Python hooks enforce behavior, Markdown
-skills instruct the assistant, and a Node.js helper creates
-configured git worktrees.
-Python uses the standard library; JavaScript uses CommonJS and Node built-ins.
-Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
+skills instruct the assistant, and Node.js helpers create configured git
+worktrees and prepare releases.
+Python uses the standard library; JavaScript uses CommonJS. The release helper
+dynamically imports the ESM-only `conventional-changelog` packages from
+contributor dev dependencies; the worktree helper uses Node built-ins.
+Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
 (`rule_engine.py` uses `SIGALRM`).
 
 - Claude Code uses `hooks/hooks.json` for lifecycle, prompt, display, tool and Stop
@@ -73,7 +75,7 @@ Use Python 3.11+ for `tomllib`, Node.js, and Git in a POSIX environment
 
 ## Validation commands
 
-Run from the repository root:
+Run from the repository root after installing contributor tooling with `npm ci`:
 
 ```sh
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
@@ -85,6 +87,8 @@ python3 hooks/scripts/docs_cache_self_check.py < /dev/null
 python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
+python3 scripts/release_self_check.py
+npm run release:check
 ```
 
 These checks run in CI; the Node self-test exercises worktree setup and path
@@ -203,6 +207,11 @@ construct the character with `chr(0x2014)` to pass this source check.
 
 ## Prompts, documentation, and local development
 
+- Every plugin version change must update `CHANGELOG.md` with New, Updated
+  and Fixed items from commits since the preceding version. Use
+  `npm run release -- VERSION` from a clean feature worktree after
+  committing the intended changes. Review its output and commit all three
+  plugin manifests with the changelog. See README.md's version-change workflow.
 - Skills start with YAML frontmatter containing `name` and
   `description`. Keep skill descriptions specific about when they activate.
 - Claude relative-path plugins from local-directory marketplaces load in place;
