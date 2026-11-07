@@ -3,6 +3,9 @@
 Keep this file focused on developing the repository. Assistant behavioral
 rules belong in the plugin's hooks, rules, and skills, not duplicated here.
 
+Read [../AGENTS.md](../AGENTS.md) for the primary enforcement and recovery
+invariant that applies to all contributor work.
+
 ## Architecture
 
 This repository ships reusable AI-assistant behavior as a plugin for Claude
