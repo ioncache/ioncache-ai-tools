@@ -59,6 +59,7 @@ This plugin targets Copilot CLI, not the cloud agent or VS Code.
 | --- | --- |
 | Answer-only questions | Blocks recognized mutations for the whole question turn; checks replies for unsolicited work |
 | Documentation first | Checks third-party specifics against observed documentation, including applicable cached facts |
+| Engineering judgment | Prefers coherent system behavior over the shortest patch |
 | Scope and current state | Checks mutation scope and claims against the request and current-turn observations |
 | Process termination | Blocks recognized process-kill commands until the rule is disabled |
 | Lockfiles | Blocks direct edits; use the package manager |
@@ -74,9 +75,9 @@ Patches with ambiguous file-header whitespace are rejected.
 
 Ordinary prompts add no built-in reminder text after initialization.
 Question turns add a 204-character answer-only contract, not a request to
-reload a skill. The default bootstrap is 635 characters and runs at session
-initialization, context recovery, and supported subagent startup. If a host
-misses startup, the first prompt supplies it. Copilot adds a 43-character
+reload a skill. The default bootstrap stays below 800 characters and runs at
+session initialization, context recovery, and supported subagent startup.
+If a host misses startup, the first prompt supplies it. Copilot adds a 43-character
 wrapper only when a transformed prompt actually has context to append.
 These counts exclude host formatting and tokens.
 
@@ -215,6 +216,25 @@ Hook contracts and CLI isolation options were checked against:
 - https://github.com/github/copilot-sdk/blob/main/docs/features/streaming-events.md
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
+
+### Engineering judgment
+
+A startup reminder directs non-trivial engineering decisions to the
+[engineering-judgment skill](skills/engineering-judgment/SKILL.md). It puts
+correctness, contracts, and responsibility boundaries before line or file
+counts. Investigation stays proportional to the affected behavior, not a
+whole-system audit for every edit.
+
+Necessary supporting changes belong to the requested outcome. Unrelated
+cleanup and speculative redesign do not. Explicit scope limits still apply;
+the assistant must ask before exceeding them rather than choose an incomplete
+local patch. Concise replies do not require smaller implementations.
+
+The shared lifecycle hooks deliver the reminder at initialization and context
+recovery, with a first-prompt fallback when startup is missed. Ordinary prompts
+do not repeat it. The skill tells coordinators to pass relevant constraints to
+delegated agents rather than assume automatic inheritance. These are
+instructions, not a mechanical guarantee of architectural quality.
 
 ### Documentation lookup cache
 
@@ -435,15 +455,21 @@ Available IDs:
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `fix_emdash` | Em-dashes in edits and shell input |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
+| `engineering-judgment` | Startup engineering policy and skill activation guidance |
 | `scope-exactly-what-asked` | Startup scope policy and semantic scope check |
 | `verify-state-before-claiming` | Startup state policy and live-state claim check |
+
+Disabling `engineering-judgment` excludes it from future startup or recovery
+policy delivery. It does not erase instructions already in context or remove
+the skill and references to it from other skills.
 
 ## Writing and coding skills
 
 | Skill | Guidance |
 | --- | --- |
 | `answer-questions` | Answer questions before acting |
-| `code-complexity` | Keep functions small and focused |
+| [engineering-judgment](skills/engineering-judgment/SKILL.md) | Choose coherent solutions across affected code and services |
+| `code-complexity` | Keep functions cohesive; use metrics as guidance |
 | `comments` | Explain why, not what; omit unnecessary comments |
 | `documentation-writing` | Short, direct prose without filler or em-dashes |
 | `prompt-output` | Format generated prompt files |

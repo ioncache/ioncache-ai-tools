@@ -7,16 +7,21 @@ description: Use when writing or reviewing functions, for guidance on parameter 
 
 ## Core Principles
 
-1. Functions should be small, focused, and do one thing well
-2. Prefer readability over strict metrics
+1. Functions should be cohesive and focused on a clear responsibility
+2. Prefer correctness and readability over strict metrics
 3. Functions should be pure when possible
 4. Avoid side effects and global state dependencies
 
-## Hard Limits
+Apply [engineering judgment](../engineering-judgment/SKILL.md) when a local
+refactor affects contracts or responsibility boundaries. Do not split cohesive
+logic, hide dependencies, or move work into the wrong layer to satisfy a metric.
 
-- **Max 3 parameters**, use an object parameter for more than 3 params or
-  boolean flags
-- **Max 3 nesting levels**, use early returns and guard clauses
+## Guidelines
+
+- Prefer at most 3 independent parameters. Group related values or options
+  when that reflects their meaning, not merely to hide the parameter count.
+- Prefer at most 3 nesting levels. Use early returns and guard clauses when
+  they clarify control flow without changing behavior.
 - **Target under 30 lines per function**, longer is fine if cohesive and clear
 - **Target cyclomatic complexity under 15**, higher is fine if the logic is
   simple and related
@@ -65,29 +70,17 @@ function createUser(userData) {
 }
 ```
 
-**Extract complex logic into focused functions:**
+**Extract by responsibility, not line count:**
 
-```javascript
-// Bad: Multiple responsibilities
-function processUserData(user) {
-  validateUser(user)
-  updateDatabase(user)
-  sendWelcomeEmail(user)
-  createUserProfile(user)
-}
-
-// Good: Composed from smaller functions
-function processUserData(user) {
-  validateUser(user)
-  const dbUser = updateDatabase(user)
-  notifyUser(dbUser)
-}
-```
+An orchestration function can coordinate validation, persistence, and
+notifications as one cohesive operation. Extract a helper when it isolates a
+meaningful rule or boundary, not just to shorten the caller. Preserve every
+required step, its ordering, and its error and side-effect contracts.
 
 ## Review Checklist
 
 - [ ] Single responsibility
-- [ ] 3 or fewer parameters
-- [ ] 3 or fewer nesting levels
+- [ ] Parameters express meaningful inputs without hiding dependencies
+- [ ] Control flow is clear; metric exceptions preserve cohesion
 - [ ] Clear, descriptive names
 - [ ] No global state dependencies

@@ -2,5 +2,5 @@
   "event": "SessionStart",
   "matcher": { "type": "always" },
   "action": "inject",
-  "message": "The task boundary is the user's request. Unrelated work and unsolicited next steps are outside it."
+  "message": "Scope includes necessary supporting changes, not unrelated work or unsolicited next steps. Honor explicit limits; ask before exceeding them."
 }

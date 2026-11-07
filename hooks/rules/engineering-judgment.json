@@ -1,0 +1,6 @@
+{
+  "event": "SessionStart",
+  "matcher": { "type": "always" },
+  "action": "inject",
+  "message": "Use the engineering-judgment skill for non-trivial work; prefer system coherence over patch size."
+}

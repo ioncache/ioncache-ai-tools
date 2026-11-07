@@ -118,7 +118,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertTrue(text.startswith('expanded prompt\n\n'))
         self.assertIn('documentation-backed', text)
         self.assertIn('ioncache-ai-tools', text)
-        for name in ('scope-exactly-what-asked', 'verify-state-before-claiming'):
+        for name in ('engineering-judgment', 'scope-exactly-what-asked', 'verify-state-before-claiming'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
         self.assertEqual(self.prompt('Continue the feature'), {})
@@ -241,6 +241,19 @@ class CopilotAdapterTests(unittest.TestCase):
         path = self.write_events(events)
         result = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
         self.assertIn('Unsolicited plan.', result['_assistant_messages'])
+
+    def test_engineering_reminder_can_be_disabled_and_reenabled(self):
+        name = 'engineering-judgment'
+        rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
+        scope = json.loads((ROOT / 'hooks/rules/scope-exactly-what-asked.json').read_text())
+        self.write_config(self.home / '.copilot/ioncache-ai-tools.local.json', {'disabledRules': [name]})
+        text = self.prompt('Implement the feature')['modifiedTransformedPrompt']
+        self.assertNotIn(rule['message'], text)
+        self.assertIn(scope['message'], text)
+        self.write_config(self.project / '.github/copilot/ioncache-ai-tools.local.json', {'enabledRules': [name]})
+        self.invoke('preCompact')
+        self.assertIn(rule['message'], self.prompt('Implement the feature')['modifiedTransformedPrompt'])
+        self.assertEqual(self.prompt('Continue the feature'), {})
 
     def test_graphify_uses_consumer_cwd(self):
         graph = self.project / 'graphify-out/graph.json'

@@ -385,13 +385,22 @@ def main():
 
     # Real pilot rules load correctly for UserPromptSubmit
     real_user_prompt_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'UserPromptSubmit')]
+    assert 'engineering-judgment.json' not in real_user_prompt_rules
     assert 'scope-exactly-what-asked.json' not in real_user_prompt_rules
     assert 'verify-state-before-claiming.json' not in real_user_prompt_rules
     startup_rules = load_rules_for_event(RULES_DIR, 'SessionStart')
     assert {rule['name'] for rule in startup_rules} == {
-        'scope-exactly-what-asked.json', 'verify-state-before-claiming.json',
+        'engineering-judgment.json', 'scope-exactly-what-asked.json', 'verify-state-before-claiming.json',
     }
-    assert run_rules(startup_rules, 'SessionStart', {})['hookSpecificOutput']['hookEventName'] == 'SessionStart'
+    startup_context = run_rules(startup_rules, 'SessionStart', {})['hookSpecificOutput']
+    assert startup_context['hookEventName'] == 'SessionStart'
+    for name in ('engineering-judgment', 'scope-exactly-what-asked', 'verify-state-before-claiming'):
+        rule = next(r for r in startup_rules if r['name'] == name + '.json')
+        assert rule['message'] in startup_context['additionalContext']
+    filtered_rules = load_rules_for_event(RULES_DIR, 'SessionStart', {'engineering-judgment'})
+    filtered_context = run_rules(filtered_rules, 'SessionStart', {})
+    engineering = next(r for r in startup_rules if r['name'] == 'engineering-judgment.json')
+    assert engineering['message'] not in filtered_context['hookSpecificOutput']['additionalContext']
 
     # never_kill_without_asking: exercises the shipped module directly, a
     # tokenizing scripted rule (not a regex Pattern rule), since matching

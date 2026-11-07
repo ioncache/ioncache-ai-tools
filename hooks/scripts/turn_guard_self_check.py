@@ -765,7 +765,8 @@ class TurnGuardTests(unittest.TestCase):
         config = self.project / '.claude/ioncache-ai-tools.local.json'
         config.parent.mkdir()
         config.write_text(json.dumps({'disabledRules': ['scope-exactly-what-asked', 'verify-state-before-claiming']}))
-        self.assertNotIn('task boundary', str(self.prompt()))
+        scope_rule = Path(guard.__file__).parents[1] / 'rules/scope-exactly-what-asked.json'
+        self.assertNotIn(json.loads(scope_rule.read_text())['message'], str(self.prompt()))
         request = guard.review_request(self.data, self.state(), {})
         self.assertFalse(request['scope'])
         self.assertFalse(request['live_state'])
