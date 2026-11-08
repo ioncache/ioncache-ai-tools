@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import time
 
 from docs_cache import DISTILLER_ENV
 
@@ -179,7 +180,17 @@ def run_command(argv, stdin):
             )
             if cancelled:
                 raise RuntimeError('reviewer cancelled')
-            stdout, stderr = process.communicate(stdin, timeout=REVIEW_TIMEOUT)
+            deadline = time.monotonic() + REVIEW_TIMEOUT
+            while True:
+                try:
+                    # Bound waits so signals delivered just before blocking are serviced promptly.
+                    stdout, stderr = process.communicate(stdin, timeout=min(0.25, deadline - time.monotonic()))
+                    break
+                except subprocess.TimeoutExpired as error:
+                    if time.monotonic() >= deadline:
+                        error.timeout = REVIEW_TIMEOUT
+                        raise
+                    stdin = None
             if process.returncode:
                 raise reviewer_failure(argv, stderr, process.returncode)
             return stdout

@@ -18,6 +18,7 @@ import uuid
 from classify_question import QUESTION_CONTRACT, marker_path
 import block_emdash_turn
 import docs_cache
+import scope_review
 import turn_guard as guard
 import turn_review
 
@@ -662,15 +663,38 @@ class TurnGuardTests(unittest.TestCase):
         self.assertIn('incomplete', output['systemMessage'])
 
     def test_sigterm_reaps_the_reviewer(self):
+        for reviewer in ('turn_review', 'scope_review'):
+            with self.subTest(reviewer=reviewer):
+                self.assert_reviewer_cancelled(reviewer)
+
+    def test_deferred_sigterm_reaps_the_reviewer(self):
+        for reviewer in ('turn_review', 'scope_review'):
+            with self.subTest(reviewer=reviewer):
+                self.assert_reviewer_cancelled(reviewer, defer_signal=True)
+
+    def assert_reviewer_cancelled(self, reviewer, defer_signal=False):
         code = (
-            'import subprocess,sys,turn_review\n'
+            f'import signal,subprocess,sys,{reviewer}\n'
             'original=subprocess.Popen\n'
             'def launch(*args,**kwargs):\n'
             '    child=original(*args,**kwargs)\n'
-            '    print(child.pid,flush=True)\n'
+            f'    if {defer_signal!r}:\n'
+            '        original_communicate=child.communicate\n'
+            '        def deferred(*args,**kwargs):\n'
+            '            child.communicate=original_communicate\n'
+            '            # Reproduce delivery deferred until the blocking wait returns.\n'
+            '            mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})\n'
+            '            print(child.pid,flush=True)\n'
+            '            try:\n'
+            '                return original_communicate(*args,**kwargs)\n'
+            '            finally:\n'
+            '                signal.pthread_sigmask(signal.SIG_SETMASK,mask)\n'
+            '        child.communicate=deferred\n'
+            '    else:\n'
+            '        print(child.pid,flush=True)\n'
             '    return child\n'
             'subprocess.Popen=launch\n'
-            'turn_review.run_command([sys.executable,"-c","import time; time.sleep(30)"],None)\n'
+            f'{reviewer}.run_command([sys.executable,"-c","import time; time.sleep(30)"],None)\n'
         )
         child_pid = None
         worker = subprocess.Popen([sys.executable, '-c', code], cwd=Path(guard.__file__).parent,
@@ -690,6 +714,18 @@ class TurnGuardTests(unittest.TestCase):
             worker.communicate()
             if child_pid and process_exists(child_pid):
                 os.kill(child_pid, signal.SIGKILL)
+
+    def test_reviewer_wait_retries_preserve_stdin_and_partial_output(self):
+        payload = 'review input\n' * 10_000
+        code = (
+            'import sys,time\n'
+            'print("started",flush=True)\n'
+            'time.sleep(0.5)\n'
+            'sys.stdout.write(sys.stdin.read())\n'
+        )
+        for reviewer in (turn_review, scope_review):
+            with self.subTest(reviewer=reviewer.__name__), mock.patch.object(reviewer, 'REVIEW_TIMEOUT', 3):
+                self.assertEqual(reviewer.run_command([sys.executable, '-c', code], payload), 'started\n' + payload)
 
     def test_timeout_cleans_children_after_reviewer_leader_exits(self):
         code = (
