@@ -67,7 +67,7 @@ This preserves existing values, adds new settings, and removes retired settings.
 Hooks run the same reconciliation before use, so the first session after an
 install/update also synchronizes. There is no shared native installer callback:
 installation alone does not run the command. No plugin reinstall is needed
-when editing settings. See `README.md#configuration`.
+when editing settings. See [README.md#configuration](README.md#configuration).
 
 ## Guardrails
 
