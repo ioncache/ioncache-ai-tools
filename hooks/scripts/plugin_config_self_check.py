@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline configuration reconciliation and activation regressions."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+import io
 import json
 import os
 from pathlib import Path
@@ -129,6 +131,130 @@ class ConfigurationTests(unittest.TestCase):
                 config.sync_file(path, config.defaults())
         self.assertEqual(path.read_text(), original)
         self.assertEqual(list(self.root.glob('.settings.json-*')), [])
+
+    def test_runtime_keeps_readable_preferences_when_persistence_fails(self):
+        path = config.paths(self.project)['claude'][0]
+        original_open = Path.open
+
+        def fail_lock(target, *args, **kwargs):
+            if target.name.endswith('.lock'):
+                raise PermissionError('lock unavailable')
+            return original_open(target, *args, **kwargs)
+
+        failures = (
+            ('mkdir', mock.patch.object(Path, 'mkdir', side_effect=PermissionError('read-only directory'))),
+            ('lock-open', mock.patch.object(Path, 'open', autospec=True, side_effect=fail_lock)),
+            ('flock', mock.patch.object(config.fcntl, 'flock', side_effect=OSError('locking unavailable'))),
+            ('replace', mock.patch.object(config.os, 'replace', side_effect=PermissionError('read-only directory'))),
+        )
+        for boundary, failure in failures:
+            self.write(path, {'features': {'fix_emdash': False}})
+            original = path.read_text()
+            with self.subTest(boundary=boundary), failure, mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash'})
+                self.assertIn('could not persist', stderr.getvalue())
+                self.assertNotIn('features paused', stderr.getvalue())
+            self.assertEqual(path.read_text(), original)
+
+    def test_unreadable_preferences_still_pause_features(self):
+        path = config.paths(self.project)['claude'][0]
+        self.write(path, {'features': {'fix_emdash': False}})
+        read_text = Path.read_text
+
+        def unreadable(target, *args, **kwargs):
+            if target == path:
+                raise PermissionError('cannot read preferences')
+            return read_text(target, *args, **kwargs)
+
+        with mock.patch.object(Path, 'read_text', autospec=True, side_effect=unreadable), \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            self.assertEqual(config.synchronize(str(self.project), 'claude'), set(config.defaults()))
+        self.assertIn('features paused', stderr.getvalue())
+
+    def test_explicit_sync_exits_nonzero_for_read_and_write_failures(self):
+        path = config.paths(self.project)['claude'][0]
+        for failure in ('parse', 'persist'):
+            self.write(path, {'features': {'fix_emdash': False}})
+            if failure == 'parse':
+                path.write_text('{bad')
+            original = path.read_text()
+            persistence = (mock.patch.object(config.os, 'replace', side_effect=PermissionError('read-only'))
+                           if failure == 'persist' else nullcontext())
+            with self.subTest(failure=failure), persistence, \
+                    mock.patch.object(sys, 'argv', ['plugin_config.py', 'claude', '--project', str(self.project)]), \
+                    mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
+                    mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as stopped:
+                    config.main()
+                self.assertNotEqual(stopped.exception.code, 0)
+                self.assertEqual(stdout.getvalue(), '')
+                self.assertIn('failed', stderr.getvalue())
+            self.assertEqual(path.read_text(), original)
+        result = subprocess.run(
+            [sys.executable, '-B', config.__file__, 'claude', '--project', str(self.project)],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(path))
+        self.assertFalse(json.loads(path.read_text())['features']['fix_emdash'])
+
+    def test_unchanged_settings_do_not_acquire_a_writer_lock(self):
+        path = self.root / 'settings.json'
+        catalog = config.defaults()
+        stored = config.sync_file(path, catalog)
+        with mock.patch.object(config.fcntl, 'flock') as lock:
+            self.assertEqual(config.sync_file(path, catalog), stored)
+        lock.assert_not_called()
+
+    def test_sync_rereads_preferences_after_acquiring_the_writer_lock(self):
+        path = self.root / 'settings.json'
+        self.write(path, {'features': {'fix_emdash': True}})
+        flock = config.fcntl.flock
+
+        def concurrent_edit(descriptor, operation):
+            flock(descriptor, operation)
+            path.write_text('{"features":{"fix_emdash":false}}')
+
+        with mock.patch.object(config.fcntl, 'flock', side_effect=concurrent_edit):
+            stored = config.sync_file(path, config.defaults())
+        self.assertFalse(stored['features']['fix_emdash'])
+        self.assertEqual(json.loads(path.read_text()), stored)
+
+    def test_feature_lookup_reads_the_catalog_once(self):
+        with mock.patch.object(config, 'defaults', wraps=config.defaults) as catalog:
+            self.assertTrue(config.enabled('never_kill_without_asking', self.data))
+        self.assertEqual(catalog.call_count, 1)
+
+    def test_scope_review_resolves_settings_only_at_start_and_revalidation(self):
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+        with mock.patch.object(config, 'sync_file', wraps=config.sync_file) as reads, \
+                mock.patch.object(scope_review, 'review', return_value={'ok': True, 'reason': ''}):
+            self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'},
+            }))
+        self.assertEqual(reads.call_count, 2)
+
+    def test_configuration_changes_during_review_invalidate_the_verdict(self):
+        path = config.paths(self.project)['claude'][0]
+        for event in ('PreToolUse', 'Stop'):
+            self.write(path, {'features': {}})
+            scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+            data = {
+                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'},
+                'last_assistant_message': 'The change is ready.', '_response_coverage': 'turn',
+            }
+
+            def change_policy(_harness, _request):
+                self.write(path, {'features': {'scope-exactly-what-asked': False}})
+                return {'ok': True, 'reason': ''}
+
+            with self.subTest(event=event), mock.patch.object(scope_review, 'review', side_effect=change_policy) as review:
+                output = scope_guard.run_hook(event, data)
+                self.assertIn('changed during', str(output))
+                with scope_guard.store_for(self.data) as store:
+                    self.assertEqual(store.get(scope_guard.CATEGORY, 'state')['reviews'], {})
+                self.assertIsNone(scope_guard.run_hook(event, data))
+                self.assertEqual(review.call_count, 1)
 
     def test_all_features_off_prevents_policy_and_tool_denials(self):
         global_path = config.paths(self.project)['claude'][0]

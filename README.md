@@ -505,6 +505,10 @@ by any host's effective settings is disabled across all three hosts.
 Synchronization preserves explicit values for retained keys, adds new global
 defaults, and removes unknown or retired keys from global and project JSON.
 Writes are locked and atomic; intentional worktree symlinks are preserved.
+Unchanged files do not acquire a writer lock. Runtime hooks keep valid
+preferences in effect if persistence fails, with a diagnostic instead of
+disabling features. The explicit synchronization command exits nonzero if
+settings cannot be read, validated, or persisted.
 Malformed or unreadable preferences are not replaced with defaults. A diagnostic
 pauses plugin features until the file is repaired, so configuration recovery
 remains possible. This does not bypass the host's own permissions.
@@ -535,8 +539,9 @@ Available IDs:
 | `graphify` | Graph-discovery guidance and gate |
 | `skill:<name>` | Each shipped skill, for example `skill:review-code` |
 
-Tool guards use current settings on each invocation. Start a new session to
-refresh instructions already delivered to context. Skill opt-outs deny explicit
+Tool guards use current settings on each invocation and refresh them after
+semantic review before accepting a verdict. Start a new session to refresh
+instructions already delivered to context. Skill opt-outs deny explicit
 `Skill` / `skill` tool loads and instruct the assistant not to apply disabled
 skills through automatic or slash-command activation. They do not unregister
 skills from the host's discovery menu; instruction-based activation remains

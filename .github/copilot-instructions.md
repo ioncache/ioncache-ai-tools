@@ -192,7 +192,11 @@ construct the character with `chr(0x2014)` to pass this source check.
   project values, then the project file. Union disables across hosts.
   Legacy JSON lists migrate in place; Codex TOML is a one-time migration source
   only when the companion JSON does not exist. Never rewrite host TOML.
-  Serialize writers and atomically replace valid settings, preserving symlinks.
+  Read unchanged settings without a writer lock; re-read under the lock before
+  atomic replacement, preserving symlinks. Runtime persistence failures warn
+  but retain valid effective settings; explicit synchronization fails nonzero.
+  Reuse settings within a hook invocation, refreshing after semantic review
+  before accepting or caching its verdict. Never cache across invocations.
   Malformed or unreadable settings remain untouched: warn and pause plugin
   features so users can repair their configuration, without granting host
   permissions. See ../README.md#configuration.

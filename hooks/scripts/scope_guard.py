@@ -10,7 +10,7 @@ import uuid
 
 from block_pending_question import is_mutating
 from classify_question import QUESTION_CONTRACT, has_marker, has_question, set_marker
-from plugin_config import defaults, enabled, synchronize
+from plugin_config import enabled, feature_settings
 from evidence_store import EvidenceStore
 from rule_engine import (
     load_rules_for_event, run_rules,
@@ -71,7 +71,7 @@ def denial(reason):
 
 
 def bootstrap(data, event):
-    disabled = synchronize(data['cwd'], data.get('_ioncache_harness', 'claude'))
+    disabled = set(feature_settings(data).disabled)
     if 'skill:engineering-judgment' in disabled:
         disabled.add('engineering-judgment')
     rules = load_rules_for_event(Path(__file__).parent.parent / 'rules', 'SessionStart', disabled)
@@ -441,12 +441,14 @@ def check_candidate(data, state, candidate):
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         print(f'scope-guard: semantic checker failed ({type(error).__name__})', file=sys.stderr)
         return key, {'ok': False, 'reason': 'The semantic checker is unavailable or returned invalid output.'}
+    fresh_data = {**data, '_ioncache_features': feature_settings(data, refresh=True)}
     with store_for(data) as store:
         current = store.get(CATEGORY, 'state')
-        if current and 'id' in current and fingerprint(review_request(data, current, candidate)) == key:
-            current['reviews'] = dict([*current.get('reviews', {}).items()][-15:])
-            current['reviews'][key] = result
-            store.put(CATEGORY, ('state', current))
+        if not current or 'id' not in current or fingerprint(review_request(fresh_data, current, candidate)) != key:
+            return key, {'ok': False, 'reason': 'The request or authorization changed during review. Retry with the current request.'}
+        current['reviews'] = dict([*current.get('reviews', {}).items()][-15:])
+        current['reviews'][key] = result
+        store.put(CATEGORY, ('state', current))
     return key, result
 
 
@@ -456,7 +458,7 @@ def pre_tool(data):
         if isinstance(skill, str):
             namespace, _, name = skill.split(' ')[0].rpartition(':')
             setting = 'skill:' + name
-            if namespace in ('', 'ioncache-ai-tools') and setting in defaults() and not enabled(setting, data):
+            if namespace in ('', 'ioncache-ai-tools') and setting in feature_settings(data).catalog and not enabled(setting, data):
                 return denial(f'The {name} plugin skill is disabled in configuration.')
     mutating = is_mutating(data.get('tool_name'), data.get('tool_input'))
     delegation = data.get('tool_name') in DELEGATION_TOOLS
@@ -691,7 +693,9 @@ def run_hook(event, data):
         return None
     if not isinstance(data, dict) or not isinstance(data.get('cwd'), str) or not data['cwd']:
         raise ValueError('missing cwd')
-    disabled = synchronize(data['cwd'], data.get('_ioncache_harness', 'claude'))
+    snapshot = feature_settings(data, refresh=True)
+    data = {**data, '_ioncache_features': snapshot}
+    disabled = snapshot.disabled
     if not enabled('answer-questions', data):
         set_marker(data, False)
     if {'answer-questions', 'scope-exactly-what-asked', 'graphify',

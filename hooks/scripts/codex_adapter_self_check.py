@@ -16,7 +16,7 @@ import uuid
 
 import codex_adapter
 import docs_cache
-import scope_guard as turn_guard
+import scope_guard
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -162,8 +162,8 @@ class CodexAdapterTests(unittest.TestCase):
             with self.subTest(result=result):
                 self.invoke('PreToolUse', **fields)
                 self.invoke('PostToolUse', **fields, tool_response=result)
-                with turn_guard.store_for(self.payload) as store:
-                    state = store.get(turn_guard.CATEGORY, 'state')
+                with scope_guard.store_for(self.payload) as store:
+                    state = store.get(scope_guard.CATEGORY, 'state')
                 self.assertNotIn('observations', state)
                 self.assertNotIn('command_history', state)
 

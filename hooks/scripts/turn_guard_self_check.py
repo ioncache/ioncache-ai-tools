@@ -338,7 +338,7 @@ class TurnGuardTests(unittest.TestCase):
 
     def test_self_contained_chat_request_recovers_without_question_tool_consent(self):
         complete_request = 'Implement the fix in target.py. Do not commit or push.'
-        def scope_review(harness, request):
+        def scope_review(_harness, request):
             permitted = request['latest_request'] == complete_request
             return {'ok': permitted, 'reason': '' if permitted else 'Missing current authorization.'}
         with mock.patch.object(turn_review, 'review', side_effect=scope_review):

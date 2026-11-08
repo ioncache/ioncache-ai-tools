@@ -506,7 +506,9 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
     ``UserPromptSubmit``. For example, to omit a rule for one evaluation:
     ``load_rules_for_event('hooks/rules', 'PreToolUse', {'fix_emdash'})``.
     Disabled IDs are filenames without extensions; disabled Python rules
-    are not imported. Other Python rule files may execute module-level code.
+    are not imported. Bundled rules absent from the shipped configuration
+    catalog are also excluded. Explicit custom rule directories have no
+    catalog filter. Eligible Python rules may execute module-level code.
 
     An empty directory or no enabled rules for the event returns an empty
     list. An individual invalid rule is logged and skipped. An unavailable

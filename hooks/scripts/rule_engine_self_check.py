@@ -378,6 +378,10 @@ def main():
     assert bad_dir_rules[0]['name'] == 'good.json', 'the valid rule should still be the one that loads'
     shutil.rmtree(bad_rules_dir, ignore_errors=True)
 
+    bundled = {os.path.splitext(name)[0] for name in os.listdir(RULES_DIR)
+               if name.endswith(('.json', '.py'))}
+    assert bundled - set(rule_engine.defaults()) == {'verify-state-before-claiming'}, bundled
+
     # Real pilot rules load correctly for PreToolUse
     real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
     assert 'never_kill_without_asking.py' in real_pre_tool_use_rules
