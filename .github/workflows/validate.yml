@@ -26,7 +26,7 @@ jobs:
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
                    .codex-plugin/plugin.json .agents/plugins/marketplace.json \
                    .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
-                   hooks/copilot-hooks.json; do
+                   hooks/copilot-hooks.json config/defaults.json; do
             python3 -c "import json; json.load(open('$f')); print('$f OK')"
           done
 
@@ -53,6 +53,9 @@ jobs:
 
       - name: Run turn-guard self-check
         run: python3 hooks/scripts/turn_guard_self_check.py < /dev/null
+
+      - name: Run configuration and active scope self-check
+        run: python3 hooks/scripts/plugin_config_self_check.py < /dev/null
 
       - name: Run Copilot adapter self-check
         run: python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null

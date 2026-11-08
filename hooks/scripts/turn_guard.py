@@ -98,7 +98,7 @@ def lifecycle(event, data):
             state = child_state(inherited)
         refresh = data.get('source') in ('compact', 'clear')
         if data.get('source') == 'clear':
-            state = {}
+            state = {'history_recovery_disabled': True}
             set_marker(data, False)
             set_marker(data, False, 'prompt')
         elif state.get('question'):
@@ -149,6 +149,8 @@ def begin_turn(data):
             requests.pop(0)
             incomplete = True
         history, history_incomplete = prior_history(previous)
+        if not parent:
+            append_recovery(previous, {'kind': 'request', 'text': prompt})
         state = {
             'id': uuid.uuid4().hex, 'prompt': prompt, 'requests': requests,
             'request_context_incomplete': incomplete or history_incomplete,
@@ -165,6 +167,11 @@ def begin_turn(data):
             'user_interactions': previous.get('user_interactions', []),
             'interaction_context_incomplete': previous.get('interaction_context_incomplete', False),
             'hook_decisions': previous.get('hook_decisions', []),
+            'command_history': previous.get('command_history', []),
+            'command_history_incomplete': previous.get('command_history_incomplete', False),
+            'recovered_dialogue': previous.get('recovered_dialogue', []),
+            'recovery_problem': previous.get('recovery_problem', ''),
+            'history_recovery_disabled': previous.get('history_recovery_disabled', False),
         }
         store.put(CATEGORY, ('state', state))
         set_marker(data, state['question'])
@@ -260,6 +267,7 @@ def child_state(parent):
         'last_earlier_response': [], 'earlier_response_truncated': False, 'earlier_response_omitted': False,
         'messages': [], 'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
         'hook_decisions': [],
+        'command_history': [], 'command_history_incomplete': False,
     }
 
 
@@ -387,6 +395,18 @@ def record_interaction(state, data, item):
     count = len(items)
     state['user_interactions'] = bounded(items)
     state['interaction_context_incomplete'] = state.get('interaction_context_incomplete', False) or len(items) < count
+    if data.get('agent_id') in (None, '', 'root'):
+        append_recovery(state, {'kind': 'interaction', **interaction})
+
+
+def append_recovery(state, item):
+    if not state.get('recovered_dialogue'):
+        return
+    dialogue = [*state['recovered_dialogue'], item]
+    if len(json.dumps(dialogue)) > turn_review.MAX_RECOVERY_CHARS:
+        state.update(recovered_dialogue=[], recovery_problem='Recovered dialogue exceeded its retention budget.')
+    else:
+        state['recovered_dialogue'] = dialogue
 
 
 def file_snapshot(data):
@@ -412,6 +432,15 @@ def current_observations(state):
     return items
 
 
+def record_command(state, data, item):
+    if data['tool_name'] != 'Bash':
+        return
+    records = [*state.get('command_history', []), {**item, 'tool_use_id': data.get('tool_use_id')}]
+    count = len(records)
+    state['command_history'] = bounded(records)
+    state['command_history_incomplete'] = state.get('command_history_incomplete', False) or len(records) < count
+
+
 def record_tool(data):
     ensure_child_state(data)
     with store_for(data) as store:
@@ -425,6 +454,7 @@ def record_tool(data):
             invalidate_live_state(store)
             state = store.get(CATEGORY, 'state')
             item['mutation'] = state['mutation']
+        record_command(state, data, item)
         key = 'docs' if is_documentation(data) else 'observations'
         state[key] = bounded([*state.get(key, []), item])
         if graph_query(data) and state.get('pending_graph') == graph_identity(data):
@@ -473,7 +503,13 @@ def review_request(data, state, candidate):
         'assistant_context': state.get('history', []),
         'user_interactions': state.get('user_interactions', []),
         'interaction_context_incomplete': state.get('interaction_context_incomplete', False),
+        'recovered_dialogue': state.get('recovered_dialogue', []),
+        'recovery_problem': state.get('recovery_problem', ''),
         'hook_decisions': state.get('hook_decisions', []) if candidate.get('kind') == 'response' else [],
+        'command_history': state.get('command_history', []) if candidate.get('kind') == 'response' else [],
+        'command_history_incomplete': (
+            candidate.get('kind') == 'response' and state.get('command_history_incomplete', False)
+        ),
         'question_only': state['question'],
         'scope': 'scope-exactly-what-asked' not in disabled,
         'live_state': 'verify-state-before-claiming' not in disabled,
@@ -544,7 +580,13 @@ def pre_tool(data):
     candidate = {'kind': 'tool', 'tool': data['tool_name'], 'input': data['tool_input']}
     key, result = check_candidate(data, state, candidate)
     if not result['ok']:
-        return denial('Turn check: ' + result['reason'])
+        recovery = ''
+        if state.get('request_context_incomplete') or state.get('interaction_context_incomplete') or state.get('recovery_problem'):
+            recovery = (
+                ' If scope or approval is missing, provide the complete scope and authorization '
+                'directly in chat; a confirmation tool is not required. Repeating this call grants no permission.'
+            )
+        return denial('Turn check: ' + result['reason'] + recovery)
     with store_for(data) as store:
         current = store.get(CATEGORY, 'state')
         if not current or 'id' not in current or fingerprint(review_request(data, current, candidate)) != key:
@@ -662,6 +704,14 @@ def response_candidate(data, state, response):
     }
 
 
+def remember_recovery(data, state):
+    recovered = data.get('_recovered_history')
+    if (data.get('_ioncache_harness') == 'copilot' and data.get('agent_id') in (None, '', 'root')
+            and data.get('_recovery_turn') == state.get('id') and isinstance(recovered, dict)
+            and not state.get('history_recovery_disabled')):
+        state.update(recovered_dialogue=recovered['dialogue'], recovery_problem=recovered['problem'])
+
+
 def remember_response(data, state, response):
     candidate = response_candidate(data, state, response)
     state['last_response'] = response[:MAX_RESULT_CHARS]
@@ -711,8 +761,10 @@ def stop(data):
     response = data.get('last_assistant_message')
     with store_for(data) as store:
         state = store.get(CATEGORY, 'state')
-        if state and 'id' in state and isinstance(response, str):
-            remember_response(data, state, response)
+        if state and 'id' in state:
+            remember_recovery(data, state)
+            if isinstance(response, str):
+                remember_response(data, state, response)
             store.put(CATEGORY, ('state', state))
     if not state or 'id' not in state:
         return None

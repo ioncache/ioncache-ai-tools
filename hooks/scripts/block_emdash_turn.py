@@ -26,6 +26,8 @@ itself written or edited.
 import json
 import sys
 
+from plugin_config import enabled
+
 EM_DASH = chr(0x2014)
 
 
@@ -35,6 +37,8 @@ def main():
     except ValueError:
         sys.exit(0)
 
+    if not enabled('fix_emdash', input_data):
+        return
     text = input_data.get("last_assistant_message") or ""
 
     if EM_DASH in text:
@@ -49,7 +53,7 @@ def main():
         )
         if input_data.get('cwd') and input_data.get('session_id'):
             try:
-                from turn_guard import remember_continuation
+                from scope_guard import remember_continuation
                 remember_continuation(input_data, reason)
             except Exception as error:
                 print(f'block-emdash: continuation recording failed ({type(error).__name__})', file=sys.stderr)

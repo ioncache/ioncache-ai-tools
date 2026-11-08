@@ -46,7 +46,11 @@ class DocsCacheTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='docs-cache-check-')
         self.addCleanup(temp.cleanup)
-        patcher = mock.patch.dict(os.environ, {'XDG_CACHE_HOME': temp.name})
+        patcher = mock.patch.dict(os.environ, {
+            'XDG_CACHE_HOME': temp.name, 'HOME': temp.name,
+            'COPILOT_HOME': str(Path(temp.name) / '.copilot'),
+            'CODEX_HOME': str(Path(temp.name) / '.codex'),
+        })
         patcher.start()
         self.addCleanup(patcher.stop)
         self.key = docs_cache.cache_key(URL, None)

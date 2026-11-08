@@ -53,14 +53,30 @@ Remove: `copilot plugin uninstall ioncache-ai-tools`.
 
 This plugin targets Copilot CLI, not the cloud agent or VS Code.
 
+### Synchronize settings
+
+The shipped `config/defaults.json` is the complete enabled-by-default catalog.
+After installing or updating, run this from the installed plugin directory,
+using your host name (`claude`, `copilot`, or `codex`):
+
+```sh
+python3 hooks/scripts/plugin_config.py copilot --project /absolute/path/to/project
+```
+
+This preserves existing values, adds new settings, and removes retired settings.
+Hooks run the same reconciliation before use, so the first session after an
+install/update also synchronizes. There is no shared native installer callback:
+installation alone does not run the command. No plugin reinstall is needed
+when editing settings. See `README.md#configuration`.
+
 ## Guardrails
 
 | Guard | Effect |
 | --- | --- |
 | Answer-only questions | Blocks recognized mutations for the whole question turn; checks replies for unsolicited work |
-| Documentation first | Checks third-party specifics against observed documentation, including applicable cached facts |
+| Documentation first | Supplies documentation-first guidance; does not verify claims |
 | Engineering judgment | Prefers coherent system behavior over the shortest patch |
-| Scope and current state | Checks mutation scope and claims against the request and current-turn observations |
+| Scope | Checks recognized mutations, delegation and response work products against the user's authorization |
 | Process termination | Blocks recognized process-kill commands until the rule is disabled |
 | Lockfiles | Blocks direct edits; use the package manager |
 | Worktrees | Directs creation through the setup-aware `create-worktree` skill |
@@ -75,7 +91,8 @@ Patches with ambiguous file-header whitespace are rejected.
 
 Ordinary prompts add no built-in reminder text after initialization.
 Question turns add a 204-character answer-only contract, not a request to
-reload a skill. The default bootstrap stays below 800 characters and runs at
+reload a skill. The bootstrap includes enabled policies and disabled-skill
+instructions, and runs at
 session initialization, context recovery, and supported subagent startup.
 If a host misses startup, the first prompt supplies it. Copilot adds a 43-character
 wrapper only when a transformed prompt actually has context to append.
@@ -88,35 +105,63 @@ These counts exclude host formatting and tokens.
 | Question, no graph | 1,641 characters | 204 characters |
 | Question, graph present | 1,834 characters | 204 characters |
 
-`turn_guard.py` records requests, assistant proposals, bounded tool observations,
-documentation and decisions outside the conversation. Assistant proposals
+`scope_guard.py` records requests, assistant proposals, question-tool exchanges,
+and scope decisions outside the conversation. Assistant proposals
 provide context for later approval; they do not authorize work themselves.
 It reuses `EvidenceStore` under
-`~/.cache/ioncache-ai-tools/claim-evidence/`, with a separate `turn-policy`
-namespace. It does not activate the experimental claim-evidence checkpoint
-workflow. These private records can contain source and tool output.
-Session end discards live observations and review decisions but retains request
-context and applicable documentation for resume. A clear resets the active
-request. Older request history and large observations are bounded; omitted
-content is not treated as verified evidence.
+`~/.cache/ioncache-ai-tools/claim-evidence/`, with a separate `scope-policy`
+namespace. The directory name is historical: active hooks do not load the
+claim checker or collect file snapshots, shell receipts, or documentation evidence.
+These private records can contain user requests and assistant text.
+Session end discards review decisions but retains request context for resume.
+A clear resets the active request. Older request history is bounded; omitted
+content cannot establish authorization.
 Assistant history reserves space for the final response, then retains recent
 messages within the remaining budget. A separate bounded recent-message buffer
 preserves proposals after long research without replacing the earlier-prose audit
 buffer. Each retained message records its own completeness; omitting older prose
 does not make a complete recent proposal unusable for later approval.
 
-Question-tool proposals and returned answers have their own bounded context,
-separate from live observations. Complete exchanges up to 16,000 serialized
-characters survive ordinary evidence eviction, mutations, compaction and resume.
+Question-tool proposals and returned answers have their own bounded context.
+Complete exchanges up to 16,000 serialized characters survive mutations,
+compaction and resume.
 Larger exchanges retain explicitly truncated excerpts; retained exchanges share
 a 32,000-character budget, with omissions marked. Successful tool execution is
 not consent: refusals and unavailable-user replies remain visible. Matching
 tool starts and completions establish provenance, not permission. New user
 restrictions still control, and clearing the session clears this context.
-The guard also records its own tool denials without requiring a post-tool event.
-Response checks can explain those historical decisions without treating their
-reasons as proven facts. These receipts do not authorize tools or certify live
-state. Neither kind of record bypasses the semantic check or host permissions.
+These exchanges do not bypass the semantic check or host permissions.
+
+Copilot also recovers lost scope and question-tool exchanges from the native
+transcript path supplied at root Stop. Recovery checks the session header,
+matches the exact Stop invocation, and pairs native `ask_user` starts and
+completions. Answers use native detailed output when available; text omitted
+by the host cannot establish permission. Prompt-hook inputs provide request
+context. Other message text cannot grant permission, and conflicting restrictions
+cannot be silently discarded. Reading alleged approval through Bash or a file
+tool is not recovery.
+
+The recovered dialogue stays separate from ordinary request history and survives
+mutations, compaction and resume. Newly observed requests and answers extend it,
+so later restrictions remain visible even after ordinary request-history eviction.
+Recovery retains the whole chronological dialogue or none of it: its limit is
+48,000 serialized characters, with a 64 MiB transcript, 8 MiB event and
+two-second scan limit. Combined reviewer-budget pressure can also omit it as a
+whole. Missing, unsafe, mismatched or incomplete history never supplies partial
+permission. A clear discards recovery and prevents restoring the old transcript.
+
+Recovery becomes available after Stop, not before the first blocked edit after
+an upgrade. It does not automatically retry edits or authorize a new task.
+An unavailable final assistant message does not prevent history recovery;
+the response remains unverified. Arbitrary tool output is not substituted
+for missing final assistant text.
+Claude and Codex do not import historical transcripts for approval recovery.
+On every host, a self-contained request stating the scope and authorization
+directly in chat remains the fallback when old context is unavailable.
+An unavailable confirmation tool is not consent, but does not revoke established
+approval or require another confirmation tool to authorize a complete new request.
+Real restrictions and semantic checks still apply; repeating a denied call
+never grants permission.
 
 Questions retain the conservative classifier: a question mixed with an
 instruction still blocks recognized mutations. The work-product exception
@@ -132,12 +177,16 @@ starts or cannot establish the fence.
 
 Claude's `MessageDisplay` hook silently records streamed text without changing
 the display or running a model. Copilot retains root assistant prose across
-tool calls through the exact current Stop event. Missing batches, truncated
+tool calls through the exact current Stop event. A root `session.task_complete`
+summary is also assistant response text and receives the same semantic and
+punctuation checks. Missing summaries remain unavailable; child events and
+summaries from before a new request or assistant turn cannot supply the final
+response. Missing batches, truncated
 text and final-message-only inputs are reported as incomplete coverage, not a
 successful whole-turn check. Codex supplies the final message only: its hook
 documentation explicitly describes the transcript format as unstable, so the
 plugin does not parse it. Earlier prose is checked for question and scope
-violations; later evidence cannot retroactively verify earlier live-state claims.
+violations, not factual accuracy.
 
 Compaction preserves the active request and hard question gate. Claude and
 Codex recover context through `SessionStart`. Copilot recovers on the next
@@ -152,7 +201,7 @@ querying a different graph does not satisfy the gate. This is a common-action
 guard, not an exhaustive shell interpreter or proof of query relevance.
 
 **Semantic checks make additional model calls and consume the host's usage.**
-`turn_review.py` invokes the same host's CLI for recognized mutations,
+`scope_review.py` invokes the same host's CLI for recognized mutations,
 delegations, follow-up agent messages and responses. It does not select a model: the isolated CLI's default
 applies. Claude and Copilot have no tools; Codex disables shell, web and native
 subagents in read-only mode but may expose utility tools. Runs suppress this
@@ -170,27 +219,18 @@ for every hook event. Use a current supported CLI. Recognized unsupported-option
 errors include an upgrade instruction instead of a generic checker failure.
 The hook does not retry with weaker isolation.
 
-The checker receives the actual request, candidate and observed evidence,
-including resource identifiers, fetch ages, versions when present, failures and
-truncation. It may reuse applicable documentation, but must not use an older
-observation to certify live state. Mutations invalidate live observations across
-all actors in the session, including parent observations after child writes.
-Tool starts and completions are correlated by native IDs or an unambiguous
-tool/input key. File snapshots taken before and after a read detect changes
-during the read as well as later changes. Unmatched or ambiguous reads cannot
-certify current state. Explicit child startup or resume binds the child to the
-current parent request; an old worker cannot silently inherit new authority.
-Shell outcomes use host status metadata, not exit-code phrases in command output.
-Codex 0.163.0's unified-exec hook supplies output without an exit status, so those
-observations record success as unknown and cannot establish successful execution:
-https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/src/tools/context.rs#L438-L446.
-Identical semantic decisions are cached until the candidate, request or
-evidence changes. Operational failures are not cached as semantic denials.
+The checker receives the request, candidate, proposal and approval context,
+with explicit completeness metadata. Its policy explicitly excludes factual
+claims, execution outcomes, live state, and documentation verification.
+Missing factual evidence is not a violation. Explicit child startup or resume
+binds the child to the current parent request; an old worker cannot silently
+inherit new authority. Decisions are cached until the candidate, authorization
+context, or relevant configuration changes. Source reads and background command
+results do not invalidate scope decisions. Operational failures are not cached
+as semantic denials.
 
 Each model call has a 60-second deadline and a 90,000-byte input budget.
-Tool inputs and results are bounded together with their evidence records.
-Evidence excerpts and denial receipts yield to request and approval context
-when fitting the combined budget. Older context can then be omitted, with
+Older request and approval context can be omitted to fit the budget, with
 explicit omission metadata. The latest request and proposed candidate are never silently cut.
 Private review payloads travel over stdin, not process arguments.
 Timeouts and catchable cancellation terminate and reap the reviewer process
@@ -214,7 +254,14 @@ Host tool coverage also limits observation: Codex hosted search bypasses local
 tool hooks, and Copilot's built-in general-purpose agent has no subagent
 start/stop events. Identified child tool events initialize child state when
 startup omitted the identity. Anonymous child stops warn without consuming the
-parent's review budget. Unobserved activity is not a verified receipt.
+parent's review budget.
+
+The previous `turn_guard.py` / `turn_review.py` claim-checking implementation,
+experimental claim-evidence helpers, and state-claim reminder remain in source
+for reference and direct self-checks. Active hooks do not register or import
+them. The retired `claim-evidence` and `verify-state-before-claiming` settings
+are absent from defaults and removed from synchronized plugin JSON; stale
+settings cannot reactivate them.
 
 Hook contracts and CLI isolation options were checked against:
 
@@ -229,6 +276,8 @@ Hook contracts and CLI isolation options were checked against:
 - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
 - https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/run-cli-programmatically
 - https://github.com/github/copilot-sdk/blob/main/docs/features/streaming-events.md
+- https://github.com/github/copilot-sdk/blob/main/docs/features/agent-loop.md
+- https://github.com/github/copilot-sdk/blob/main/nodejs/src/generated/session-events.ts
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
 - https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/request_user_input_spec.rs
@@ -423,44 +472,50 @@ quote them in commands if paths may contain spaces. Missing symlink sources
 are skipped. Copy, generated-file, and symlink paths must stay within the
 worktree roots. Review setup commands before using an unfamiliar repository.
 
-## Disabling a rule
+## Configuration
 
-Settings take effect on the next tool call, without reinstalling.
+`config/defaults.json` lists every active guard/service and all 19 skills.
+Every setting ships as `true`. Set a feature to `false` to opt out.
+Global files contain the full current catalog; project files are sparse
+overrides so they continue inheriting future global changes.
 
 | Host | Global settings | Project settings |
 | --- | --- | --- |
 | Claude Code | `~/.claude/ioncache-ai-tools.local.json` | `.claude/ioncache-ai-tools.local.json` |
 | Copilot CLI | `~/.copilot/ioncache-ai-tools.local.json` | `.github/copilot/ioncache-ai-tools.local.json` |
-| Codex | `~/.codex/config.toml` | Project table in the same file |
+| Codex | `~/.codex/ioncache-ai-tools.local.json` | `.codex/ioncache-ai-tools.local.json` |
 
-For Claude Code or Copilot CLI:
+For any host, edit the corresponding global or project file:
 
 ```json
-{ "disabledRules": ["never_kill_without_asking"] }
+{ "features": { "never_kill_without_asking": false } }
 ```
 
 To re-enable it for one project, put this in that project's settings:
 
 ```json
-{ "enabledRules": ["never_kill_without_asking"] }
-```
-
-For Codex:
-
-```toml
-[ioncache-ai-tools]
-disabled_rules = ["never_kill_without_asking"]
-
-[projects."/absolute/path/to/project".ioncache-ai-tools]
-enabled_rules = ["never_kill_without_asking"]
+{ "features": { "never_kill_without_asking": true } }
 ```
 
 `COPILOT_HOME` and `CODEX_HOME` override their respective global directories.
-Codex's `--strict-config` rejects these custom tables. Ignore project-local
-JSON settings in consuming repositories.
+Ignore project-local JSON settings in consuming repositories.
+Within each host, project values override global values. A feature disabled
+by any host's effective settings is disabled across all three hosts.
 
-Within each host, project enables override disables. A rule disabled by any
-host's settings is disabled across all three hosts.
+Synchronization preserves explicit values for retained keys, adds new global
+defaults, and removes unknown or retired keys from global and project JSON.
+Writes are locked and atomic; intentional worktree symlinks are preserved.
+Malformed or unreadable preferences are not replaced with defaults. A diagnostic
+pauses plugin features until the file is repaired, so configuration recovery
+remains possible. This does not bypass the host's own permissions.
+
+Legacy `disabledRules` / `enabledRules` JSON lists migrate in place.
+Old Codex plugin tables in `config.toml` migrate once, when the companion
+plugin JSON is absent. Embedded project values are retained in a `projects`
+map in the new JSON; project-local files override them. The plugin does not
+rewrite host-owned TOML or reread it after migration. Remove obsolete custom
+tables yourself before using Codex `--strict-config`; retired values left in
+that old file cannot enable a feature absent from the shipped catalog.
 
 Available IDs:
 
@@ -469,15 +524,24 @@ Available IDs:
 | `never_kill_without_asking` | Process termination |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
-| `fix_emdash` | Em-dashes in edits and shell input |
+| `fix_emdash` | Em-dashes in edits, shell input, and final responses |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
 | `engineering-judgment` | Startup engineering policy and skill activation guidance |
 | `scope-exactly-what-asked` | Startup scope policy and semantic scope check |
-| `verify-state-before-claiming` | Startup state policy and live-state claim check |
+| `answer-questions` | Question classification enforcement and answer-only review |
+| `approval-recovery` | Copilot native transcript approval recovery |
+| `documentation-first` | Documentation-first startup guidance |
+| `docs-cache` | Cache hits, background distillation, and cache diagnostics |
+| `graphify` | Graph-discovery guidance and gate |
+| `skill:<name>` | Each shipped skill, for example `skill:review-code` |
 
-Disabling `engineering-judgment` excludes it from future startup or recovery
-policy delivery. It does not erase instructions already in context or remove
-the skill and references to it from other skills.
+Tool guards use current settings on each invocation. Start a new session to
+refresh instructions already delivered to context. Skill opt-outs deny explicit
+`Skill` / `skill` tool loads and instruct the assistant not to apply disabled
+skills through automatic or slash-command activation. They do not unregister
+skills from the host's discovery menu; instruction-based activation remains
+subject to host behavior. Disabling `skill:engineering-judgment` also suppresses
+the reminder to load that skill. Other guard and skill settings are independent.
 
 ## Writing and coding skills
 
