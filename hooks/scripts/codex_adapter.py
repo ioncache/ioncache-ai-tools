@@ -8,6 +8,7 @@ import sys
 import docs_cache
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
+from plugin_config import synchronize
 
 
 def prompt_submit(data):
@@ -65,6 +66,7 @@ def run_hook(event, data):
         raise ValueError('missing or invalid Codex session_id')
     if not isinstance(data.get('cwd'), str) or not data['cwd']:
         raise ValueError('missing or invalid Codex cwd')
+    synchronize(data['cwd'], 'codex')
     if event == 'UserPromptSubmit':
         return prompt_submit(data)
     if event == 'PreToolUse':

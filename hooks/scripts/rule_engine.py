@@ -18,6 +18,7 @@ import signal
 import sys
 
 from hook_adapter_common import AmbiguousPatchHeader, PATCH_REWRITE_REASON, patch_inputs
+from plugin_config import defaults, synchronize
 
 try:
     import tomllib
@@ -505,7 +506,9 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
     ``UserPromptSubmit``. For example, to omit a rule for one evaluation:
     ``load_rules_for_event('hooks/rules', 'PreToolUse', {'fix_emdash'})``.
     Disabled IDs are filenames without extensions; disabled Python rules
-    are not imported. Other Python rule files may execute module-level code.
+    are not imported. Bundled rules absent from the shipped configuration
+    catalog are also excluded. Explicit custom rule directories have no
+    catalog filter. Eligible Python rules may execute module-level code.
 
     An empty directory or no enabled rules for the event returns an empty
     list. An individual invalid rule is logged and skipped. An unavailable
@@ -514,6 +517,8 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
     a successful evaluation with no applicable rules.
     """
     disabled_rule_ids = disabled_rule_ids or set()
+    bundled = os.path.realpath(rules_dir) == os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'rules'))
+    catalog = defaults() if bundled else None
     rules = []
     for name in sorted(os.listdir(rules_dir)):
         if not (name.endswith('.json') or name.endswith('.py')):
@@ -525,7 +530,7 @@ def load_rules_for_event(rules_dir, event, disabled_rule_ids=None):
         # only by the full watchdog timeout) happened regardless of
         # whether the rule was ever actually used.
         rule_id = os.path.splitext(name)[0]
-        if rule_id in disabled_rule_ids:
+        if rule_id in disabled_rule_ids or (catalog is not None and rule_id not in catalog):
             continue
         rule = load_rule_file(rules_dir, name)
         if rule is None or rule.get('event') != event:
@@ -576,7 +581,7 @@ def run_hook(override_rules_dir=None):
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     rules_dir = override_rules_dir or os.path.join(script_dir, '..', RULES_DIRNAME)
-    disabled_rule_ids = get_disabled_rule_ids(os.getcwd())
+    disabled_rule_ids = synchronize(hook_input.get('cwd') or os.getcwd(), hook_input.get('_ioncache_harness', 'claude'))
     rules = load_rules_for_event(rules_dir, event, disabled_rule_ids)
 
     if event == 'PreToolUse' and hook_input.get('tool_name') == 'apply_patch':

@@ -76,11 +76,11 @@ def has_question(text):
 
 
 def main():
-    from turn_guard import begin_turn
+    from scope_guard import run_hook
 
     data = json.load(sys.stdin)
     data.setdefault('cwd', str(Path.cwd()))
-    output = begin_turn(data)
+    output = run_hook('UserPromptSubmit', data)
     if output:
         print(json.dumps(output))
 

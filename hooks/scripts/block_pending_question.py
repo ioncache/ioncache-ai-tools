@@ -14,8 +14,7 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from evidence_review import review_metadata_request  # noqa: E402
-from evidence_store import EvidenceStore  # noqa: E402
+from plugin_config import enabled  # noqa: E402
 from classify_question import marker_path  # noqa: E402
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
@@ -269,6 +268,8 @@ def is_mutating(tool_name, tool_input):
 
 
 def allows_review_metadata(data):
+    from evidence_review import review_metadata_request
+    from evidence_store import EvidenceStore
     if data.get('tool_name') not in {'Write', 'Edit', 'MultiEdit', 'apply_patch'}:
         return False
     try:
@@ -281,6 +282,8 @@ def allows_review_metadata(data):
 
 def main():
     data = json.load(sys.stdin)
+    if not enabled('answer-questions', data):
+        return
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
@@ -289,9 +292,6 @@ def main():
         return
 
     if not is_mutating(tool_name, tool_input):
-        return
-
-    if allows_review_metadata(data):
         return
 
     print(

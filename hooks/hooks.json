@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" MessageDisplay",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" MessageDisplay",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" SessionStart",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SessionStart",
             "timeout": 5
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" SubagentStart",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SubagentStart",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" UserPromptSubmit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" UserPromptSubmit",
             "timeout": 5
           },
           {
@@ -68,7 +68,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" PreToolUse",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PreToolUse",
             "timeout": 70
           },
           {
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" PostToolUse",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PostToolUse",
             "timeout": 5
           },
           {
@@ -101,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" PostToolUseFailure",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PostToolUseFailure",
             "timeout": 5
           }
         ]
@@ -112,7 +112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" PreCompact",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PreCompact",
             "timeout": 5
           }
         ]
@@ -123,7 +123,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" SessionEnd",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SessionEnd",
             "timeout": 2
           }
         ]
@@ -134,7 +134,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" SubagentStop",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SubagentStop",
             "timeout": 70
           }
         ]
@@ -150,7 +150,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/turn_guard.py\" Stop",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" Stop",
             "timeout": 70
           },
           {

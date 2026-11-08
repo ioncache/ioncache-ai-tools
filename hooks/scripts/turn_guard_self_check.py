@@ -18,6 +18,7 @@ import uuid
 from classify_question import QUESTION_CONTRACT, marker_path
 import block_emdash_turn
 import docs_cache
+import scope_review
 import turn_guard as guard
 import turn_review
 
@@ -27,13 +28,25 @@ def install_reviewers(root):
     directory.mkdir()
     fixture = directory / 'fixture'
     fixture.write_text(
-        f'#!{sys.executable}\nimport os,sys\nfrom pathlib import Path\n'
+        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\n'
+        'payload = sys.stdin.read()\n'
         'if os.environ.get("REVIEW_FIXTURE_CAPTURE"):\n'
-        '    Path(os.environ["REVIEW_FIXTURE_CAPTURE"]).write_text(sys.stdin.read())\n'
+        '    Path(os.environ["REVIEW_FIXTURE_CAPTURE"]).write_text(payload)\n'
         'if os.environ.get("REVIEW_FIXTURE_ERROR"):\n'
         '    print(os.environ["REVIEW_FIXTURE_ERROR"],file=sys.stderr)\n'
         '    sys.exit(2)\n'
-        'print(os.environ.get("REVIEW_FIXTURE_RESULT", \'{"ok": true, "reason": ""}\'))\n'
+        'if os.environ.get("REVIEW_FIXTURE_REQUIRED_CONTEXT"):\n'
+        '    request = json.loads(payload.splitlines()[-1])\n'
+        '    found = os.environ["REVIEW_FIXTURE_REQUIRED_CONTEXT"] in json.dumps(request.get("recovered_dialogue", []))\n'
+        '    print(json.dumps({"ok": found, "reason": "" if found else "Missing approved scope."}))\n'
+        'elif os.environ.get("REVIEW_FIXTURE_REQUIRED_EXECUTION"):\n'
+        '    request = json.loads(payload.splitlines()[-1])\n'
+        '    required = os.environ["REVIEW_FIXTURE_REQUIRED_EXECUTION"]\n'
+        '    found = any(item.get("success") is True and item.get("correlated") and not item.get("truncated")\n'
+        '                and required in item.get("result", "") for item in request.get("command_history", []))\n'
+        '    print(json.dumps({"ok": found, "reason": "" if found else "Missing execution result."}))\n'
+        'else:\n'
+        '    print(os.environ.get("REVIEW_FIXTURE_RESULT", \'{"ok": true, "reason": ""}\'))\n'
     )
     fixture.chmod(0o700)
     for name in ('claude', 'codex', 'copilot'):
@@ -298,6 +311,68 @@ class TurnGuardTests(unittest.TestCase):
         self.assertFalse(request['interaction_context_incomplete'])
         self.assertTrue(request['omitted_context'])
 
+    def test_recovery_budget_never_separates_old_permission_from_later_restrictions(self):
+        self.prompt('Continue')
+        with guard.store_for(self.data) as store:
+            state = store.get(guard.CATEGORY, 'state')
+            state['recovered_dialogue'] = [
+                {'kind': 'request', 'text': 'Implement the change. ' * 1000},
+                {'kind': 'request', 'text': 'Do not commit or push.'},
+            ]
+            store.put(guard.CATEGORY, ('state', state))
+        candidate = {'kind': 'tool', 'tool': 'Write', 'input': {'content': 'x' * 70_000}}
+        request = guard.review_request(self.data, self.state(), candidate)
+        self.assertEqual(request['recovered_dialogue'], [])
+        self.assertIn('omitted', request['recovery_problem'])
+        self.assertEqual(request['candidate'], candidate)
+
+    def test_missing_context_denial_exposes_direct_chat_recovery(self):
+        self.prompt('Continue')
+        with guard.store_for(self.data) as store:
+            state = store.get(guard.CATEGORY, 'state')
+            state['request_context_incomplete'] = True
+            store.put(guard.CATEGORY, ('state', state))
+        with mock.patch.object(turn_review, 'review', return_value={'ok': False, 'reason': 'Missing scope.'}):
+            output = self.tool()
+        self.assertIn('directly in chat', str(output))
+        self.assertIn('confirmation tool', str(output))
+
+    def test_self_contained_chat_request_recovers_without_question_tool_consent(self):
+        complete_request = 'Implement the fix in target.py. Do not commit or push.'
+        def scope_review(_harness, request):
+            permitted = request['latest_request'] == complete_request
+            return {'ok': permitted, 'reason': '' if permitted else 'Missing current authorization.'}
+        with mock.patch.object(turn_review, 'review', side_effect=scope_review):
+            self.prompt('Continue')
+            self.assertIsNotNone(self.tool())
+            fields = {'tool_name': 'ask_user', 'tool_input': {'message': complete_request}, 'tool_use_id': 'ask'}
+            self.hook('PreToolUse', **fields)
+            self.hook('PostToolUse', **fields, tool_response='The user is unavailable.')
+            self.assertIsNotNone(self.tool())
+            self.prompt(complete_request)
+            self.assertIsNone(self.tool())
+            self.tool('PostToolUse', tool_response='written')
+            self.assertIsNone(self.tool())
+            self.prompt('Stop editing and explain the change')
+            self.assertIsNotNone(self.tool())
+
+    def test_new_restrictions_and_answers_extend_recovery_without_live_evidence(self):
+        self.prompt('Continue')
+        with guard.store_for(self.data) as store:
+            state = store.get(guard.CATEGORY, 'state')
+            state['recovered_dialogue'] = [{'kind': 'request', 'text': 'Original scope.'}]
+            store.put(guard.CATEGORY, ('state', state))
+        self.prompt('Do not change writer.py')
+        fields = {'tool_name': 'ask_user', 'tool_input': {'message': 'Change writer.py'}, 'tool_use_id': 'ask'}
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **fields, tool_response='No, do not change writer.py.')
+        self.tool('PostToolUse', tool_response='another authorized file changed')
+        self.prompt('Continue ' + 'x' * guard.MAX_REQUEST_CHARS)
+        recovered = guard.review_request(self.data, self.state(), {})['recovered_dialogue']
+        self.assertIn('Do not change writer.py', json.dumps(recovered))
+        self.assertIn('No, do not change writer.py.', json.dumps(recovered))
+        self.assertNotIn('Do not change writer.py', self.state()['requests'])
+
     def test_only_user_input_tools_supply_dialogue_context(self):
         self.prompt()
         for name in ('AskUserQuestion', 'ask_user', 'request_user_input', 'Read', 'mcp__other__ask_user'):
@@ -429,6 +504,93 @@ class TurnGuardTests(unittest.TestCase):
         self.assertFalse(item['success'])
         self.assertIn('ModuleNotFoundError', item['result'])
 
+    def test_command_evidence_survives_read_churn_without_promoting_status_claims(self):
+        self.prompt('Run the tests and report the result')
+        for name in ('sql', 'task_complete', 'Read'):
+            self.hook('PostToolUse', tool_name=name, tool_input={}, tool_response='Ran 205 tests. OK.')
+        with mock.patch.dict(os.environ, {'REVIEW_FIXTURE_REQUIRED_EXECUTION': 'Ran 205 tests'}):
+            output = self.hook('Stop', last_assistant_message='205 tests passed.')
+            self.assertIn('Missing execution result', output['reason'])
+            self.prompt('Run the requested tests, then report their output')
+            fields = {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -m unittest -q'},
+                      'tool_use_id': 'tests'}
+            self.hook('PreToolUse', **fields)
+            self.hook('PostToolUse', **fields, tool_response={'exit_code': 0, 'stdout': 'Ran 205 tests\nOK'})
+            for index in range(5):
+                self.hook('PostToolUse', tool_name='Read', tool_input={'file_path': f'{index}.py'},
+                          tool_response='source\n' * 1200)
+            self.assertNotIn('Ran 205 tests', json.dumps(self.state()['observations']))
+            self.assertIsNone(self.hook('Stop', last_assistant_message='205 tests passed.'))
+        record = self.state()['command_history'][0]
+        self.assertEqual(record['input'], fields['tool_input'])
+        self.assertEqual(record['tool_use_id'], 'tests')
+        self.assertEqual(record['cwd'], str(self.project))
+        self.assertTrue(record['correlated'])
+
+    def test_command_history_is_not_live_evidence_or_inherited_child_evidence(self):
+        self.prompt('Run the tests')
+        fields = {'tool_name': 'Bash', 'tool_input': {'command': 'python3 -m unittest'}, 'tool_use_id': 'tests'}
+        self.hook('PreToolUse', **fields)
+        self.hook('PostToolUse', **fields, tool_response={'exit_code': 0, 'stdout': 'Passed'})
+        original = self.state()['command_history'][0]
+        self.hook('SubagentStart', agent_id='child')
+        with guard.store_for({**self.data, 'agent_id': 'child'}) as store:
+            self.assertEqual(store.get(guard.CATEGORY, 'state')['command_history'], [])
+        self.hook('PostToolUse', agent_id='child', tool_name='Write', tool_input={}, tool_response='changed')
+        self.assertLess(original['mutation'], self.state()['mutation'])
+        self.assertEqual(self.state()['observations'], [])
+        self.hook('PreCompact')
+        self.hook('SessionEnd')
+        self.hook('SessionStart', source='resume')
+        self.prompt('Explain the earlier run')
+        request = guard.review_request(self.data, self.state(), {'kind': 'response'})
+        self.assertEqual(request['command_history'], [original])
+        self.assertNotEqual(original['turn'], request['turn'])
+        self.assertEqual(request['observations'], [])
+        self.assertEqual(request['user_interactions'], [])
+        self.assertEqual(guard.review_request(self.data, self.state(), {'kind': 'tool'})['command_history'], [])
+        self.hook('SessionStart', source='clear')
+        self.assertFalse(self.state().get('command_history'))
+
+    def test_command_history_keeps_failures_unknown_status_and_missing_provenance(self):
+        self.prompt('Run the validation')
+        fields = {'tool_name': 'Bash', 'tool_input': {'command': 'validate'}, 'tool_use_id': 'validation'}
+        for event, result, expected in (
+            ('PostToolUse', {'exit_code': 0, 'stdout': 'Passed'}, True),
+            ('PostToolUseFailure', {'error': 'failed', 'stdout': 'Passed'}, False),
+            ('PostToolUse', {'exit_code': None, 'stdout': 'Still running'}, None),
+        ):
+            self.hook('PreToolUse', **fields)
+            self.hook(event, **fields, tool_response=result)
+            record = self.state()['command_history'][-1]
+            self.assertIs(record['success'], expected)
+            self.assertEqual(json.loads(record['result']), result)
+            self.assertTrue(record['correlated'])
+        self.hook('PostToolUse', **fields, tool_response={'exit_code': 0, 'stdout': 'Unmatched'})
+        self.assertFalse(self.state()['command_history'][-1]['correlated'])
+        fields['tool_use_id'] = 'inflight'
+        self.hook('PreToolUse', **fields)
+        self.tool('PostToolUse', tool_response='changed while validation ran')
+        self.hook('PostToolUse', **fields, tool_response={'exit_code': 0, 'stdout': 'Passed old state'})
+        self.assertFalse(self.state()['command_history'][-1]['fresh'])
+
+    def test_command_history_has_explicit_retention_and_input_budget_limits(self):
+        self.prompt('Run validation')
+        for index in range(8):
+            fields = {'tool_name': 'Bash', 'tool_input': {'command': f'validate {index}'}, 'tool_use_id': str(index)}
+            self.hook('PreToolUse', **fields)
+            self.hook('PostToolUse', **fields, tool_response={'exit_code': 0, 'stdout': 'x' * 6500})
+        state = self.state()
+        self.assertLessEqual(len(json.dumps(state['command_history'])), guard.MAX_EVIDENCE_CHARS)
+        self.assertTrue(state['command_history_incomplete'])
+        self.assertEqual(state['command_history'][-1]['tool_use_id'], '7')
+        candidate = {'kind': 'response', 'text': 'x' * 70_000}
+        request = guard.review_request(self.data, state, candidate)
+        self.assertLessEqual(turn_review.input_size(request), turn_review.MAX_INPUT_BYTES)
+        self.assertEqual(request['candidate'], candidate)
+        self.assertTrue(request['command_history_incomplete'])
+        self.assertIn('command_history', request['omitted_context'])
+
     def test_compaction_recovers_on_a_tool_result_without_a_new_prompt(self):
         self.prompt('Why does this happen?')
         identity = self.state()['id']
@@ -501,15 +663,38 @@ class TurnGuardTests(unittest.TestCase):
         self.assertIn('incomplete', output['systemMessage'])
 
     def test_sigterm_reaps_the_reviewer(self):
+        for reviewer in ('turn_review', 'scope_review'):
+            with self.subTest(reviewer=reviewer):
+                self.assert_reviewer_cancelled(reviewer)
+
+    def test_deferred_sigterm_reaps_the_reviewer(self):
+        for reviewer in ('turn_review', 'scope_review'):
+            with self.subTest(reviewer=reviewer):
+                self.assert_reviewer_cancelled(reviewer, defer_signal=True)
+
+    def assert_reviewer_cancelled(self, reviewer, defer_signal=False):
         code = (
-            'import subprocess,sys,turn_review\n'
+            f'import signal,subprocess,sys,{reviewer}\n'
             'original=subprocess.Popen\n'
             'def launch(*args,**kwargs):\n'
             '    child=original(*args,**kwargs)\n'
-            '    print(child.pid,flush=True)\n'
+            f'    if {defer_signal!r}:\n'
+            '        original_communicate=child.communicate\n'
+            '        def deferred(*args,**kwargs):\n'
+            '            child.communicate=original_communicate\n'
+            '            # Reproduce delivery deferred until the blocking wait returns.\n'
+            '            mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})\n'
+            '            print(child.pid,flush=True)\n'
+            '            try:\n'
+            '                return original_communicate(*args,**kwargs)\n'
+            '            finally:\n'
+            '                signal.pthread_sigmask(signal.SIG_SETMASK,mask)\n'
+            '        child.communicate=deferred\n'
+            '    else:\n'
+            '        print(child.pid,flush=True)\n'
             '    return child\n'
             'subprocess.Popen=launch\n'
-            'turn_review.run_command([sys.executable,"-c","import time; time.sleep(30)"],None)\n'
+            f'{reviewer}.run_command([sys.executable,"-c","import time; time.sleep(30)"],None)\n'
         )
         child_pid = None
         worker = subprocess.Popen([sys.executable, '-c', code], cwd=Path(guard.__file__).parent,
@@ -529,6 +714,18 @@ class TurnGuardTests(unittest.TestCase):
             worker.communicate()
             if child_pid and process_exists(child_pid):
                 os.kill(child_pid, signal.SIGKILL)
+
+    def test_reviewer_wait_retries_preserve_stdin_and_partial_output(self):
+        payload = 'review input\n' * 10_000
+        code = (
+            'import sys,time\n'
+            'print("started",flush=True)\n'
+            'time.sleep(0.5)\n'
+            'sys.stdout.write(sys.stdin.read())\n'
+        )
+        for reviewer in (turn_review, scope_review):
+            with self.subTest(reviewer=reviewer.__name__), mock.patch.object(reviewer, 'REVIEW_TIMEOUT', 3):
+                self.assertEqual(reviewer.run_command([sys.executable, '-c', code], payload), 'started\n' + payload)
 
     def test_timeout_cleans_children_after_reviewer_leader_exits(self):
         code = (
@@ -586,7 +783,9 @@ class TurnGuardTests(unittest.TestCase):
             input=json.dumps({**self.data, 'last_assistant_message': f'Bad{chr(0x2014)}punctuation'}),
             capture_output=True, text=True, check=True,
         )
-        self.assertIsNone(self.prompt(json.loads(result.stdout)['reason']))
+        reason = json.loads(result.stdout)['reason']
+        guard.remember_continuation(self.data, reason)
+        self.assertIsNone(self.prompt(reason))
         self.assertEqual(self.state()['id'], identity)
         self.assertTrue(self.state()['question'])
 
@@ -834,6 +1033,8 @@ class TurnGuardTests(unittest.TestCase):
         output = docs_cache.claude_pre({**self.data, 'tool_name': 'WebFetch',
                                        'tool_input': {'url': url, 'prompt': 'Specific detail'}})
         self.assertIn('Only this detail.', str(output))
+        guard.record_cache({**self.data, 'tool_name': 'WebFetch', 'tool_input': {'url': url}},
+                           docs_cache.fresh_facts(docs_cache.cache_key(url, None)), 'Only this detail.')
         item = self.state()['docs'][0]
         self.assertTrue(item['cached_summary'])
         self.assertEqual(item['observed_at'], fetched)

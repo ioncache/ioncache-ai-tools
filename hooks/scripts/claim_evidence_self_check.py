@@ -21,6 +21,7 @@ from evidence_source import check_native_read, digest, read_page, source_snapsho
 from evidence_store import EvidenceStore, record_page, reference_key
 from hook_adapter_common import run_shared_hooks
 from turn_guard_self_check import install_reviewers
+import turn_guard
 
 
 class ClaimEvidenceTests(unittest.TestCase):
@@ -313,7 +314,8 @@ class ClaimEvidenceTests(unittest.TestCase):
 
     def shared_hook(self, event, **fields):
         data = {**self.data, **fields}
-        outputs = [*run_shared_hooks(event, data), claim_evidence.run_hook(event, data)]
+        # Exercise the retained experimental combination, not the shipped hooks.
+        outputs = [turn_guard.run_hook(event, data), claim_evidence.run_hook(event, data)]
         outputs = [output for output in outputs if output]
         return next((
             output for output in outputs

@@ -39,13 +39,15 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   engine checks all targets and added lines with one rules/config load.
   Deny required rewrites instead of altering patch context.
   Adapter errors exit 2 to block; safe calls leave permissions unchanged.
-- `hooks/scripts/rule_engine.py` owns rule discovery, matching, config
-  resolution, and output merging. Rules live in `hooks/rules/`; standalone
-  `turn_guard.py` keeps turn state and observed evidence in the existing
-  `EvidenceStore`, using the `turn-policy` namespace. `turn_review.py` runs
-  bounded semantic checks; the store itself remains mechanical.
-  Invalidate live evidence across actors after mutations. Correlate tool starts
-  with completions; post-read file metadata alone cannot certify returned bytes.
+- `hooks/scripts/rule_engine.py` owns rule discovery, matching, and output
+  merging. `plugin_config.py` reconciles and resolves the shipped catalog.
+  Rules live in `hooks/rules/`; `scope_guard.py` keeps request, proposal, and
+  approval context in `EvidenceStore`, using the `scope-policy` namespace.
+  `scope_review.py` runs bounded authorization checks, not factual verification.
+  `turn_guard.py`, `turn_review.py`, and the experimental claim checkers remain
+  inactive source, with no registered hooks or active import paths.
+  The shared store must not import claim-checking modules. Tool results other
+  than user answers and graph-query completion do not affect scope verdicts.
   Keep review payloads on stdin. Cache semantic verdicts, not runtime failures.
   Claude display batches and Copilot events retain earlier visible prose.
   Codex final-only coverage must remain explicit; its transcript schema is
@@ -84,6 +86,7 @@ Run from the repository root after installing contributor tooling with `npm ci`:
 python3 hooks/scripts/rule_engine_self_check.py < /dev/null
 python3 hooks/scripts/pending_question_self_check.py < /dev/null
 python3 hooks/scripts/turn_guard_self_check.py < /dev/null
+python3 hooks/scripts/plugin_config_self_check.py < /dev/null
 python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 python3 hooks/scripts/docs_cache_self_check.py < /dev/null
@@ -124,7 +127,7 @@ for f in scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
          .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
-         hooks/copilot-hooks.json; do
+         hooks/copilot-hooks.json config/defaults.json; do
   python3 -m json.tool "$f" > /dev/null || exit 1
 done
 ```
@@ -136,6 +139,13 @@ construct the character with `chr(0x2014)` to pass this source check.
 
 ## Hook and rule conventions
 
+- Every active feature must have an independent opt-out in the shipped
+  `config/defaults.json`, enabled by default. Configuration is part of every
+  feature change, not optional follow-up work. Synchronization preserves local
+  values for retained settings, adds new defaults, and removes retired settings.
+  Add coverage for the opt-out and keep unrelated safeguards independent.
+- Retained inactive implementations must not be imported or registered by
+  active hooks. Their retired settings must not appear in the shipped catalog.
 - Hook payloads arrive as JSON on stdin. Reserve stdout for the hook protocol;
   diagnostics belong on stderr. Prompt reminders require
   `hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: ...}`.
@@ -154,14 +164,15 @@ construct the character with `chr(0x2014)` to pass this source check.
   variable (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, or `${COPILOT_PLUGIN_ROOT}`).
   The process working directory is the consuming project, used for project
   config and graphify detection, not the installed plugin directory.
-- Add one `.json` or `.py` file per rule without modifying the engine.
+- Add one `.json` or `.py` file per rule and its default setting without modifying the engine.
   JSON rules declare `event`, optional `toolNames`, `matcher`, `action`, and
   `message`. Python rules export `EVENT`, optional `TOOL_NAMES`,
   `matches(hook_input)`, and either `check(hook_input)` or `ACTION`/`MESSAGE`.
   Scripted checks return `None` or an action dict, not the final hook envelope.
 - Rule filenames determine both sorted evaluation order and public config IDs
   (filename without extension). Disabled rules are excluded before importing
-  Python modules. A deny beats every rewrite; otherwise only the first rewrite
+  Python modules. Bundled rules absent from the shipped catalog never load,
+  even if stale settings try to enable them. A deny beats every rewrite; otherwise only the first rewrite
   is applied, with a warning for multiple rewrites. Prompt injections are
   concatenated with blank lines. Preserve per-rule error isolation and the
   engine's five-second watchdog. Missing, non-directory, or unlistable rule
@@ -174,15 +185,25 @@ construct the character with `chr(0x2014)` to pass this source check.
   reviewer subprocess has a 60-second timeout and no tool-writing permissions.
   Self-checks install isolated fake reviewer executables; never let offline
   adapter tests launch a real model against fixture data.
-- Disable config is read fresh on every invocation. For each tool, resolve
-  `(global disabled + project disabled) - project enabled`, then union all
-  tools' results. Claude uses global/project
-  `.claude/ioncache-ai-tools.local.json` with camelCase keys; Codex uses
-  `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) with snake_case
-  keys and exact project-path tables. See [the config examples](../README.md#disabling-a-rule).
-  Copilot uses `$COPILOT_HOME/ioncache-ai-tools.local.json` (default
-  `~/.copilot/`) and `.github/copilot/ioncache-ai-tools.local.json`, with
-  camelCase keys. Keep self-check config isolated from all three real hosts.
+- Configuration is reconciled on each hook invocation and by the explicit
+  `plugin_config.py` install/update command. All three hosts use plugin-owned
+  JSON with a `features` boolean map. Global files contain every shipped key;
+  project overrides stay sparse. Resolve defaults, global values, embedded
+  project values, then the project file. Union disables across hosts.
+  Legacy JSON lists migrate in place; Codex TOML is a one-time migration source
+  only when the companion JSON does not exist. Never rewrite host TOML.
+  Read unchanged settings without a writer lock; re-read under the lock before
+  atomic replacement, preserving symlinks. Runtime persistence failures warn
+  but retain valid effective settings; explicit synchronization fails nonzero.
+  Reuse settings within a hook invocation, refreshing after semantic review
+  before accepting or caching its verdict. Never cache across invocations.
+  Malformed or unreadable settings remain untouched: warn and pause plugin
+  features so users can repair their configuration, without granting host
+  permissions. See ../README.md#configuration.
+  Each skill has a `skill:<name>` opt-out: explicit skill-tool loads are blocked
+  and bootstrap instructions cover automatic/slash-command activation.
+  Skill visibility remains host-managed; do not claim plugin config unregisters
+  a skill. Keep self-check HOME and both host directories isolated.
 - Reuse `tokenize_command`, `split_into_simple_commands`, and `skip_wrappers`
   for checks that depend on executable position or related options/targets.
   Use `is_shell_operator` for punctuation comparisons: decoded shell words
@@ -191,7 +212,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an
   exhaustive shell interpreter.
-- `turn_guard.py` invokes the question classifier and emits its turn contract
+- `scope_guard.py` invokes the question classifier and emits its turn contract
   from the same handler that updates question state and the marker.
   `block_pending_question.py` denies recognized mutations for the whole turn.
   A subsequent non-question user prompt clears the marker; plugin-generated
@@ -200,7 +221,7 @@ construct the character with `chr(0x2014)` to pass this source check.
 - Cache diagnostics use user-facing `systemMessage` or Copilot progress
   output, never repeated `additionalContext` or mandatory final-answer prose.
   Keep progress parsing at the Copilot boundary; shared handlers emit one JSON
-  object. Record cache evidence without turning its summary into page coverage.
+  object. Never call the retained claim-evidence receipt path from cache delivery.
 - Claude/Codex final-response checks use `last_assistant_message`. Copilot
   lacks this field, so its adapter waits for the exact current `agentStop`
   record in `events.jsonl` before reading the latest root assistant text.

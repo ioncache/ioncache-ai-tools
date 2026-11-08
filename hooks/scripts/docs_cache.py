@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
+from plugin_config import enabled
 
 TTL_SECONDS = 7 * 86400
 MAX_FACTS_PER_KEY = 3
@@ -209,7 +210,6 @@ def cached_reason(request, facts):
         return None
     log_event('hit', url, harness)
     reason = render(url, facts, request['tool'])
-    record_cache_delivery(request, facts, reason)
     return reason
 
 
@@ -316,6 +316,8 @@ def native_hook(harness, event, data):
     if os.environ.get(DISTILLER_ENV):
         return None
     try:
+        if not enabled('docs-cache', {**data, '_ioncache_harness': harness}):
+            return None
         if event == 'PreToolUse':
             return {'claude': claude_pre, 'codex': codex_pre}[harness](data)
         if event == 'PostToolUse':
@@ -401,6 +403,8 @@ def copilot_fetch_args(data):
 
 
 def copilot_pre(data):
+    if not enabled('docs-cache', {**data, '_ioncache_harness': 'copilot'}):
+        return None
     args = copilot_fetch_args(data)
     if args is None or is_volatile(args['url']):
         return None
@@ -459,6 +463,8 @@ def distiller_notice(session_id):
 
 
 def copilot_stop(data):
+    if not enabled('docs-cache', {**data, '_ioncache_harness': 'copilot'}):
+        return None
     return stop_notice(data.get('sessionId'), data.get('last_assistant_message', ''))
 
 
@@ -468,6 +474,8 @@ def stop_notice(session_id, response):
 
 
 def copilot_post(data):
+    if not enabled('docs-cache', {**data, '_ioncache_harness': 'copilot'}):
+        return None
     args = copilot_fetch_args(data)
     if args is None or is_volatile(args['url']):
         return copilot_notice(data)

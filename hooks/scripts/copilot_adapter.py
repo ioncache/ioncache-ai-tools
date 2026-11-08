@@ -9,10 +9,12 @@ import sys
 import time
 
 import docs_cache
+from copilot_history import recover_history
 from classify_question import set_marker
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
-from turn_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, retain_recent_messages, store_for
+from plugin_config import enabled, synchronize
+from scope_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, retain_recent_messages, store_for
 
 TRANSCRIPT_WAIT_SECONDS = 2
 
@@ -155,6 +157,9 @@ def response_context(data):
                 continue
             output = consume_response_event(response, json.loads(line))
             if output:
+                output['_recovery_turn'] = state.get('id')
+                if not state.get('history_recovery_disabled') and enabled('approval-recovery', shared_input(data)):
+                    output['_recovered_history'] = recover_history(data)
                 return output
     raise TimeoutError('current Copilot stop invocation was not flushed to the transcript')
 
@@ -172,18 +177,21 @@ def consume_response_event(response, event):
         response['text'] = None
     elif kind == 'assistant.message':
         append_response_message(response, payload)
+    elif kind == 'session.task_complete':
+        summary = payload.get('summary')
+        text = summary if isinstance(summary, str) and summary.strip() else None
+        append_response_message(response, {'content': text})
     elif kind == 'hook.start' and payload.get('hookType') == 'agentStop':
         invocation = payload.get('input') or {}
         if (invocation.get('sessionId') == response['stop']['sessionId']
                 and invocation.get('timestamp') == response['stop']['timestamp']):
-            if not isinstance(response['text'], str):
-                raise ValueError('current stop invocation has no final assistant text')
+            available = isinstance(response['text'], str)
             return {
-                'last_assistant_message': response['text'],
+                'last_assistant_message': response['text'] if available else None,
                 '_assistant_messages': response['messages'],
                 '_recent_assistant_messages': response['recent_messages'],
                 '_recent_messages_omitted': response['recent_messages_omitted'],
-                '_response_coverage': 'turn' if response['complete'] else 'partial',
+                '_response_coverage': 'turn' if response['complete'] and available else 'partial',
             }
     return None
 
@@ -210,6 +218,7 @@ def final_response(data):
 
 def run_hook(event, data):
     hook_input = shared_input(data)
+    synchronize(hook_input['cwd'], 'copilot')
     if event == 'userPromptTransformed':
         return transform_prompt(data)
     if event == 'preToolUse':
@@ -231,6 +240,9 @@ def run_hook(event, data):
         user_warning(notice)
         return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
+        if not any(enabled(name, hook_input) for name in ('fix_emdash', 'scope-exactly-what-asked', 'answer-questions')):
+            user_warning(docs_cache_hook(docs_cache.copilot_stop, data))
+            return None
         response = response_context(data)
         outputs = run_shared_hooks('Stop', {
             **hook_input, **response,
@@ -241,7 +253,7 @@ def run_hook(event, data):
         if decision:
             return decision
         user_warning(docs_cache_hook(docs_cache.copilot_stop, {
-            'sessionId': data['sessionId'], 'last_assistant_message': response['last_assistant_message'],
+            **data, 'last_assistant_message': response['last_assistant_message'],
         }))
         return None
     if event == 'sessionEnd':

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -97,11 +98,12 @@ def check_discovery_results(rules_dir):
         }, file)
     assert invoke_engine('UserPromptSubmit', {'prompt': 'continue'}) == (0, '', '')
     config_dir = os.path.join(os.getcwd(), '.claude')
-    os.mkdir(config_dir)
+    os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, 'ioncache-ai-tools.local.json')
     with open(config_path, 'w', encoding='utf-8') as file:
         json.dump({'disabledRules': ['deny']}, file)
-    assert invoke_engine('PreToolUse', payload) == (0, '', '')
+    with mock.patch.object(rule_engine, 'synchronize', return_value={'deny'}):
+        assert invoke_engine('PreToolUse', payload) == (0, '', '')
     os.unlink(config_path)
     with open(os.path.join(rules_dir, 'broken.json'), 'w', encoding='utf-8') as file:
         file.write('{invalid json')
@@ -376,6 +378,10 @@ def main():
     assert bad_dir_rules[0]['name'] == 'good.json', 'the valid rule should still be the one that loads'
     shutil.rmtree(bad_rules_dir, ignore_errors=True)
 
+    bundled = {os.path.splitext(name)[0] for name in os.listdir(RULES_DIR)
+               if name.endswith(('.json', '.py'))}
+    assert bundled - set(rule_engine.defaults()) == {'verify-state-before-claiming'}, bundled
+
     # Real pilot rules load correctly for PreToolUse
     real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
     assert 'never_kill_without_asking.py' in real_pre_tool_use_rules
@@ -390,11 +396,11 @@ def main():
     assert 'verify-state-before-claiming.json' not in real_user_prompt_rules
     startup_rules = load_rules_for_event(RULES_DIR, 'SessionStart')
     assert {rule['name'] for rule in startup_rules} == {
-        'engineering-judgment.json', 'scope-exactly-what-asked.json', 'verify-state-before-claiming.json',
+        'engineering-judgment.json', 'scope-exactly-what-asked.json',
     }
     startup_context = run_rules(startup_rules, 'SessionStart', {})['hookSpecificOutput']
     assert startup_context['hookEventName'] == 'SessionStart'
-    for name in ('engineering-judgment', 'scope-exactly-what-asked', 'verify-state-before-claiming'):
+    for name in ('engineering-judgment', 'scope-exactly-what-asked'):
         rule = next(r for r in startup_rules if r['name'] == name + '.json')
         assert rule['message'] in startup_context['additionalContext']
     filtered_rules = load_rules_for_event(RULES_DIR, 'SessionStart', {'engineering-judgment'})
@@ -689,8 +695,9 @@ def main():
                     cwd=temp, env=env, text=True, capture_output=True, check=True,
                 )
                 assert result.stderr, f'invalid config shape must be logged: {shape}'
-                output = json.loads(result.stdout)
-                assert output['hookSpecificOutput']['permissionDecision'] == 'deny', shape
+                assert result.stdout == '', shape
+                assert 'features paused' in result.stderr, shape
+                assert pathlib.Path(config_path).read_text() == shape
 
         # get_disabled_rule_ids: a top-level Codex table disables a rule globally, with no project section at all
         codex_global_dir = tempfile.mkdtemp(prefix='rule-engine-codex-global-')

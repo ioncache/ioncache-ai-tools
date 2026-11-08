@@ -1,11 +1,17 @@
 """Transactional session-local coverage and checkpoint receipts."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 
-from evidence_source import digest, encoded
+def encoded(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+
+
+def digest(value):
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
 class EvidenceStore:

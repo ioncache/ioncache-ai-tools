@@ -16,7 +16,7 @@ import uuid
 
 import codex_adapter
 import docs_cache
-import turn_guard
+import scope_guard
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,7 +151,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
-    def test_native_shell_status_is_not_inferred_from_output(self):
+    def test_native_shell_results_are_not_collected_as_claim_evidence(self):
         self.prompt('Inspect the command output')
         fields = {'tool_name': 'Bash', 'tool_input': {'command': 'printf fixture'}}
         for result, expected in (
@@ -162,9 +162,10 @@ class CodexAdapterTests(unittest.TestCase):
             with self.subTest(result=result):
                 self.invoke('PreToolUse', **fields)
                 self.invoke('PostToolUse', **fields, tool_response=result)
-                with turn_guard.store_for(self.payload) as store:
-                    state = store.get(turn_guard.CATEGORY, 'state')
-                self.assertIs(state['observations'][-1]['success'], expected)
+                with scope_guard.store_for(self.payload) as store:
+                    state = store.get(scope_guard.CATEGORY, 'state')
+                self.assertNotIn('observations', state)
+                self.assertNotIn('command_history', state)
 
     def test_null_stop_response_does_not_require_a_cache_notice_in_prose(self):
         with mock.patch.dict(os.environ, self.env):
@@ -190,7 +191,7 @@ class CodexAdapterTests(unittest.TestCase):
         text = self.prompt('Implement the change')
         self.assertIn('graphify query', text)
         self.assertIn('documentation-backed', text)
-        for name in ('engineering-judgment', 'scope-exactly-what-asked', 'verify-state-before-claiming'):
+        for name in ('engineering-judgment', 'scope-exactly-what-asked'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
         self.assertEqual(self.prompt('Continue the implementation'), '')
@@ -206,9 +207,9 @@ class CodexAdapterTests(unittest.TestCase):
         text = self.prompt('Implement the feature')
         self.assertNotIn(rule['message'], text)
         self.assertIn(scope['message'], text)
-        config.write_text(
-            disabled + f'\n[projects."{self.project}".ioncache-ai-tools]\nenabled_rules = ["{name}"]\n',
-        )
+        project_config = self.project / '.codex/ioncache-ai-tools.local.json'
+        project_config.parent.mkdir()
+        project_config.write_text(json.dumps({'features': {name: True}}))
         self.invoke('PreCompact')
         self.assertIn(rule['message'], self.prompt('Implement the feature'))
         self.assertEqual(self.prompt('Continue the feature'), '')
@@ -394,10 +395,9 @@ class CodexAdapterTests(unittest.TestCase):
         path.write_text(global_config)
         patch = CLEAN_PATCH.replace('safe.txt', 'yarn.lock').replace('clean', EM_DASH)
         self.assertEqual(self.tool('apply_patch', {'command': patch}), {})
-        path.write_text(
-            global_config + f'\n[projects.{json.dumps(str(self.project))}.ioncache-ai-tools]\n'
-            'enabled_rules = ["no-manual-lockfile-edit", "fix_emdash"]\n'
-        )
+        project_config = self.project / '.codex/ioncache-ai-tools.local.json'
+        project_config.parent.mkdir()
+        project_config.write_text(json.dumps({'features': {'no-manual-lockfile-edit': True, 'fix_emdash': True}}))
         output = self.tool('apply_patch', {'command': patch})
         self.assertEqual(output.get('permissionDecision'), 'deny', output)
         self.assertIn('lockfile', output['permissionDecisionReason'])
