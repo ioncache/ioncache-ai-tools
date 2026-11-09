@@ -199,7 +199,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   before accepting or caching its verdict. Never cache across invocations.
   Malformed or unreadable settings remain untouched: warn and pause plugin
   features so users can repair their configuration, without granting host
-  permissions. See ../README.md#configuration.
+  permissions. See [../docs/configuration.md](../docs/configuration.md).
   Each skill has a `skill:<name>` opt-out: explicit skill-tool loads are blocked
   and bootstrap instructions cover automatic/slash-command activation.
   Skill visibility remains host-managed; do not claim plugin config unregisters
@@ -235,19 +235,22 @@ construct the character with `chr(0x2014)` to pass this source check.
   and Fixed items from commits since the preceding version. Use
   `npm run release -- VERSION` from a clean feature worktree after
   committing the intended changes. Review its output and commit all three
-  plugin manifests with the changelog. See README.md's version-change workflow.
+  plugin manifests with the changelog. See
+  [../docs/development.md#version-changes-and-changelog](../docs/development.md#version-changes-and-changelog).
 - Skills start with YAML frontmatter containing `name` and
   `description`. Keep skill descriptions specific about when they activate.
 - Claude relative-path plugins from local-directory marketplaces load in place;
   restart or `/reload-plugins` after source changes. Remote installs are cached.
   Codex and direct Copilot installs use caches; refresh those installed copies
   and start a fresh session/thread after source changes. See
-  [local development](../README.md#local-development) for host-specific commands.
+  [../docs/development.md#local-development](../docs/development.md#local-development)
+  for host-specific commands.
   Rule-disable config is outside that cache and takes effect immediately.
   Use `copilot --plugin-dir .` to load a live checkout without installing;
   `copilot plugin install .` refreshes a directly installed local copy.
-- [README.md](../README.md) describes current behavior.
+- [../README.md](../README.md) is the concise guide to current functionality,
+  installation, usage, and known issues. Keep detailed references in `docs/`;
+  do not add historical behavior or exhaustive implementation details to it.
   [Design documents](../docs/superpowers/specs/) and
   [implementation plans](../docs/superpowers/plans/) include historical
   JavaScript-engine designs; check them against the current Python code.
-  [The roadmap](../docs/ROADMAP.md) distinguishes shipped behavior from proposed rules.

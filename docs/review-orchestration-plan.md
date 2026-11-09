@@ -17,13 +17,14 @@ proposal below remains the design reference.
 | 2 | Current documentation and installed CLI versions/help were inspected. Separate approval for live trials was requested but unavailable. No launch-to-handback trials were run, and account-model discovery remains unverified. |
 | 3 | Conditional nested/flat instructions and the storeless `review_ledger.py fingerprint` command are implemented. No agent descriptors or manifest migrations were added; packaging and native execution acceptance remain gated on Step 2. |
 | 4 | The review/fix caller uses shared contracts and schema-1 evidence mapping. Mechanical fixtures exercise full/focused reviews, both mode records, provenance, duplicate observations, and resumable versus terminal outcomes. |
-| 5 | README, roadmap, design, and repository instructions distinguish implementation from verified support. Mechanical checks do not complete the required live evaluation. |
+| 5 | User documentation, design, and repository instructions distinguish implementation from verified support. Mechanical checks do not complete the required live evaluation. |
 
 The documentation baseline was checked against Claude Code 2.1.319, Codex CLI
 0.163.0, and Copilot CLI 1.0.106 using their local `--version` and `--help`
 output and the authoritative sources below. Tool availability and help text
 do not establish a working lifecycle, account entitlement, or model suitability.
 All three hosts still need approved trials before verified support is claimed.
+This follow-up is tracked in https://github.com/ioncache/ioncache-ai-tools/issues/40.
 
 Acceptance evidence is split as follows:
 
@@ -591,9 +592,9 @@ more expensive model judged their outputs. Automate stable mechanical
 cases after the manual path is established, without building a benchmark
 service or requiring provider access in CI.
 
-Update [README.md](../README.md),
-[the roadmap](ROADMAP.md#review-workflow), and the
-[repository instructions](../.github/copilot-instructions.md) to distinguish
+Update [../README.md](../README.md),
+[workflows.md](workflows.md), and
+[../.github/copilot-instructions.md](../.github/copilot-instructions.md) to distinguish
 implemented behavior, verified host support, and remaining limitations.
 In the [earlier review/fix design](review-validate-fix-loop-design.md),
 explicitly replace the general flat-orchestration preference and the
