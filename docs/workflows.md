@@ -1,8 +1,9 @@
 # Skills and workflows
 
 Installation and basic usage: [../README.md](../README.md).
-Ask the assistant to use a skill by name. Each skill's file defines its scope,
-inputs, and stopping conditions.
+Invoke a skill directly using the host syntax in
+[../README.md#invoke-a-skill](../README.md#invoke-a-skill).
+Each skill's file defines its scope, inputs, and stopping conditions.
 
 ## Workflow catalog
 
@@ -26,13 +27,15 @@ The testing and JSDoc skills target Vitest and JavaScript/TypeScript.
 
 ## Review loops
 
-These are skill invocations in the conversation, not shell commands:
+These are direct skill invocations in Claude Code or Copilot CLI, not shell
+commands. In Codex, replace only the leading `/` with `$`, keeping the
+`ioncache-ai-tools:` prefix:
 
 ```text
-review-triage-loop docs/architecture.md --max-rounds 8
-review-triage-loop --resume /absolute/private/run/REVIEW_LEDGER.md
-review-validate-fix-loop branch --max-loops 3 --max-fix-cycles 3
-review-validate-fix-loop --resume .review-loop/<run-id>/REVIEW_LEDGER.json
+/ioncache-ai-tools:review-triage-loop docs/architecture.md --max-rounds 8
+/ioncache-ai-tools:review-triage-loop --resume /absolute/private/run/REVIEW_LEDGER.md
+/ioncache-ai-tools:review-validate-fix-loop branch --max-loops 3 --max-fix-cycles 3
+/ioncache-ai-tools:review-validate-fix-loop --resume .review-loop/<run-id>/REVIEW_LEDGER.json
 ```
 
 The read-only triage loop defaults to five rounds and stops after two

@@ -249,8 +249,10 @@ construct the character with `chr(0x2014)` to pass this source check.
   Use `copilot --plugin-dir .` to load a live checkout without installing;
   `copilot plugin install .` refreshes a directly installed local copy.
 - [../README.md](../README.md) is the concise guide to current functionality,
-  installation, usage, and known issues. Keep detailed references in `docs/`;
-  do not add historical behavior or exhaustive implementation details to it.
+  installation, usage, and known issues. Keep the complete shipped skill catalog
+  and direct host-specific invocation instructions in the README, not only in
+  linked references. Keep detailed references in `docs/`; do not add historical
+  behavior or exhaustive implementation details to the README.
   [Design documents](../docs/superpowers/specs/) and
   [implementation plans](../docs/superpowers/plans/) include historical
   JavaScript-engine designs; check them against the current Python code.
