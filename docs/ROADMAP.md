@@ -49,6 +49,21 @@ acceptance remain gated on approved trials; they are not delivered by the
 mechanical checks. See
 [docs/review-orchestration-plan.md](review-orchestration-plan.md).
 
+The shared instructions include optional sweep-first allocation, whole-file
+coverage with hard caller constraints, consumer-owned shared-code tracing and
+private result-file handoffs. Human reports separate defects from grouped
+standards and retain observed/inferred basis; the handback keeps every candidate.
+The scope-only runtime supersedes the proposed report-evidence ingestion and
+observation-only Stop retries. It does not check factual evidence, and ordinary
+background tool output does not invalidate scope verdicts. Review fingerprints
+still detect target drift.
+
+Synthetic-handback classification remains pending where the host supplies no
+documented prompt-origin discriminator. Prefer supported foreground collection
+until that boundary is verified; do not infer origin from message text or
+weaken the question gate. Host references and the limitation are documented in
+[README.md#review-coordination](../README.md#review-coordination).
+
 ### Rule candidates
 
 The highest-value, least-ambiguous candidates, each with enough detail to

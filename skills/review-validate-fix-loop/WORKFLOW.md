@@ -33,11 +33,19 @@ the dedicated review coordinator owns specialist launches in nested mode;
 the loop owns launches and collection in flat mode, then uses a separate
 adjudicator. Keep the small-review shortcut and cross-cutting correctness
 pass. The outer loop remains the sole ledger writer and owns limits and fixes.
+Pass the chosen strategy (`specialists` by default or `sweep-first`) separately
+from topology. Count the sweep and its follow-ups inside the same review.
+Do not use it to skip standards, independent validation, or whole-file reads.
+Assign reports in private scratch outside the reviewed tree and forward their
+paths for direct adjudicator reads. These reports are separate from the loop's
+ledger artifacts; only the outer loop translates their evidence into events.
 
 Record every candidate through `finding`, including low-confidence candidates
 that require validation. Use an underlying-behavior key consistently within
 the run. Repeated keys append observations instead of creating new findings.
 Provide changed locations, severity, and concrete evidence, not only a verdict.
+Keep every candidate even when grouped or below the human report's severity
+floor. Presentation choices do not change fix policy or completion criteria.
 
 After all required reviews finish, record `review_done` with each pass's
 worker, coverage evidence, and verification checks. If a worker fails or a

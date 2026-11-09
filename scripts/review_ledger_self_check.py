@@ -2,6 +2,7 @@
 """Exercise the ledger CLI against isolated Git repositories, without host agents."""
 
 import json
+from itertools import product
 import os
 from pathlib import Path
 import re
@@ -20,16 +21,17 @@ PASSES = [{"name": "correctness", "worker": "independent-reviewer",
 CHECKS = [{"name": "fixture check", "result": "passed", "evidence": "Fixture assertion passed"}]
 
 
-def coordinated_pass(snapshot, mode):
+def coordinated_pass(snapshot, mode, strategy="specialists"):
     return {**PASSES[0], "worker": f"{mode}-specialist",
             "evidence": json.dumps({
                 "assignment": "correctness", "snapshot": snapshot, "mode": mode,
+                "strategy": strategy, "result_file": "/private/review-fixture/correctness.json",
                 "selection": {"requested": "configured default", "selected": "configured default",
                               "actual": "unknown", "reason": "Discovery unavailable in fixture",
                               "availability_source": "unavailable",
                               "suitability_source": "unavailable", "constraints": [],
                               "limitations": ["Actual model not exposed"]},
-                "coverage": ["Traced app.txt against fixture requirements"],
+                "coverage": ["Read app.txt in full; traced fixture callers and requirements"],
                 "limitations": []})}
 
 
@@ -168,15 +170,20 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse((self.root / ".review-loop").exists())
 
     def test_coordinated_handbacks_preserve_schema_one_evidence(self):
-        for mode in ("nested", "flat"):
+        for mode, strategy in product(("nested", "flat"), ("specialists", "sweep-first")):
             self.init()
             self.send("start_review")
-            full_pass = coordinated_pass(self.state["snapshot"], mode)
-            for origin in ("specialist", "coordinator"):
+            full_pass = coordinated_pass(self.state["snapshot"], mode, strategy)
+            for origin, basis in (("specialist", "observed"), ("coordinator", "inferred")):
                 self.send("finding", key=f"{origin}-boundary", summary="Fixture boundary mismatch",
                           locations=["app.txt:1"], severity="High",
-                          evidence=[f"origin={origin}; assignment=correctness; mode={mode}"])
-            self.finding("specialist-boundary")
+                          evidence=[f"origin={origin}; assignment=correctness; mode={mode}; basis={basis}"])
+            self.send("finding", key="specialist-boundary", summary="Same boundary mismatch",
+                      locations=["app.txt:1"], severity="High",
+                      evidence=["origin=other-specialist; basis=observed; reproduced same failure"])
+            self.send("finding", key="docs-style", summary="Fixture punctuation candidate",
+                      locations=["app.txt:1"], severity="Low",
+                      evidence=["origin=docs; basis=inferred; grouped=punctuation; main_min_severity=Medium"])
             self.reject("decision", id="F002", validation="invalid", disposition="ignored",
                         severity="High", evidence=["Caller validation waits for completed passes"])
             self.send("review_done", passes=[full_pass], checks=CHECKS)
@@ -184,11 +191,14 @@ class ReviewLedgerTests(unittest.TestCase):
                       evidence=["validator=review-adjudicator; traced specialist evidence"])
             self.send("decision", id="F002", validation="invalid", disposition="ignored",
                       severity="High", evidence=["validator=outer-loop; checked integration claim"])
+            self.send("decision", id="F003", validation="invalid", disposition="ignored",
+                      severity="Low", reason="The fixture requirement does not mandate punctuation",
+                      evidence=["validator=review-adjudicator; checked the applicable rule"])
             self.send("start_fix", findings=["F001"], files=["app.txt"])
-            (self.root / "app.txt").write_text(f"corrected {mode}\n")
+            (self.root / "app.txt").write_text(f"corrected {mode} {strategy}\n")
             self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Correction"}},
                       checks=CHECKS)
-            focused_pass = coordinated_pass(self.state["snapshot"], mode)
+            focused_pass = coordinated_pass(self.state["snapshot"], mode, strategy)
             self.send("fixes_reviewed", passes=[focused_pass])
             self.decide(disposition="fixed")
             self.send("advance")
@@ -201,6 +211,13 @@ class ReviewLedgerTests(unittest.TestCase):
             self.assertEqual(report["loops"][0]["review"]["passes"], [full_pass])
             self.assertEqual(report["loops"][0]["cycles"][0]["review"]["passes"], [focused_pass])
             self.assertEqual(len(report["findings"]["F001"]["observations"]), 2)
+            self.assertIn("basis=observed", report["findings"]["F001"]["observations"][0]["evidence"][0])
+            self.assertIn("origin=other-specialist", report["findings"]["F001"]["observations"][1]["evidence"][0])
+            self.assertIn("basis=inferred", report["findings"]["F002"]["observations"][0]["evidence"][0])
+            self.assertIn("main_min_severity=Medium", report["findings"]["F003"]["observations"][0]["evidence"][0])
+            self.assertEqual(report["findings"]["F003"]["severity"], "Low")
+            self.assertEqual(report["findings"]["F003"]["decisions"][0]["reason"],
+                             "The fixture requirement does not mandate punctuation")
             self.assertEqual(report["findings"]["F002"]["validation"], "invalid")
             self.assertIn("validator=outer-loop",
                           report["findings"]["F002"]["decisions"][0]["evidence"][0])

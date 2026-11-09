@@ -15,9 +15,12 @@ The invoking agent supplies:
 | `objective`, `kind` | User objective and `full` or `focused` review. |
 | `target`, `base`, `snapshot` | Scope, pinned comparison commit when applicable, and root plus snapshot identity including local changes. State when a base is not applicable. |
 | `standards`, `constraints` | Applicable requirements, exceptions, exclusions, read-only authority, allowed checks, and execution limits. |
+| `settled_decisions` | Decisions already made and their rationale, or an explicit empty list. Do not reopen them without new contradictory evidence. |
 | `history` | Relevant previous findings and evidence-backed dispositions, or an explicit empty history. |
 | `mode`, `capabilities` | `inline`, `nested`, or `flat`, plus current host lifecycle and selection observations and their sources. |
+| `strategy`, `main_min_severity` | `specialists` (default) or `sweep-first`, independently of execution mode; main-table floor `High`, `Medium`, or `Low` (default). |
 | `selection` | Coordinator/adjudicator selection record under ORCHESTRATION.md. |
+| `scratch_directory` | Caller-owned private absolute directory outside the reviewed tree for assigned result files, or an explicit permitted fallback. |
 | `completion` | Required coverage and the evidence needed before returning complete. |
 
 A focused request also contains the correction delta, affected callers, and
@@ -29,7 +32,9 @@ dispatch. If a worker cannot read a reference, it reports missing coverage.
 
 Allocate assignments before launch. Each has an `assignment` identifier,
 `owner`, `scope`, applicable `standards`, `snapshot`, `selection`, explicit
-non-goals, and a `completion` criterion. Include the final integration pass.
+non-goals, all caller read/tool `constraints`, and a `completion` criterion.
+Each specialist also has an absolute `result_file` under `scratch_directory`.
+Include shared-symbol/consumer ownership and the final integration pass.
 Use one identifier per separately reported pass, even when a worker owns
 several small checks. Record the actual host worker ID after launch.
 
@@ -39,21 +44,36 @@ Each result includes:
 | --- | --- |
 | `assignment`, `worker`, `origin` | Assignment ID, actual worker identity, and `specialist`, `coordinator`, or `inline`. |
 | `snapshot`, `selection` | Reviewed snapshot and selection record, including actual model only when observable. |
-| `coverage`, `limitations` | Inspected paths/callers/requirements, checks and evidence, omissions, and unknowns. Empty limitations must be explicit. |
+| `coverage`, `limitations` | Whole files read, inspected callers/requirements and shared symbols, checks and evidence, omissions, constraint breaches, and unknowns. Diff-only reads cannot complete coverage. Empty limitations must be explicit. |
 | `outcome` | `complete`, `partial`, or `failed`; an empty findings list alone never establishes completion. |
 | `candidates` | All observations, including uncertain candidates and recurrence evidence. |
 
 Missing, malformed, or truncated results leave the assignment incomplete.
 Compare returned IDs and snapshots with the assignment map, not just the
 number of reports. A report for the wrong snapshot is not a completed pass.
+The report file contains this entire record; its returned path is only a
+handoff pointer. Reading a path or a short completion message is not reading
+the result. File handoff does not relax the review's read-only target boundary.
+When delegating validation, send the assignment-to-file map, not retyped
+findings. The adjudicator reads the complete reports within the caller's
+constraints. Hook approval checks authority, not the truth of report contents;
+it never substitutes for adjudication.
 
 ## Candidates and assessments
 
-Each candidate contains an underlying-issue `key`, `origin`, `assignment`,
+Each candidate contains an underlying-issue `key`, `origin`, `assignment`, `basis`,
 `locations`, `summary`, reachable `behavior`, `trigger`, `consequence`,
 `requirement`, supporting `evidence`, `uncertainty`, proposed `severity`, and
 `next_action`. Include `references` to duplicates or prior occurrences when
 present. Do not use a changing line number as the underlying-issue key.
+
+`basis` is required: `observed` means the claimed behavior was executed or
+directly seen in an artifact; `inferred` means it was reasoned from source.
+Cite the run or artifact for observed claims. Reading code or another worker's
+report does not turn inferred behavior into observed behavior. When a candidate
+contains both, label each supporting claim and use `inferred` for the overall
+candidate unless its claimed failure was observed. Basis does not replace
+`uncertainty`: an observed symptom may still have an uncertain cause.
 
 An assessment names the candidate `key`, `validator`, `validation` (`pending`,
 `valid`, `invalid`, or `uncertain`), recommended `disposition`, final `severity`,
