@@ -6,8 +6,7 @@ Phase 1 has a skill and helper implementation in this checkout; Phase 2
 and optional enhancements remain future work. Scope and completion criteria
 are grouped under [Delivery phases](#delivery-phases).
 
-Related: [Roadmap](ROADMAP.md#review-workflow) and the existing
-[`review-code` skill](../skills/review-code/SKILL.md).
+Related: [../skills/review-code/SKILL.md](../skills/review-code/SKILL.md).
 
 ## Purpose
 
@@ -110,6 +109,8 @@ Host-specific wiring follows the
   [Phase 1 evaluation scenarios](#phase-1-evaluation) are exercised.
 
 ### Phase 2: Required follow-up
+
+Tracked in https://github.com/ioncache/ioncache-ai-tools/issues/41.
 
 #### Cost-budget scope
 
