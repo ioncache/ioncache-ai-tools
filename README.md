@@ -498,7 +498,9 @@ To re-enable it for one project, put this in that project's settings:
 ```
 
 `COPILOT_HOME` and `CODEX_HOME` override their respective global directories.
-Ignore project-local JSON settings in consuming repositories.
+Ignore project-local JSON settings and their generated
+`.ioncache-ai-tools.local.json.lock` files in consuming repositories.
+These runtime lock files remain after synchronization finishes.
 Within each host, project values override global values. A feature disabled
 by any host's effective settings is disabled across all three hosts.
 

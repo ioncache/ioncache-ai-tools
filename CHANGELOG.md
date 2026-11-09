@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.9.0 (2026-11-09)
+
+### New
+
+* **config:** reconcile feature settings and retire claim checks ([#38](https://github.com/ioncache/ioncache-ai-tools/issues/38)) ([503437c](https://github.com/ioncache/ioncache-ai-tools/commit/503437c73d981cb3eeeb249c80e65f6c87b68723))
+
+### Updated
+
+* added repo level AGENTS.md ([c869070](https://github.com/ioncache/ioncache-ai-tools/commit/c8690704e72616599f6a4c9d6473b243b06eb76a))
+
+### Fixed
+
+* None.
+
 ## 1.8.1 (2026-11-07)
 
 ### New
