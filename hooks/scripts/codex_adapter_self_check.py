@@ -5,7 +5,9 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -293,15 +295,14 @@ class CodexAdapterTests(unittest.TestCase):
                 self.assertNotIn('!`', text)
         worktree_skill = (ROOT / 'skills/create-worktree/SKILL.md').read_text()
         self.assertIn('"', worktree_skill)
-        self.assertIn('../../scripts/create-worktree.js', worktree_skill)
+        self.assertIn('../../scripts/create-worktree.py', worktree_skill)
 
     def test_worktree_skill_example_quotes_installed_helper_path(self):
         install = self.root / 'plugin with spaces'
         install.symlink_to(ROOT, target_is_directory=True)
         skill = (install / 'skills/create-worktree/SKILL.md').read_text()
-        command = next(line for line in skill.splitlines() if line.startswith('node '))
-        helper = (install / 'skills/create-worktree' / '../../scripts/create-worktree.js').absolute()
-        command = command.replace('/absolute/plugin root/scripts/create-worktree.js', str(helper))
+        command = skill.split('```bash\n', 1)[1].splitlines()[0]
+        command = command.replace('/absolute/plugin root', str(install))
         env = {**self.env, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
         git = [
             'git', '-c', 'init.templateDir=', '-c', 'user.name=Self-check',
@@ -312,14 +313,73 @@ class CodexAdapterTests(unittest.TestCase):
         config = self.project / '.claude/ioncache-ai-tools.local.json'
         config.parent.mkdir()
         config.write_text('{"enabledRules":["never_kill_without_asking"]}\n')
+        without_node = self.root / 'without node'
+        without_node.mkdir()
+        (without_node / 'python3').symlink_to(sys.executable)
+        bash = shutil.which('bash')
+        for attempt in range(2):
+            with self.subTest(missing_node_attempt=attempt):
+                result = subprocess.run(
+                    [bash, '-c', command], cwd=self.project,
+                    env={**env, 'PATH': str(without_node)},
+                    text=True, capture_output=True, timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Node.js', result.stderr)
+                self.assertIn('PATH', result.stderr)
+                self.assertIn('retry', result.stderr)
+                self.assertFalse((self.root / 'feature worktree').exists())
+                self.assertFalse((self.project / '.worktree-setup.json').exists())
         result = subprocess.run(
-            ['bash', '-c', command], cwd=self.project, env=env,
+            [bash, '-c', command], cwd=self.project, env=env,
             text=True, capture_output=True, timeout=15,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         copied_config = self.root / 'feature worktree/.claude/ioncache-ai-tools.local.json'
         self.assertTrue(copied_config.is_symlink())
         self.assertEqual(copied_config.read_text(), config.read_text())
+
+    def test_worktree_launcher_does_not_invoke_missing_node(self):
+        launcher = runpy.run_path(str(ROOT / 'scripts/create-worktree.py'))
+        with mock.patch.object(shutil, 'which', return_value=None), \
+                mock.patch.object(os, 'execv') as invoke, \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            self.assertEqual(launcher['main'](), 1)
+            invoke.assert_not_called()
+
+    def test_worktree_launcher_preserves_arguments_and_exit_status(self):
+        runtime = self.root / 'runtime with spaces'
+        runtime.mkdir()
+        node = runtime / 'node'
+        node.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\nprintf "node diagnostic\\n" >&2\nexit 23\n')
+        node.chmod(0o755)
+        args = ['-b', 'branch with spaces', '../worktree; printf injected']
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/create-worktree.py'), *args],
+            cwd=self.project, env={**self.env, 'PATH': str(runtime)},
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(result.stdout.splitlines(), [str(ROOT / 'scripts/create-worktree.js'), *args])
+        self.assertEqual(result.stderr, 'node diagnostic\n')
+
+    def test_worktree_launcher_reports_unusable_node(self):
+        runtime = self.root / 'broken runtime'
+        runtime.mkdir()
+        node = runtime / 'node'
+        node.write_text('not an executable format\n')
+        node.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/create-worktree.py'), '-b', 'feature', '../feature'],
+            cwd=self.project, env={**self.env, 'PATH': str(runtime)},
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('could not start Node.js', result.stderr)
+        self.assertIn('retry', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(list(self.project.iterdir()), [])
+        self.assertFalse((self.root / 'feature').exists())
 
     def test_safe_calls_do_not_override_permissions(self):
         for name, args in (

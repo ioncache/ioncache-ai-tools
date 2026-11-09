@@ -71,8 +71,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   instructions own conditional nested coordination or flat adjudication.
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
-- The `create-worktree` skill invokes `scripts/create-worktree.js`, which wraps
-  `git worktree add` and applies the main worktree's `.worktree-setup.json`.
+- The `create-worktree` skill invokes `scripts/create-worktree.py`, which checks
+  for Node.js before launching the sibling `create-worktree.js` helper.
+  The helper wraps `git worktree add` and applies the main worktree's
+  `.worktree-setup.json`. Missing Node must fail before any worktree/setup writes
+  and remain recoverable by installing Node or correcting `PATH`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
   Missing config is created with generic defaults. Keep repository-specific
   setup in that JSON, not in the helper. Preserve lexical and symlink-resolved
@@ -98,8 +101,10 @@ npm run release:check
 ```
 
 These checks run in CI; the Node self-test exercises worktree setup and path
-containment. Extend the existing assertion-based self-checks for changes to
-their respective behavior. The ledger self-check also exercises standalone
+containment. The Codex adapter self-check covers the shared worktree launcher's
+missing-runtime recovery and the installed skill's invocation.
+Extend the existing assertion-based self-checks for changes to their respective
+behavior. The ledger self-check also exercises standalone
 fingerprints, review-handback event fixtures, and packaged review references.
 
 Run one Copilot adapter test with:
@@ -249,9 +254,11 @@ construct the character with `chr(0x2014)` to pass this source check.
   Use `copilot --plugin-dir .` to load a live checkout without installing;
   `copilot plugin install .` refreshes a directly installed local copy.
 - [../README.md](../README.md) is the concise guide to current functionality,
-  installation, usage, and known issues. Keep the complete shipped skill catalog
-  and direct host-specific invocation instructions in the README, not only in
-  linked references. Keep detailed references in `docs/`; do not add historical
+  installation, usage, and known issues for plugin users. Keep repository
+  contributor setup and release workflows out of it.
+  Keep the complete shipped skill catalog and direct host-specific invocation
+  instructions in the README, not only in linked references.
+  Keep detailed references in `docs/`; do not add historical
   behavior or exhaustive implementation details to the README.
   [Design documents](../docs/superpowers/specs/) and
   [implementation plans](../docs/superpowers/plans/) include historical
