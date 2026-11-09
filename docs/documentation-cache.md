@@ -32,6 +32,10 @@ The cache lives at
 projects, sessions, and hosts. Bypass and notification state remain separate
 per host and session.
 
+Claude cache entries retain the original `WebFetch` question alongside the
+distilled fact. A later hit for the same URL can show that question in another
+project or host. Disable `docs-cache` before submitting sensitive questions.
+
 Facts expire after seven days, with up to three facts per URL/chunk and a
 20 MB entry budget. Each summary is limited to 150 whitespace-separated
 words. Overlong output is rejected rather than truncated into partial facts.

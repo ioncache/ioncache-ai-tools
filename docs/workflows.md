@@ -48,6 +48,10 @@ loop. It does not authorize commits, pushes, or PR comments. Keep
 
 ### Review coordination
 
+These rules apply to `review-code`, including reviews invoked by
+`review-validate-fix-loop`. The separate `review-triage-loop` requires a fresh
+reviewer each round and forbids using `review-code` for that role.
+
 Small reviews stay inline when the evidence fits one direct read and no
 substantial independent pass is needed. Explicit independence requests take
 precedence. Substantial reviews use nested coordination where supported or
@@ -67,6 +71,9 @@ Specialists write complete pass records to assigned files in caller-owned
 private scratch outside the reviewed tree. Adjudicators read those files
 directly rather than relying on retyped summaries. These reports are the only
 review write exception; they do not authorize code edits or worker ledger writes.
+
+If permitted file handoff is unavailable, explicitly agree an in-context
+handoff of complete pass records or report the review as blocked.
 
 Scope hooks check authorization, not report evidence. Ordinary background
 tool output does not invalidate scope verdicts; review snapshot checks still
@@ -96,7 +103,11 @@ automatic model selection are not acceptance-verified on any host. See
 ## Worktree setup
 
 Configure `.worktree-setup.json` at the repository root. The `create-worktree`
-skill creates generic defaults if it is missing:
+skill creates generic defaults if it is missing: empty `copies`, `afterCopy`,
+and `commands` lists, plus predefined symlinks. Those defaults do not copy a
+cache or run `npm install`.
+
+The following is a customized example, not the generated defaults:
 
 ```json
 {
