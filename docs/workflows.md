@@ -28,7 +28,8 @@ The testing and JSDoc skills target Vitest and JavaScript/TypeScript.
 ## Review loops
 
 These are direct skill invocations in Claude Code or Copilot CLI, not shell
-commands. In Codex, replace `/ioncache-ai-tools:` with `$`:
+commands. In Codex, replace only the leading `/` with `$`, keeping the
+`ioncache-ai-tools:` prefix:
 
 ```text
 /ioncache-ai-tools:review-triage-loop docs/architecture.md --max-rounds 8

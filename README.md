@@ -62,12 +62,17 @@ in the assistant's interactive input, **not your shell**:
 | --- | --- | --- |
 | Claude Code | `/ioncache-ai-tools:review-code` | Type `/` and select the plugin's skill |
 | GitHub Copilot CLI | `/ioncache-ai-tools:review-code` | `/skills list` |
-| Codex CLI | `$review-code` | `/skills`, or type `$` to select a skill |
+| Codex CLI | `$ioncache-ai-tools:review-code` | `/skills`, or type `$` to select a skill |
 
 Use the same syntax for any skill listed below. The catalog shows the
-Claude/Copilot invocation. In Codex, replace `/ioncache-ai-tools:` with `$`.
-If more than one installed skill has the same name, select this plugin's
-entry in the host's skill picker.
+Claude/Copilot invocation. In Codex, replace only the leading `/` with `$`,
+keeping the `ioncache-ai-tools:` prefix.
+
+If the host lists same-name skills separately, select this plugin's entry.
+Copilot instead ignores a plugin skill when a project or personal skill has
+the same name. Remove the conflicting skill or exclude its directory using
+`ignoredSkillsLocations` in Copilot's `~/.copilot/settings.json`, then start a
+new session.
 
 Append the target or task to the invocation when needed. For example, these
 review the current branch:
@@ -79,7 +84,7 @@ review the current branch:
 In Codex:
 
 ```text
-$review-code branch
+$ioncache-ai-tools:review-code branch
 ```
 
 Most skills take task context rather than fixed command-line flags. The
@@ -153,8 +158,9 @@ Replace the resume paths with the ledger from your run. This skill edits files,
 but does not commit, push, or post PR comments. Loop counts are not spending
 limits. Keep review artifacts private because they can contain source.
 
-For Codex, the equivalent invocation starts with `$review-triage-loop` or
-`$review-validate-fix-loop`; the arguments stay the same.
+For Codex, the equivalent invocation starts with
+`$ioncache-ai-tools:review-triage-loop` or
+`$ioncache-ai-tools:review-validate-fix-loop`; the arguments stay the same.
 
 ## Worktree setup
 
@@ -167,7 +173,7 @@ For Claude/Copilot:
 For Codex:
 
 ```text
-$create-worktree -b feature-name ../feature-name
+$ioncache-ai-tools:create-worktree -b feature-name ../feature-name
 ```
 
 Replace the branch name and destination with your own. The skill applies
