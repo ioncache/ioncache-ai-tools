@@ -391,20 +391,70 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_claim_output_and_file_changes_do_not_invalidate_scope_review(self):
         scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the result'})
-        candidate = {'kind': 'response', 'text': 'The tests passed.', 'coverage': 'observed-turn'}
+        report = self.root / 'specialist.json'
+        report.write_text('{"outcome":"partial"}')
+        data = {**self.data, 'last_assistant_message': 'The review remains incomplete.',
+                '_response_coverage': 'turn'}
+
+        def finish_background_report(_harness, request):
+            report.write_text('{"outcome":"complete"}')
+            scope_guard.run_hook('PostToolUse', {
+                **self.data, 'tool_name': 'read_agent', 'tool_input': {'agent_id': 'specialist'},
+                'tool_response': {'result_file': str(report), 'outcome': 'complete'},
+            })
+            scope_guard.run_hook('PostToolUseFailure', {
+                **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'tests'},
+                'tool_response': {'exit_code': 1},
+            })
+            for key in ('observations', 'command_history', 'documentation', 'live_state'):
+                self.assertNotIn(key, request)
+            return {'ok': True, 'reason': ''}
+
+        with mock.patch.object(scope_review, 'review', side_effect=finish_background_report) as reviewer:
+            self.assertIsNone(scope_guard.run_hook('Stop', data))
+            self.assertIsNone(scope_guard.run_hook('Stop', data))
+        reviewer.assert_called_once()
         with scope_guard.store_for(self.data) as store:
             state = store.get(scope_guard.CATEGORY, 'state')
-        before = scope_guard.review_request(self.data, state, candidate)
-        scope_guard.run_hook('PostToolUseFailure', {
-            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'tests'},
-            'tool_response': {'exit_code': 1},
-        })
-        with scope_guard.store_for(self.data) as store:
-            after = scope_guard.review_request(self.data, store.get(scope_guard.CATEGORY, 'state'), candidate)
-        self.assertEqual(before, after)
-        for key in ('observations', 'command_history', 'documentation', 'live_state'):
-            self.assertNotIn(key, after)
+        self.assertEqual(state['stop_attempts'], 0)
+        self.assertEqual(state['stop_checks'], 1)
         self.assertIn('Do not verify factual claims', scope_review.POLICY)
+
+    def test_prior_turn_report_handoff_preserves_authorization_checks(self):
+        report = self.root / 'specialist.json'
+        report.write_text('{"outcome":"complete","candidates":[]}')
+        scope_guard.run_hook('UserPromptSubmit', {
+            **self.data, 'prompt': 'Review the code read-only and delegate adjudication of specialist reports.',
+        })
+        scope_guard.run_hook('PostToolUse', {
+            **self.data, 'tool_name': 'Read', 'tool_input': {'file_path': str(report)},
+            'tool_response': report.read_text(),
+        })
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Continue the assigned review.'})
+        delegation = {**self.data, 'tool_name': 'task', 'tool_input': {
+            'prompt': f'Adjudicate the correctness pass by reading its complete report at {report}.',
+        }}
+        with mock.patch.object(scope_review, 'review', return_value={'ok': True, 'reason': ''}) as reviewer:
+            self.assertIsNone(scope_guard.run_hook('PreToolUse', delegation))
+        request = reviewer.call_args.args[1]
+        self.assertIn('delegate adjudication', request['request_context'][0])
+        self.assertEqual(request['candidate']['input'], delegation['tool_input'])
+        self.assertFalse(request['question_only'])
+
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the reports without delegating.'})
+        with mock.patch.object(scope_review, 'review', return_value={'ok': False, 'reason': 'Delegation forbidden'}):
+            self.assertIn('Delegation forbidden', str(scope_guard.run_hook('PreToolUse', delegation)))
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did the specialist reject this?'})
+        scope_guard.run_hook('PostToolUseFailure', {
+            **self.data, 'tool_name': 'read_agent', 'tool_input': {'agent_id': 'specialist'},
+            'tool_response': {'error': 'report unavailable'},
+        })
+        with mock.patch.object(scope_review, 'review') as reviewer:
+            denied = scope_guard.run_hook('PreToolUse', {
+                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': str(report), 'content': '{}'},
+            })
+        reviewer.assert_not_called()
+        self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_native_history_recovery_has_an_independent_opt_out(self):
         import copilot_adapter

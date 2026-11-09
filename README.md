@@ -415,6 +415,28 @@ and returns one handback. If nested result collection is unsupported or
 unverified, the invoking agent collects workers and uses a separate flat
 adjudicator. Missing required independence blocks the review.
 
+The optional `sweep-first` strategy runs one whole-source correctness worker
+before applicable standards/docs passes and targeted deeper traces. It suits
+large or cost-sensitive reviews when that scope fits one worker; it does not
+replace integration or independent adjudication. Specialist-first remains the
+default. Both strategies require whole-file reads and propagate caller read/tool
+constraints. Consumer owners also read shared implementations; integration
+checks the symbols crossing pass boundaries against their consumers.
+
+Specialists write complete pass records to assigned files in caller-owned
+private scratch outside the reviewed tree and return their paths. Adjudicators
+read those files directly, without the invoking agent retyping reports. These
+reports are the only review write exception; they do not authorize code edits
+or worker ledger writes. Scope hooks check authorization, not report evidence.
+Ordinary background tool output does not invalidate a scope verdict. The
+review's own snapshot checks still reject changes to the reviewed tree.
+
+Human reports lead with correctness, security and contract findings, with a
+caller-set `main_min_severity` (default `Low`). Standards/docs/style findings
+follow, grouped by rule. Every candidate retains an `observed` or `inferred`
+basis, uncertainty and provenance. Grouping and severity filtering never discard
+candidates from the handback or change a calling loop's fix policy.
+
 The invoking agent selects the coordinator model before launch. Worker
 selections follow the same evidence-based policy, without shipped model names
 or rankings. Explicit conversational role/model requests and harness settings
@@ -449,6 +471,17 @@ model selection are not yet acceptance-verified on any host. Their rollout
 remains gated by the trials in
 [docs/review-orchestration-plan.md](docs/review-orchestration-plan.md).
 The dependency-review and review/triage workflows keep their existing policies.
+
+Background prompt provenance remains a host limitation. Claude Code documents
+background subagent handbacks as `UserPromptSubmit` events but no origin field
+in that event's input: https://code.claude.com/docs/en/hooks#userpromptsubmit.
+Copilot's `userPromptTransformed` contract excludes system notifications:
+https://docs.github.com/en/copilot/reference/hooks-reference.
+Codex documents no origin discriminator in `UserPromptSubmit`:
+https://learn.chatgpt.com/docs/hooks#userpromptsubmit.
+Use supported foreground collection when separation is unverified. Message
+text is not trusted provenance, so the classifier does not exempt notification-
+shaped prompts. Synthetic prompt misclassification is not fixed on every host.
 
 ### `.worktree-setup.json`
 

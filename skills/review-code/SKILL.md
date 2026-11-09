@@ -7,7 +7,9 @@ description: Reviews code for correctness, security, performance, and project st
 
 Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
-them separately; this skill itself remains read-only.
+them separately; this skill remains read-only toward the reviewed tree.
+The only permitted writes are assigned result files in the caller's private
+scratch directory outside that tree. They never authorize code or ledger edits.
 
 ## Scope
 
@@ -45,9 +47,16 @@ for independent agents override this shortcut.
 For substantial reviews, use [ORCHESTRATION.md](ORCHESTRATION.md) to launch a
 dedicated coordinator in fresh context when the host can deliver all child
 results to it. Otherwise the invoking agent launches and collects specialists,
-then sends their reports to a separate flat adjudicator. Keep continuous
+then sends their result-file paths to a separate flat adjudicator. Keep continuous
 call-chain investigations together. Do not create an external runner to
 work around missing native capabilities.
+
+Choose `specialists` by default, or `sweep-first` for a large or cost-sensitive
+review that fits one whole-source correctness sweep. The latter runs one
+correctness worker before applicable standards/docs passes and targeted deeper
+traces. Both strategies retain integration and independent adjudication.
+Use ORCHESTRATION.md's capacity and independence rules; strategy is separate
+from inline, nested, or flat topology.
 
 The invoking agent selects the coordinator/adjudicator model before launch.
 The coordinator selects worker models under the shared runtime-selection
@@ -64,8 +73,10 @@ python3 -B "/absolute/plugin/scripts/review_ledger.py" fingerprint
 Run from the consuming worktree, including a subdirectory. Pass the returned
 root and snapshot identity to every reviewer. Repeat after adjudication;
 different identities mean incomplete review, not permission to adopt a new
-target. Keep output in the caller's context or private storage outside the
-reviewed tree. This command creates neither a ledger nor a snapshot store.
+target. Assign each specialist an absolute result path in private storage
+outside the reviewed tree. Specialists write the complete pass record there
+and return the path; the adjudicator reads the files rather than a retyped
+summary. This command creates neither a ledger nor a snapshot store.
 
 Fingerprints cover the whole worktree, so unrelated drift also invalidates
 them. They exclude ignored inputs and `.review-loop/`, store symlink target

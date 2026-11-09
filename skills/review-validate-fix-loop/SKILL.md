@@ -21,6 +21,8 @@ Conversational review-role model selections and existing harness settings
 are not invocation flags. Apply them through the
 [review selection policy](../review-code/ORCHESTRATION.md), subject to host
 restrictions. Fixing-phase model controls remain outside this interface.
+Review strategy and the main-table severity floor are conversational preferences,
+not new helper CLI flags.
 
 Resolve `../../scripts/review_ledger.py` relative to this installed skill,
 not the current working directory or an assumed host environment variable.
@@ -36,6 +38,10 @@ Git worktree. Read its `--help` if invocation details are unclear.
    the review coordinator owns specialist launches. In flat mode the loop
    launches and collects workers, then delegates adjudication. The loop owns
    the request, all ledger writes, and limits in both modes.
+   Pass through the caller's `specialists` or `sweep-first` strategy and main
+   table severity floor. Allocate private result files outside the reviewed
+   tree; workers write reports, never the loop ledger. A sweep is part of the
+   counted review, not a free preliminary round.
 3. Check the evidence handback, adopting independent coordinator validation
    of specialist findings rather than repeating every investigation. Validate
    coordinator-originated findings separately. Record each candidate,

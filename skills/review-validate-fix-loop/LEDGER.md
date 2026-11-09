@@ -99,8 +99,8 @@ Keep schema 1 and its exact event fields. The outer loop translates it:
 
 | Handback | Event |
 | --- | --- |
-| Candidate, including rejected or duplicate observations | `finding`; keep origin, assignment, trigger, consequence, requirement, uncertainty, and recurrence references in its evidence string array. Reuse the underlying-issue key only for the same cause. |
-| Completed pass | Exactly `name`, `worker`, `result: complete`, and `evidence`. Put the assignment ID, reviewed snapshot, selection record, coverage, and non-blocking limitations in the evidence string. Structured data may be JSON-encoded inside that string, never added as pass fields. |
+| Candidate, including rejected, grouped, below-threshold, or duplicate observations | `finding`; keep origin, assignment, basis, trigger, consequence, requirement, uncertainty, and recurrence references in its evidence string array. Preserve observed/inferred supporting-claim distinctions. Reuse the underlying-issue key only for the same cause. |
+| Completed pass | Exactly `name`, `worker`, `result: complete`, and `evidence`. Put the assignment ID, reviewed snapshot, strategy, selection record, whole-file coverage, report path, and non-blocking limitations in the evidence string. Structured data may be JSON-encoded inside that string, never added as pass fields. |
 | Assessment | `decision` after `review_done` or `fixes_reviewed`; retain validator identity and reasoning in the reason/evidence fields. Resolve pending caller validation first. |
 | Incomplete required work | Preserve received candidates, then `stop`; put assignment outcomes, coverage gaps, selection provenance, and diagnostics in its reason. Do not emit `review_done` or `fixes_reviewed` for partial passes. |
 
@@ -108,6 +108,9 @@ Record `start_review` before the coordinator or full-review workers launch.
 For focused review, `fix_done` already enters the counted correction's review
 phase; do not record another `start_review`. Checks keep their existing
 `passed`, `failed`, `unavailable`, and `not_applicable` semantics.
+A sweep-first worker and its follow-ups belong to that same counted phase.
+Read result files and map their complete evidence, not only file paths or
+grouped human-report rows. Workers never write ledger events.
 An assessment awaiting independent caller validation does not make its
 completed pass partial. Record the completed passes, then resolve and record
 that assessment; never use the handback's overall outcome alone to decide
