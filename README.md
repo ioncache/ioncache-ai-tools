@@ -166,9 +166,9 @@ For Codex, the equivalent invocation starts with
 
 ## Worktree setup
 
-This skill requires Node.js. If it is unavailable, the launcher stops before
-creating a worktree or setup files. Install Node.js or make `node` available
-on `PATH`, then retry the skill.
+This skill requires Node.js 22.12.0 or later. The launcher checks availability
+and version before creating a worktree or setup files. If either check fails,
+install or upgrade Node.js, or correct `PATH`, then retry the skill.
 
 For Claude/Copilot:
 

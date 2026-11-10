@@ -105,10 +105,11 @@ automatic model selection are not acceptance-verified on any host. See
 
 ## Worktree setup
 
-The skill's Python launcher checks for Node.js before running the worktree
-helper. If `node` is missing from `PATH`, it reports the prerequisite without
-creating a worktree or setup files. Install Node.js or correct `PATH`, then
-retry the same skill invocation.
+The skill requires Node.js 22.12.0 or later. Its Python launcher checks
+availability and version before running the worktree helper. A missing or
+older runtime, or a failed version check, stops without creating a worktree
+or setup files. Install or upgrade Node.js, or correct `PATH`, then retry the
+same skill invocation.
 
 Configure `.worktree-setup.json` at the repository root. The `create-worktree`
 skill creates generic defaults if it is missing: empty `copies`, `afterCopy`,

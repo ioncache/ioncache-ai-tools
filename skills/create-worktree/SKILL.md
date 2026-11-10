@@ -9,10 +9,11 @@ passing the requested `git worktree add` arguments as separate, shell-quoted
 arguments. Quote the resolved script path too, installation paths can contain
 spaces. Do not assume a host-specific plugin-root environment variable exists.
 
-The Python launcher checks for Node.js before invoking the JavaScript helper.
-If Node.js is unavailable, report the prerequisite and stop without creating a
-worktree or setup files. Do not install Node.js without separate authorization
-or bypass the launcher with a direct Node or raw Git command.
+The Python launcher requires Node.js 22.12.0 or later and checks its version
+before invoking the JavaScript helper. If Node.js is missing, too old, or its
+version cannot be verified, report the diagnostic and stop without creating a
+worktree or setup files. Do not install or upgrade Node.js without separate
+authorization or bypass the launcher with a direct Node or raw Git command.
 
 For example, after resolving the actual installed path:
 

@@ -313,15 +313,15 @@ class CodexAdapterTests(unittest.TestCase):
         config = self.project / '.claude/ioncache-ai-tools.local.json'
         config.parent.mkdir()
         config.write_text('{"enabledRules":["never_kill_without_asking"]}\n')
-        without_node = self.root / 'without node'
-        without_node.mkdir()
-        (without_node / 'python3').symlink_to(sys.executable)
+        runtime = self.root / 'runtime with spaces'
+        runtime.mkdir()
+        (runtime / 'python3').symlink_to(sys.executable)
         bash = shutil.which('bash')
         for attempt in range(2):
             with self.subTest(missing_node_attempt=attempt):
                 result = subprocess.run(
                     [bash, '-c', command], cwd=self.project,
-                    env={**env, 'PATH': str(without_node)},
+                    env={**env, 'PATH': str(runtime)},
                     text=True, capture_output=True, timeout=15,
                 )
                 self.assertNotEqual(result.returncode, 0)
@@ -330,6 +330,24 @@ class CodexAdapterTests(unittest.TestCase):
                 self.assertIn('retry', result.stderr)
                 self.assertFalse((self.root / 'feature worktree').exists())
                 self.assertFalse((self.project / '.worktree-setup.json').exists())
+        node = runtime / 'node'
+        node.write_text(
+            '#!/bin/sh\nif [ "$1" = "--version" ]; then\n'
+            '  printf "v22.11.9\\n"\n  exit 0\nfi\n'
+            f'exec {shlex.quote(shutil.which("node"))} "$@"\n'
+        )
+        node.chmod(0o755)
+        result = subprocess.run(
+            [bash, '-c', command], cwd=self.project,
+            env={**env, 'PATH': str(runtime) + os.pathsep + env['PATH']},
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('22.11.9', result.stderr)
+        self.assertIn('22.12.0', result.stderr)
+        self.assertIn('retry', result.stderr)
+        self.assertFalse((self.root / 'feature worktree').exists())
+        self.assertFalse((self.project / '.worktree-setup.json').exists())
         result = subprocess.run(
             [bash, '-c', command], cwd=self.project, env=env,
             text=True, capture_output=True, timeout=15,
@@ -342,26 +360,68 @@ class CodexAdapterTests(unittest.TestCase):
     def test_worktree_launcher_does_not_invoke_missing_node(self):
         launcher = runpy.run_path(str(ROOT / 'scripts/create-worktree.py'))
         with mock.patch.object(shutil, 'which', return_value=None), \
+                mock.patch.object(subprocess, 'run') as probe, \
                 mock.patch.object(os, 'execv') as invoke, \
                 mock.patch.object(sys, 'stderr', io.StringIO()):
             self.assertEqual(launcher['main'](), 1)
+            probe.assert_not_called()
             invoke.assert_not_called()
+
+    def test_worktree_launcher_rejects_unsupported_node_versions(self):
+        launcher = runpy.run_path(str(ROOT / 'scripts/create-worktree.py'))
+        for version in ('v14.21.3', 'v22.11.9', 'v22.12.0-rc.1', 'not a version', ''):
+            with self.subTest(version=version), \
+                    mock.patch.object(shutil, 'which', return_value='/fixture/node'), \
+                    mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        ['/fixture/node', '--version'], 0, stdout=version, stderr='',
+                    )), \
+                    mock.patch.object(os, 'execv') as invoke, \
+                    mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                self.assertEqual(launcher['main'](), 1)
+                self.assertIn('22.12.0', stderr.getvalue())
+                self.assertIn('retry', stderr.getvalue())
+                invoke.assert_not_called()
+
+    def test_worktree_launcher_handles_version_probe_failure(self):
+        launcher = runpy.run_path(str(ROOT / 'scripts/create-worktree.py'))
+        command = ['/fixture/node', '--version']
+        for error in (
+            subprocess.CalledProcessError(2, command),
+            subprocess.TimeoutExpired(command, 5),
+        ):
+            with self.subTest(error=type(error).__name__), \
+                    mock.patch.object(shutil, 'which', return_value=command[0]), \
+                    mock.patch.object(subprocess, 'run', side_effect=error), \
+                    mock.patch.object(os, 'execv') as invoke, \
+                    mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                self.assertEqual(launcher['main'](), 1)
+                self.assertIn('22.12.0', stderr.getvalue())
+                self.assertIn('retry', stderr.getvalue())
+                invoke.assert_not_called()
 
     def test_worktree_launcher_preserves_arguments_and_exit_status(self):
         runtime = self.root / 'runtime with spaces'
         runtime.mkdir()
         node = runtime / 'node'
-        node.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\nprintf "node diagnostic\\n" >&2\nexit 23\n')
-        node.chmod(0o755)
         args = ['-b', 'branch with spaces', '../worktree; printf injected']
-        result = subprocess.run(
-            [sys.executable, str(ROOT / 'scripts/create-worktree.py'), *args],
-            cwd=self.project, env={**self.env, 'PATH': str(runtime)},
-            text=True, capture_output=True, timeout=15,
-        )
-        self.assertEqual(result.returncode, 23)
-        self.assertEqual(result.stdout.splitlines(), [str(ROOT / 'scripts/create-worktree.js'), *args])
-        self.assertEqual(result.stderr, 'node diagnostic\n')
+        for version in ('v22.12.0', 'v22.12.1', 'v24.0.0'):
+            with self.subTest(version=version):
+                node.write_text(
+                    '#!/bin/sh\nif [ "$1" = "--version" ]; then\n'
+                    f'  printf "{version}\\n"\n  exit 0\nfi\n'
+                    'printf "%s\\n" "$@"\nprintf "node diagnostic\\n" >&2\nexit 23\n'
+                )
+                node.chmod(0o755)
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts/create-worktree.py'), *args],
+                    cwd=self.project, env={**self.env, 'PATH': str(runtime)},
+                    text=True, capture_output=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 23)
+                self.assertEqual(
+                    result.stdout.splitlines(), [str(ROOT / 'scripts/create-worktree.js'), *args],
+                )
+                self.assertEqual(result.stderr, 'node diagnostic\n')
 
     def test_worktree_launcher_reports_unusable_node(self):
         runtime = self.root / 'broken runtime'
@@ -375,7 +435,7 @@ class CodexAdapterTests(unittest.TestCase):
             text=True, capture_output=True, timeout=15,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('could not start Node.js', result.stderr)
+        self.assertIn('Node.js 22.12.0', result.stderr)
         self.assertIn('retry', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
         self.assertEqual(list(self.project.iterdir()), [])
