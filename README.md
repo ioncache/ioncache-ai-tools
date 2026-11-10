@@ -6,7 +6,7 @@ and implementation, plus automatic guardrails for common tool actions.
 
 ## Install
 
-Requires Python 3.11+, Node.js, Git, and macOS or Linux. Use a current supported
+Requires Python 3.11+, Git, and macOS or Linux. Use a current supported
 CLI with a working login. PR workflows also need access to the relevant GitHub
 repository. The Copilot integration targets the CLI, not the cloud agent or
 VS Code.
@@ -51,7 +51,9 @@ codex
 
 Inside Codex, review and trust the plugin hooks through `/hooks`, then start a
 new thread. Use `/plugins` to manage installed plugins.
-Update and removal commands are in [docs/development.md](docs/development.md).
+To update, run `codex plugin marketplace upgrade ioncache-ai-tools`, repeat
+the plugin-add command, and start a fresh thread. To uninstall, run
+`codex plugin remove ioncache-ai-tools --marketplace ioncache-ai-tools`.
 
 ## Invoke a skill
 
@@ -164,6 +166,10 @@ For Codex, the equivalent invocation starts with
 
 ## Worktree setup
 
+This skill requires Node.js. If it is unavailable, the launcher stops before
+creating a worktree or setup files. Install Node.js or make `node` available
+on `PATH`, then retry the skill.
+
 For Claude/Copilot:
 
 ```text
@@ -243,7 +249,7 @@ These are guardrails, not a security boundary. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.
 Keep the host's own permissions enabled for security-critical restrictions.
 
-## Reference and development
+## Reference
 
 | Topic | Documentation |
 | --- | --- |
@@ -251,13 +257,9 @@ Keep the host's own permissions enabled for security-critical restrictions.
 | Settings and synchronization | [docs/configuration.md](docs/configuration.md) |
 | Detailed review workflows and worktree configuration | [docs/workflows.md](docs/workflows.md) |
 | Cache behavior and troubleshooting | [docs/documentation-cache.md](docs/documentation-cache.md) |
-| Local development, plugin updates, and releases | [docs/development.md](docs/development.md) |
 
 Host skill-invocation references:
 
 - https://code.claude.com/docs/en/skills
 - https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills
 - https://learn.chatgpt.com/docs/build-skills
-
-Contributor instructions: [AGENTS.md](AGENTS.md) and
-[.github/copilot-instructions.md](.github/copilot-instructions.md).
