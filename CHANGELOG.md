@@ -4,6 +4,23 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.9.2 (2026-11-11)
+
+### New
+
+* None.
+
+### Updated
+
+* remove automatic scope and answer reviews ([#46](https://github.com/ioncache/ioncache-ai-tools/issues/46)) ([1f9f193](https://github.com/ioncache/ioncache-ai-tools/commit/1f9f19398f05976b963cd9ea6b22cb090bf9aee8))
+* restore skill discovery and direct invocation ([#43](https://github.com/ioncache/ioncache-ai-tools/issues/43)) ([61c548d](https://github.com/ioncache/ioncache-ai-tools/commit/61c548de2c899a18f7093ac0d47da0c577f7df42))
+* streamline README and retire roadmap ([#42](https://github.com/ioncache/ioncache-ai-tools/issues/42)) ([4318b9e](https://github.com/ioncache/ioncache-ai-tools/commit/4318b9e67ca28173956286afdd1ef227d90d5d17))
+
+### Fixed
+
+* check Node before creating worktrees ([#44](https://github.com/ioncache/ioncache-ai-tools/issues/44)) ([fe6762a](https://github.com/ioncache/ioncache-ai-tools/commit/fe6762ab8a080656973809cc36b1b25efc8612c9))
+* enforce the worktree Node version requirement ([#45](https://github.com/ioncache/ioncache-ai-tools/issues/45)) ([7a83a52](https://github.com/ioncache/ioncache-ai-tools/commit/7a83a52b99a39e3f807fe4e5002c94a488e4fd9b))
+
 ## 1.9.1 (2026-11-09)
 
 ### New
