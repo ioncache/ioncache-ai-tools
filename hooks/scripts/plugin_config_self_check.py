@@ -15,7 +15,6 @@ import uuid
 
 import plugin_config as config
 import scope_guard
-import scope_review
 from classify_question import marker_path
 from hook_adapter_common import run_shared_hooks
 
@@ -225,36 +224,25 @@ class ConfigurationTests(unittest.TestCase):
             self.assertTrue(config.enabled('never_kill_without_asking', self.data))
         self.assertEqual(catalog.call_count, 1)
 
-    def test_scope_review_resolves_settings_only_at_start_and_revalidation(self):
+    def test_deterministic_guard_resolves_settings_once(self):
         scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
-        with mock.patch.object(config, 'sync_file', wraps=config.sync_file) as reads, \
-                mock.patch.object(scope_review, 'review', return_value={'ok': True, 'reason': ''}):
+        with mock.patch.object(config, 'sync_file', wraps=config.sync_file) as reads:
             self.assertIsNone(scope_guard.run_hook('PreToolUse', {
                 **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'},
             }))
-        self.assertEqual(reads.call_count, 2)
+        self.assertEqual(reads.call_count, 1)
 
-    def test_configuration_changes_during_review_invalidate_the_verdict(self):
+    def test_question_guard_observes_configuration_changes_between_calls(self):
         path = config.paths(self.project)['claude'][0]
-        for event in ('PreToolUse', 'Stop'):
-            self.write(path, {'features': {}})
-            scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
-            data = {
-                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'},
-                'last_assistant_message': 'The change is ready.', '_response_coverage': 'turn',
-            }
-
-            def change_policy(_harness, _request):
-                self.write(path, {'features': {'scope-exactly-what-asked': False}})
-                return {'ok': True, 'reason': ''}
-
-            with self.subTest(event=event), mock.patch.object(scope_review, 'review', side_effect=change_policy) as review:
-                output = scope_guard.run_hook(event, data)
-                self.assertIn('changed during', str(output))
-                with scope_guard.store_for(self.data) as store:
-                    self.assertEqual(store.get(scope_guard.CATEGORY, 'state')['reviews'], {})
-                self.assertIsNone(scope_guard.run_hook(event, data))
-                self.assertEqual(review.call_count, 1)
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did that change?'})
+        data = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'}}
+        self.assertIn('classified as a question', str(scope_guard.run_hook('PreToolUse', data)))
+        self.write(path, {'features': {'answer-questions': False}})
+        self.assertIsNone(scope_guard.run_hook('PreToolUse', data))
+        self.write(path, {'features': {'answer-questions': True}})
+        self.assertIn('classified as a question', str(scope_guard.run_hook('PreToolUse', data)))
+        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the requested fix'})
+        self.assertIsNone(scope_guard.run_hook('PreToolUse', data))
 
     def test_all_features_off_prevents_policy_and_tool_denials(self):
         global_path = config.paths(self.project)['claude'][0]
@@ -303,32 +291,30 @@ class ConfigurationTests(unittest.TestCase):
         scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})
         path = config.paths(self.project)['claude'][0]
         self.write(path, {'features': {'answer-questions': False, 'scope-exactly-what-asked': False}})
-        with mock.patch.object(scope_review, 'review') as reviewer:
-            self.assertIsNone(scope_guard.run_hook('PreToolUse', {
-                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'requested'},
-            }))
-        reviewer.assert_not_called()
+        self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'requested'},
+        }))
         result = run_shared_hooks('PreToolUse', {
             **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'kill 123'},
         })
         self.assertEqual(result[0]['hookSpecificOutput']['permissionDecision'], 'deny')
 
-    def test_claim_modules_are_not_imported_by_active_entrypoints(self):
+    def test_model_review_modules_are_not_imported_by_active_entrypoints(self):
         script = (
             'import importlib.abc,json,sys\n'
             'class NoClaims(importlib.abc.MetaPathFinder):\n'
             ' def find_spec(self,name,*args):\n'
-            '  if name in {"turn_guard","turn_review","claim_evidence","evidence_review","evidence_source"}:\n'
+            '  if name in {"turn_guard","turn_review","scope_review","copilot_history","claim_evidence","evidence_review","evidence_source"}:\n'
             '   raise AssertionError("Retired module loaded: "+name)\n'
             'sys.meta_path.insert(0,NoClaims())\n'
-            'import copilot_adapter,codex_adapter,scope_guard,scope_review,docs_cache\n'
+            'import copilot_adapter,codex_adapter,scope_guard,docs_cache\n'
+            'from hook_adapter_common import run_shared_hooks\n'
             'data=json.loads(sys.argv[1])\n'
-            'scope_review.review=lambda *args: {"ok":True,"reason":""}\n'
             'scope_guard.run_hook("SessionStart",data)\n'
             'scope_guard.run_hook("UserPromptSubmit",{**data,"prompt":"Implement the change"})\n'
             'scope_guard.run_hook("PreToolUse",{**data,"tool_name":"Write","tool_input":{"file_path":"x","content":"claim"}})\n'
             'scope_guard.run_hook("PostToolUse",{**data,"tool_name":"Read","tool_input":{},"tool_response":"output"})\n'
-            'scope_guard.run_hook("Stop",{**data,"last_assistant_message":"The tests passed.","_response_coverage":"turn"})\n'
+            'run_shared_hooks("Stop",{**data,"last_assistant_message":"The tests passed."})\n'
             'url="https://example.com/api"\n'
             'docs_cache.store_fact(docs_cache.cache_key(url,None),url,"fact","copilot",length=20000)\n'
             'docs_cache.copilot_pre({**data,"sessionId":data["session_id"],"toolName":"web_fetch","toolArgs":{"url":url,"max_length":20000}})\n'
@@ -389,89 +375,14 @@ class ConfigurationTests(unittest.TestCase):
             **self.data, 'tool_name': 'Grep', 'tool_input': {'pattern': 'entry'},
         }))
 
-    def test_claim_output_and_file_changes_do_not_invalidate_scope_review(self):
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the result'})
-        report = self.root / 'specialist.json'
-        report.write_text('{"outcome":"partial"}')
-        data = {**self.data, 'last_assistant_message': 'The review remains incomplete.',
-                '_response_coverage': 'turn'}
-
-        def finish_background_report(_harness, request):
-            report.write_text('{"outcome":"complete"}')
-            scope_guard.run_hook('PostToolUse', {
-                **self.data, 'tool_name': 'read_agent', 'tool_input': {'agent_id': 'specialist'},
-                'tool_response': {'result_file': str(report), 'outcome': 'complete'},
-            })
-            scope_guard.run_hook('PostToolUseFailure', {
-                **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'tests'},
-                'tool_response': {'exit_code': 1},
-            })
-            for key in ('observations', 'command_history', 'documentation', 'live_state'):
-                self.assertNotIn(key, request)
-            return {'ok': True, 'reason': ''}
-
-        with mock.patch.object(scope_review, 'review', side_effect=finish_background_report) as reviewer:
-            self.assertIsNone(scope_guard.run_hook('Stop', data))
-            self.assertIsNone(scope_guard.run_hook('Stop', data))
-        reviewer.assert_called_once()
-        with scope_guard.store_for(self.data) as store:
-            state = store.get(scope_guard.CATEGORY, 'state')
-        self.assertEqual(state['stop_attempts'], 0)
-        self.assertEqual(state['stop_checks'], 1)
-        self.assertIn('Do not verify factual claims', scope_review.POLICY)
-
-    def test_prior_turn_report_handoff_preserves_authorization_checks(self):
-        report = self.root / 'specialist.json'
-        report.write_text('{"outcome":"complete","candidates":[]}')
-        scope_guard.run_hook('UserPromptSubmit', {
-            **self.data, 'prompt': 'Review the code read-only and delegate adjudication of specialist reports.',
-        })
-        scope_guard.run_hook('PostToolUse', {
-            **self.data, 'tool_name': 'Read', 'tool_input': {'file_path': str(report)},
-            'tool_response': report.read_text(),
-        })
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Continue the assigned review.'})
-        delegation = {**self.data, 'tool_name': 'task', 'tool_input': {
-            'prompt': f'Adjudicate the correctness pass by reading its complete report at {report}.',
-        }}
-        with mock.patch.object(scope_review, 'review', return_value={'ok': True, 'reason': ''}) as reviewer:
-            self.assertIsNone(scope_guard.run_hook('PreToolUse', delegation))
-        request = reviewer.call_args.args[1]
-        self.assertIn('delegate adjudication', request['request_context'][0])
-        self.assertEqual(request['candidate']['input'], delegation['tool_input'])
-        self.assertFalse(request['question_only'])
-
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the reports without delegating.'})
-        with mock.patch.object(scope_review, 'review', return_value={'ok': False, 'reason': 'Delegation forbidden'}):
-            self.assertIn('Delegation forbidden', str(scope_guard.run_hook('PreToolUse', delegation)))
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did the specialist reject this?'})
-        scope_guard.run_hook('PostToolUseFailure', {
-            **self.data, 'tool_name': 'read_agent', 'tool_input': {'agent_id': 'specialist'},
-            'tool_response': {'error': 'report unavailable'},
-        })
-        with mock.patch.object(scope_review, 'review') as reviewer:
-            denied = scope_guard.run_hook('PreToolUse', {
-                **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': str(report), 'content': '{}'},
-            })
-        reviewer.assert_not_called()
-        self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
-
-    def test_native_history_recovery_has_an_independent_opt_out(self):
-        import copilot_adapter
+    def test_retired_approval_setting_is_pruned_without_changing_other_preferences(self):
         path = config.paths(self.project)['copilot'][0]
-        self.write(path, {'features': {'approval-recovery': False}})
-        data = {'sessionId': 'config-test', 'timestamp': 123, 'cwd': str(self.project)}
-        events = [
-            {'type': 'user.message', 'data': {'content': 'Explain'}},
-            {'type': 'assistant.message', 'data': {'content': 'The explanation.'}},
-            {'type': 'hook.start', 'data': {'hookType': 'agentStop', 'input': data}},
-        ]
-        transcript = self.root / 'events.jsonl'
-        transcript.write_text('\n'.join(map(json.dumps, events)) + '\n')
-        with mock.patch.object(copilot_adapter, 'recover_history') as recover:
-            result = copilot_adapter.response_context({**data, 'transcriptPath': str(transcript)})
-        recover.assert_not_called()
-        self.assertEqual(result['last_assistant_message'], 'The explanation.')
+        self.write(path, {'features': {'approval-recovery': True, 'answer-questions': False}})
+        config.synchronize(str(self.project), 'copilot')
+        stored = json.loads(path.read_text())['features']
+        self.assertNotIn('approval-recovery', stored)
+        self.assertFalse(stored['answer-questions'])
+        self.assertTrue(stored['fix_emdash'])
 
 
 if __name__ == '__main__':

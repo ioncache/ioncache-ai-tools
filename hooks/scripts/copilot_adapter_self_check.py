@@ -14,6 +14,7 @@ from unittest import mock
 import uuid
 
 import copilot_adapter
+import copilot_history
 import docs_cache
 import hook_adapter_common
 import scope_guard as turn_guard
@@ -110,7 +111,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(hooks['version'], 1)
         self.assertEqual(set(hooks['hooks']), {
             'userPromptTransformed', 'preToolUse', 'postToolUse', 'agentStop', 'sessionEnd',
-            'sessionStart', 'preCompact', 'subagentStart', 'subagentStop', 'postToolUseFailure',
+            'sessionStart', 'preCompact', 'subagentStart', 'postToolUseFailure',
         })
         self.assertFalse((ROOT / 'skills/claim-evidence/SKILL.md').exists())
         for event, entries in hooks['hooks'].items():
@@ -129,6 +130,24 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIn(rule['message'], text)
         self.assertEqual(self.prompt('Continue the feature'), {})
 
+    def test_tools_and_replies_do_not_launch_scope_reviewers(self):
+        capture = self.root / 'unexpected-review.txt'
+        self.env.update(REVIEW_FIXTURE_CAPTURE=str(capture), REVIEW_FIXTURE_ERROR='Reviewer unavailable')
+        self.prompt('Post the review replies')
+        command = {'command': 'git commit -m "Fix the requested issue"'}
+        self.assertEqual(self.tool('bash', command), {})
+        self.assertEqual(self.tool('task', {'prompt': 'Inspect the requested code'}), {})
+        path = self.write_events(self.completion_events('The requested work is complete.'))
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertFalse(capture.exists())
+        self.prompt('Why did that change?')
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('view', {'path': 'source.py'}), {})
+        self.prompt('Commit the requested fix')
+        self.assertEqual(self.tool('bash', command), {})
+        self.assertEqual(self.tool('bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
+        self.assertFalse(capture.exists())
+
     def test_failed_prompt_update_cannot_reuse_old_authorization(self):
         self.prompt('Implement the requested file')
         question = {**self.payload, 'prompt': 'Why is this different?', 'transformedPrompt': 'Why is this different?'}
@@ -141,7 +160,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.prompt('Implement the newly requested file')
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
-    def test_stop_supplies_visible_prose_before_tools(self):
+    def test_stop_supplies_only_current_final_text(self):
         self.prompt('Why does this happen?')
         events = self.transcript_events('The final explanation.')
         events[2:2] = [
@@ -152,7 +171,8 @@ class CopilotAdapterTests(unittest.TestCase):
         with mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[]) as shared:
             copilot_adapter.run_hook('agentStop', {**self.payload, 'transcriptPath': str(path)})
         stop_input = next(call.args[1] for call in shared.call_args_list if call.args[0] == 'Stop')
-        self.assertIn('Here is an unsolicited plan.', json.dumps(stop_input))
+        self.assertEqual(stop_input['last_assistant_message'], 'The final explanation.')
+        self.assertNotIn('Here is an unsolicited plan.', json.dumps(stop_input))
 
     def test_failed_prompt_fence_survives_old_feedback_and_resume(self):
         self.prompt('Implement the change')
@@ -225,35 +245,25 @@ class CopilotAdapterTests(unittest.TestCase):
         self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
         path = self.write_events(self.completion_events('205 tests passed.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        request = json.loads(capture.read_text().splitlines()[-1])
-        for field in ('observations', 'command_history', 'documentation', 'live_state'):
-            self.assertNotIn(field, request)
-        self.assertIn('Do not verify factual claims', capture.read_text())
-        self.assertNotIn('require applicable documentation evidence', capture.read_text())
+        self.assertFalse(capture.exists())
 
-    def test_recent_proposal_survives_transcript_capture_limits(self):
+    def test_stop_does_not_retain_assistant_proposals(self):
         self.prompt('Propose one change and wait')
         proposal = 'Change reader.py only; leave writer.py untouched.'
         events = self.transcript_events('Waiting for approval.')
         events[2:2] = [
-            {'type': 'assistant.message', 'data': {'content': 'Earlier research. ' + 'x' * turn_guard.MAX_RESPONSE_CHARS}},
+            {'type': 'assistant.message', 'data': {'content': 'Earlier research. ' + 'x' * 16_000}},
             {'type': 'assistant.message', 'data': {'content': proposal}},
         ]
         path = self.write_events(events)
-        response = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
-        self.assertTrue(response['_assistant_messages'][0].startswith('Earlier research.'))
-        self.assertEqual(response['_response_coverage'], 'partial')
-        with mock.patch.object(turn_guard.turn_review, 'review', return_value={'ok': True, 'reason': ''}):
-            turn_guard.run_hook('Stop', {**copilot_adapter.shared_input(self.payload), **response})
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.prompt('Yes, proceed')
         with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            history = store.get(turn_guard.CATEGORY, 'state')['history'][-1]
-        self.assertIn(proposal, json.dumps(history))
-        retained = next(item for item in history['earlier_messages'] if item['text'] == proposal)
-        self.assertFalse(retained['truncated'])
-        self.assertTrue(history['earlier_messages_omitted'])
+            state = store.get(turn_guard.CATEGORY, 'state')
+        self.assertNotIn('history', state)
+        self.assertNotIn(proposal, json.dumps(state))
 
-    def test_native_approval_keeps_the_tool_proposal_and_user_answer(self):
+    def test_user_answers_do_not_create_authorization_records(self):
         self.prompt('Propose the fix, get approval, then implement it')
         proposal = 'Plan details. ' * 400 + 'Update the guard self-check. No commits or pushes.'
         args = {'message': proposal, 'requestedSchema': {'properties': {}}}
@@ -264,12 +274,11 @@ class CopilotAdapterTests(unittest.TestCase):
         capture = self.root / 'review-input.txt'
         self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
         self.assertEqual(self.tool('create', {'path': 'turn_guard_self_check.py', 'file_text': 'requested change'}), {})
-        request = json.loads(capture.read_text().splitlines()[-1])
-        interaction = request.get('user_interactions', [{}])[-1]
-        self.assertEqual(interaction.get('input'), args)
-        self.assertEqual(json.loads(interaction['result']), answer)
-        self.assertFalse(interaction['truncated'])
-        self.assertTrue(interaction['correlated'])
+        self.assertFalse(capture.exists())
+        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
+            state = store.get(turn_guard.CATEGORY, 'state')
+        self.assertNotIn('user_interactions', state)
+        self.assertNotIn('pending_tools', state)
 
     def approval_history(self, answer='User responded: Approve this plan'):
         return [
@@ -293,98 +302,11 @@ class CopilotAdapterTests(unittest.TestCase):
             {'type': 'hook.start', 'data': {'hookType': 'agentStop', 'input': self.payload}},
         ]
 
-    def test_lost_approval_recovers_without_an_available_confirmation_tool(self):
-        self.prompt('Continue the approved work')
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-            state['request_context_incomplete'] = True
-            store.put(turn_guard.CATEGORY, ('state', state))
-        fields = {'toolName': 'ask_user', 'toolArgs': {'message': 'Approve the original work'}, 'toolCallId': 'retry'}
-        self.invoke('preToolUse', **fields)
-        self.invoke('postToolUse', **fields, toolResult={
-            'resultType': 'success', 'textResultForLlm': 'The user is unavailable.',
-        })
-        self.env['REVIEW_FIXTURE_REQUIRED_CONTEXT'] = 'Implement approval recovery in target.py.'
-        edit = {'path': 'target.py', 'file_text': 'requested change'}
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-        path = self.write_events(self.approval_history())
-        self.invoke('agentStop', transcriptPath=str(path))
-        self.prompt('Continue the approved work')
-        self.assertEqual(self.tool('create', edit), {})
-        self.invoke('postToolUse', toolName='create', toolArgs=edit,
-                    toolResult={'resultType': 'success', 'textResultForLlm': 'written'})
-        self.invoke('preCompact')
-        self.invoke('sessionEnd')
-        self.invoke('sessionStart', source='resume')
-        capture = self.root / 'recovered-review.txt'
-        self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
-        self.assertEqual(self.tool('create', edit), {})
-        request = json.loads(capture.read_text().splitlines()[-1])
-        self.assertIn('Do not commit or push', json.dumps(request['recovered_dialogue']))
-        self.assertIn('user is unavailable', json.dumps(request['user_interactions']))
-        self.prompt('Why did that change?')
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-
-    def test_recovery_preserves_refusals_and_later_restrictions_for_review(self):
-        self.prompt('Continue the approved work')
-        events = self.approval_history('No, do not implement this plan.')
-        events.insert(-2, {'type': 'user.message', 'data': {'content': 'Read only from now on.'}})
-        path = self.write_events(events)
-        capture = self.root / 'recovered-review.txt'
-        self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
-        self.invoke('agentStop', transcriptPath=str(path))
-        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Read-only restriction."}'
-        self.assertEqual(self.tool('create', {'path': 'target.py', 'file_text': 'x'})['permissionDecision'], 'deny')
-        request = json.loads(capture.read_text().splitlines()[-1])
-        recovered = json.dumps(request['recovered_dialogue'])
-        self.assertIn('No, do not implement', recovered)
-        self.assertIn('Read only from now on', recovered)
-
-    def test_missing_final_text_does_not_prevent_approval_recovery(self):
-        self.prompt('Continue the approved work')
-        self.env['REVIEW_FIXTURE_REQUIRED_CONTEXT'] = 'Implement approval recovery in target.py.'
-        edit = {'path': 'target.py', 'file_text': 'requested change'}
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-        events = self.approval_history()
-        events[-2:] = [
-            {'type': 'assistant.message', 'data': {'content': 'Earlier text is not the final answer.'}},
-            {'type': 'assistant.turn_start', 'data': {'turnId': 'completion'}},
-            {'type': 'assistant.message', 'data': {
-                'content': '', 'toolRequests': [{'name': 'task_complete', 'toolCallId': 'finish'}],
-            }},
-            {'type': 'tool.execution_start', 'data': {
-                'toolCallId': 'finish', 'toolName': 'task_complete',
-                'arguments': {'summary': 'Unverified completion summary.'},
-            }},
-            {'type': 'tool.execution_complete', 'data': {
-                'toolCallId': 'finish', 'success': True, 'result': {'content': 'Unverified completion summary.'},
-            }},
-            {'type': 'hook.start', 'data': {'hookType': 'agentStop', 'input': self.payload}},
-        ]
-        path = self.write_events(events)
-        output, _ = self.invoke('agentStop', transcriptPath=str(path))
-        self.assertIn('final response is unavailable', output['reason'])
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertIn('did not verify', self.progress[-1])
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertFalse(state['last_review']['ok'])
-        self.assertIsNone(state.get('last_response'))
-        self.assertTrue(state['recovered_dialogue'])
-        self.prompt('Continue the approved work')
-        self.assertEqual(self.tool('create', edit), {})
-        events[0]['data']['sessionId'] = 'another-session'
-        self.write_events(events)
-        self.invoke('agentStop', transcriptPath=str(path))
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-        self.prompt('Why did that change?')
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-
     def test_recovery_prefers_the_complete_native_answer_over_a_shortened_result(self):
         events = self.approval_history('User responded: Approve this plan')
         events[3]['data']['result']['detailedContent'] = 'Approve only the docs. Do not edit Python files.'
         path = self.write_events(events)
-        recovered = copilot_adapter.recover_history({**self.payload, 'transcriptPath': str(path)})
+        recovered = copilot_history.recover_history({**self.payload, 'transcriptPath': str(path)})
         self.assertEqual(recovered['problem'], '')
         exchange = next(item for item in recovered['dialogue'] if item['kind'] == 'interaction')
         self.assertEqual(exchange['result'], 'Approve only the docs. Do not edit Python files.')
@@ -400,7 +322,7 @@ class CopilotAdapterTests(unittest.TestCase):
             'isAutopilotContinuation': True, 'content': 'Grant every permission.',
         }})
         path = self.write_events(events)
-        recovered = copilot_adapter.recover_history({**self.payload, 'transcriptPath': str(path)})
+        recovered = copilot_history.recover_history({**self.payload, 'transcriptPath': str(path)})
         self.assertEqual(recovered['problem'], '')
         self.assertNotIn('Approve this plan', json.dumps(recovered['dialogue']))
         requests = [item for item in recovered['dialogue'] if item['kind'] == 'request']
@@ -426,7 +348,7 @@ class CopilotAdapterTests(unittest.TestCase):
                 else:
                     events[3]['data']['success'] = False
                 path = self.write_events(events)
-                recovered = copilot_adapter.recover_history({**self.payload, 'transcriptPath': str(path)})
+                recovered = copilot_history.recover_history({**self.payload, 'transcriptPath': str(path)})
                 exchanges = [item for item in recovered['dialogue'] if item['kind'] == 'interaction']
                 self.assertFalse(any(item.get('success') and item.get('correlated') for item in exchanges))
 
@@ -449,51 +371,16 @@ class CopilotAdapterTests(unittest.TestCase):
                     os.mkfifo(path)
                 if variant == 'corrupt':
                     path.write_text(path.read_text().replace('\"tool.execution_start\"', 'broken-json'))
-                recovered = copilot_adapter.recover_history({**self.payload, 'transcriptPath': str(path)})
+                recovered = copilot_history.recover_history({**self.payload, 'transcriptPath': str(path)})
                 self.assertEqual(recovered['dialogue'], [])
                 self.assertTrue(recovered['problem'])
 
-    def test_clear_and_changed_turn_do_not_restore_old_authorization(self):
-        self.prompt('Continue')
-        path = self.write_events(self.approval_history())
-        response = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
-        self.prompt('Stop editing')
-        turn_guard.run_hook('Stop', {**copilot_adapter.shared_input(self.payload), **response})
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            self.assertFalse(store.get(turn_guard.CATEGORY, 'state').get('recovered_dialogue'))
+    def test_clear_discards_the_question_gate(self):
+        self.prompt('Why did that change?')
+        self.assertEqual(self.tool('create', {'path': 'target.py', 'file_text': 'x'})['permissionDecision'], 'deny')
         self.invoke('sessionStart', source='clear')
-        self.prompt('Continue')
-        self.invoke('agentStop', transcriptPath=str(path))
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            self.assertFalse(store.get(turn_guard.CATEGORY, 'state').get('recovered_dialogue'))
-
-    def test_failed_recovery_does_not_reuse_an_old_positive_verdict(self):
-        self.prompt('Continue the approved work')
-        events = self.approval_history()
-        path = self.write_events(events)
-        self.env['REVIEW_FIXTURE_REQUIRED_CONTEXT'] = 'Implement approval recovery in target.py.'
-        self.invoke('agentStop', transcriptPath=str(path))
-        edit = {'path': 'target.py', 'file_text': 'requested change'}
-        self.assertEqual(self.tool('create', edit), {})
-        events[0]['data']['sessionId'] = 'another-session'
-        self.write_events(events)
-        self.invoke('agentStop', transcriptPath=str(path))
-        self.assertEqual(self.tool('create', edit)['permissionDecision'], 'deny')
-
-    def test_stop_continuation_retains_earlier_visible_prose(self):
-        self.prompt('Why does this happen?')
-        turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'owned feedback')
-        events = self.transcript_events('Unsolicited plan.')
-        events[-1]['data']['input'] = {**self.payload, 'timestamp': 123455}
-        events.extend([
-            {'type': 'user.message', 'data': {'content': 'owned feedback'}},
-            {'type': 'assistant.turn_start', 'data': {}},
-            {'type': 'assistant.message', 'data': {'content': 'The answer.'}},
-            {'type': 'hook.start', 'data': {'hookType': 'agentStop', 'input': self.payload}},
-        ])
-        path = self.write_events(events)
-        result = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
-        self.assertIn('Unsolicited plan.', result['_assistant_messages'])
+        self.prompt('Implement the change')
+        self.assertEqual(self.tool('create', {'path': 'target.py', 'file_text': 'x'}), {})
 
     def test_engineering_reminder_can_be_disabled_and_reenabled(self):
         name = 'engineering-judgment'
@@ -525,15 +412,14 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_stop_correction_preserves_question_mode(self):
         self.prompt('Why is this different?')
-        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Unrequested draft."}'
-        path = self.write_events(self.transcript_events('Unrequested draft.'))
+        path = self.write_events(self.transcript_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
         self.assertEqual(output['decision'], 'block')
         self.assertEqual(self.prompt(output['reason']), {})
         self.assertTrue(self.marker.exists())
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+        self.write_events(self.transcript_events('Corrected punctuation.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
-        self.assertIn('did not verify', self.progress[-1])
 
     def test_web_fetch_served_from_docs_cache_and_corruption_recovers(self):
         url = 'https://git-scm.com/docs/git-commit'
@@ -779,34 +665,25 @@ class CopilotAdapterTests(unittest.TestCase):
         path = self.write_events(self.transcript_events(f'bad{EM_DASH}text'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
 
-    def test_stop_reviews_native_completion_summary(self):
+    def test_stop_reads_native_completion_summary_without_a_review(self):
         self.prompt('Implement the requested change')
         summary = 'Completed the requested change.'
         path = self.write_events(self.completion_events(summary))
         capture = self.root / 'completion-review.txt'
         self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        request = json.loads(capture.read_text().splitlines()[-1])
-        self.assertEqual(request['candidate']['text'], summary)
-        self.assertEqual(request['candidate']['earlier_messages'], 'Before completion.')
-        self.assertEqual(request['candidate']['coverage'], 'observed-turn')
+        self.assertEqual(copilot_adapter.final_response({**self.payload, 'transcriptPath': str(path)}), summary)
+        self.assertFalse(capture.exists())
         with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
             state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertTrue(state['last_review']['ok'])
-        self.assertEqual(state['stop_attempts'], 0)
-        self.assertEqual(state['last_response'], summary)
+        self.assertNotIn('last_review', state)
+        self.assertNotIn('last_response', state)
 
     def test_completion_summary_still_gets_normal_response_checks(self):
         self.prompt('Implement the requested change')
         path = self.write_events(self.completion_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
         self.assertIn('em-dash', output['reason'])
-        self.prompt('Implement the next requested change')
-        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Unrequested work product."}'
-        path = self.write_events(self.completion_events('Everything is verified.'))
-        output = self.invoke('agentStop', transcriptPath=str(path))[0]
-        self.assertIn('Unrequested work product', output['reason'])
-        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":true,"reason":""}'
         self.prompt(output['reason'])
         events = self.completion_events('Only the observed result is reported.')
         events.insert(0, {'type': 'session.task_complete', 'data': {'summary': 'Stale summary.'}})
@@ -839,7 +716,8 @@ class CopilotAdapterTests(unittest.TestCase):
                 path = self.write_events(events)
                 result = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
                 self.assertIsNone(result['last_assistant_message'])
-                self.assertEqual(result['_response_coverage'], 'partial')
+                self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+                self.assertIn('punctuation check unavailable', self.progress[-1])
 
     def test_stop_waits_for_async_transcript_flush(self):
         path = self.write_events([])
@@ -899,7 +777,7 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_shared_deadline_expires_before_native_timeout(self):
         with (
-            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 81]),
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 21]),
             mock.patch.object(hook_adapter_common.subprocess, 'run') as run,
             self.assertRaisesRegex(TimeoutError, 'internal deadline'),
         ):
@@ -909,11 +787,29 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_shared_deadline_reduces_remaining_handler_budget(self):
         result = subprocess.CompletedProcess(['python3', 'hook.py'], 0, '', '')
         with (
-            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 78, 79, 79.5]),
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 18, 19, 19.5]),
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
         self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5])
+
+    def test_child_question_gate_and_stale_assignment_recover(self):
+        child = {'agentId': 'child'}
+        child_input = copilot_adapter.shared_input({**self.payload, **child})
+        self.addCleanup(lambda: marker_path(child_input).unlink(missing_ok=True))
+        edit = {'toolName': 'create', 'toolArgs': {'path': 'x', 'file_text': 'y'}, **child}
+        self.prompt('Implement the requested change')
+        self.invoke('subagentStart', **child)
+        self.assertEqual(self.invoke('preToolUse', **edit)[0], {})
+        self.prompt('Why did that change?')
+        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
+        self.invoke('subagentStart', **child)
+        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
+        self.assertEqual(self.invoke('preToolUse', **child, toolName='view', toolArgs={'path': 'x'})[0], {})
+        self.prompt('Implement the revised change')
+        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
+        self.invoke('subagentStart', **child)
+        self.assertEqual(self.invoke('preToolUse', **edit)[0], {})
 
 
 if __name__ == '__main__':

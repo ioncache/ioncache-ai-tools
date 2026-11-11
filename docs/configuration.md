@@ -39,8 +39,7 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Question classification, mutation gate, and answer-only review |
-| `approval-recovery` | Copilot native transcript approval recovery |
+| `answer-questions` | Question classification, mutation gate, and answer-only guidance |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -50,7 +49,7 @@ remain after synchronization finishes.
 | `never_kill_without_asking` | Recognized process-kill commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
-| `scope-exactly-what-asked` | Startup scope policy and semantic scope checks |
+| `scope-exactly-what-asked` | Startup scope guidance and request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
 
 Skill opt-outs block explicit skill-tool loads and instruct the assistant not

@@ -107,17 +107,24 @@ class CodexAdapterTests(unittest.TestCase):
     def test_lifecycle_and_stop_correction_preserve_original_question(self):
         self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='startup')))
         self.assertEqual(self.prompt('Why does this happen?').count('Question turn:'), 1)
-        self.env['REVIEW_FIXTURE_RESULT'] = '{"ok":false,"reason":"Unrequested draft."}'
-        output = self.invoke('Stop', last_assistant_message='A new design.')[0]
+        output = self.invoke('Stop', last_assistant_message=f'Bad{EM_DASH}punctuation.')[0]
         self.assertEqual(output['decision'], 'block')
         self.assertEqual(self.prompt(output['reason']), '')
         self.assertTrue(self.marker.exists())
         self.invoke('PreCompact')
         self.assertIn('Question turn:', str(self.invoke('SessionStart', source='compact')))
-        output = self.invoke('Stop', last_assistant_message='A new design.', stop_hook_active=True)[0]
-        self.assertIn('did not verify', output['systemMessage'])
-        self.assertNotIn('decision', output)
+        output = self.invoke('Stop', last_assistant_message='Corrected punctuation.', stop_hook_active=True)[0]
+        self.assertEqual(output, {})
         self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH})['permissionDecision'], 'deny')
+
+    def test_scope_and_reply_checks_do_not_launch_a_reviewer(self):
+        capture = self.root / 'unexpected-review.txt'
+        self.env.update(REVIEW_FIXTURE_CAPTURE=str(capture), REVIEW_FIXTURE_ERROR='Reviewer unavailable')
+        self.prompt('Implement the requested change')
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+        self.assertEqual(self.tool('task', {'prompt': 'Inspect the requested code'}), {})
+        self.assertEqual(self.invoke('Stop', last_assistant_message='The change is ready.'), [{}])
+        self.assertFalse(capture.exists())
 
     def test_native_web_open_uses_shared_cache_without_granting_permission(self):
         args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}

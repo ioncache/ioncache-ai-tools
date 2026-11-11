@@ -41,18 +41,16 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Adapter errors exit 2 to block; safe calls leave permissions unchanged.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, and output
   merging. `plugin_config.py` reconciles and resolves the shipped catalog.
-  Rules live in `hooks/rules/`; `scope_guard.py` keeps request, proposal, and
-  approval context in `EvidenceStore`, using the `scope-policy` namespace.
-  `scope_review.py` runs bounded authorization checks, not factual verification.
-  `turn_guard.py`, `turn_review.py`, and the experimental claim checkers remain
-  inactive source, with no registered hooks or active import paths.
-  The shared store must not import claim-checking modules. Tool results other
-  than user answers and graph-query completion do not affect scope verdicts.
-  Keep review payloads on stdin. Cache semantic verdicts, not runtime failures.
-  Claude display batches and Copilot events retain earlier visible prose.
-  Codex final-only coverage must remain explicit; its transcript schema is
-  not a stable hook interface.
-  Final-response punctuation remains a separate guard.
+  Rules live in `hooks/rules/`; `scope_guard.py` keeps current request,
+  classification, child-assignment, and graph state in `EvidenceStore`, using
+  the `scope-policy` namespace. Its checks are deterministic and never launch
+  model reviews. Scope and answer content remain assistant guidance.
+  `scope_review.py`, `copilot_history.py`, `turn_guard.py`, `turn_review.py`,
+  and the experimental claim checkers remain inactive source, with no registered
+  hooks or active import paths. The shared store must not import these modules.
+  Tool results affect graph-query completion, not authorization verdicts.
+  Final-response punctuation remains a separate guard; Copilot reads only the
+  current final text. Do not collect streamed prose for semantic review.
 - `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
@@ -188,10 +186,10 @@ construct the character with `chr(0x2014)` to pass this source check.
   or no enabled rules for an event remains valid. Engine-wide errors and
   watchdog expiry also log and exit 2.
   Shared adapter execution has an internal deadline before the native hook
-  timeout: 80 seconds for pre-tool/final checks, 20 for other events. The
-  reviewer subprocess has a 60-second timeout and no tool-writing permissions.
-  Self-checks install isolated fake reviewer executables; never let offline
-  adapter tests launch a real model against fixture data.
+  timeout: 20 seconds for shared execution, with smaller per-handler limits.
+  Pre-tool and final adapter hooks have 30-second native limits.
+  Self-checks install isolated fake reviewer executables to catch accidental
+  model launches; never let offline tests launch a real model against fixtures.
 - Configuration is reconciled on each hook invocation and by the explicit
   `plugin_config.py` install/update command. All three hosts use plugin-owned
   JSON with a `features` boolean map. Global files contain every shipped key;
@@ -202,8 +200,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   Read unchanged settings without a writer lock; re-read under the lock before
   atomic replacement, preserving symlinks. Runtime persistence failures warn
   but retain valid effective settings; explicit synchronization fails nonzero.
-  Reuse settings within a hook invocation, refreshing after semantic review
-  before accepting or caching its verdict. Never cache across invocations.
+  Reuse settings within a hook invocation. Never cache across invocations.
   Malformed or unreadable settings remain untouched: warn and pause plugin
   features so users can repair their configuration, without granting host
   permissions. See [../docs/configuration.md](../docs/configuration.md).
@@ -223,7 +220,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   from the same handler that updates question state and the marker.
   `block_pending_question.py` denies recognized mutations for the whole turn.
   A subsequent non-question user prompt clears the marker; plugin-generated
-  corrections preserve it. Resume/compaction must not reset correction budgets.
+  punctuation corrections preserve it. Resume/compaction preserve question state.
   Native child identities isolate state; do not infer identity from agent type.
 - Cache diagnostics use user-facing `systemMessage` or Copilot progress
   output, never repeated `additionalContext` or mandatory final-answer prose.
