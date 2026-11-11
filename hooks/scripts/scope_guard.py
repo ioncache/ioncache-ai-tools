@@ -1,8 +1,7 @@
-"""Deterministic question, request-freshness, skill, and graph guards."""
+"""Deterministic question, request-freshness, and skill guards."""
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import uuid
 
@@ -10,10 +9,7 @@ from block_pending_question import is_mutating
 from classify_question import QUESTION_CONTRACT, has_marker, has_question, set_marker
 from plugin_config import enabled, feature_settings
 from evidence_store import EvidenceStore
-from rule_engine import (
-    load_rules_for_event, run_rules,
-    skip_wrappers, split_into_simple_commands, tokenize_command,
-)
+from rule_engine import load_rules_for_event, run_rules
 
 DISTILLER_ENV = 'IONCACHE_DOCS_DISTILLER'
 CATEGORY = 'scope-policy'
@@ -23,15 +19,7 @@ BOOTSTRAP = {
         'documentation can be reused; summaries establish only their stated details.'
     ),
     'answer-questions': 'Question replies contain the answer and reasoning, with work products only when requested.',
-    'graphify': (
-        'In projects with graphify-out/graph.json, code discovery starts with a '
-        'relevant graphify query, followed by targeted source reads.'
-    ),
 }
-GRAPH_DENIAL = (
-    'Code discovery requires a relevant graphify query first. '
-    'Run graphify query with the codebase question, then inspect the sources.'
-)
 DELEGATION_TOOLS = {
     'Agent', 'Task', 'task', 'spawn_agent', 'run_dynamic_workflow',
     'write_agent', 'send_input', 'resume_agent', 'SendMessage',
@@ -132,7 +120,7 @@ def begin_turn(data):
             'id': uuid.uuid4().hex, 'prompt': prompt,
             'question': has_question(prompt) or bool(parent and parent.get('question')),
             'parent_turn': parent.get('id') if parent else None,
-            'bootstrapped': True, 'continuations': [], 'graph': {},
+            'bootstrapped': True, 'continuations': [],
             'native_prompt': data.get('prompt_id') or data.get('turn_id'),
         }
         store.put(CATEGORY, ('state', state))
@@ -154,49 +142,6 @@ def prompt_pending(data):
     )
 
 
-def shell_commands(data):
-    if data.get('tool_name') != 'Bash':
-        return []
-    commands = split_into_simple_commands(tokenize_command(data['tool_input'].get('command', '')))
-    return [executable for command in commands if command and (executable := skip_wrappers(command))]
-
-
-def graph_query(data):
-    commands = shell_commands(data)
-    if len(commands) != 1:
-        return False
-    args = commands[0]
-    if (len(args) < 3 or Path(args[0]).name != 'graphify' or args[1] != 'query'
-            or not args[2].strip() or args[2].startswith('-')
-            or any(value in ('--help', '-h') for value in args)):
-        return False
-    expected = Path(data['cwd']) / 'graphify-out/graph.json'
-    for index, value in enumerate(args):
-        if value == '--graph':
-            return index + 1 < len(args) and (Path(data['cwd']) / args[index + 1]).resolve() == expected.resolve()
-        if value.startswith('--graph='):
-            return (Path(data['cwd']) / value.split('=', 1)[1]).resolve() == expected.resolve()
-    return True
-
-
-def discovery(data):
-    if data.get('tool_name') in ('Grep', 'Glob', 'grep', 'rg', 'glob', 'semantic_code_search'):
-        return True
-    if data.get('tool_name') == 'Read':
-        path = str(data.get('tool_input', {}).get('file_path', ''))
-        target = (Path(data['cwd']) / path).resolve()
-        return (target.is_relative_to(Path(data['cwd']).resolve())
-                and target.name not in ('CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'copilot-instructions.md'))
-    for command in shell_commands(data):
-        executable = Path(command[0]).name
-        if executable in ('rg', 'grep', 'find'):
-            return True
-        if executable in ('cat', 'sed', 'head', 'tail'):
-            if any(not arg.startswith('-') and (Path(data['cwd']) / arg).is_file() for arg in command[1:]):
-                return True
-    return False
-
-
 def parent_state(data):
     if data.get('agent_id') in (None, '', 'root'):
         return None
@@ -207,7 +152,7 @@ def parent_state(data):
 def child_state(parent):
     return {
         'id': uuid.uuid4().hex, 'prompt': parent['prompt'], 'question': parent['question'],
-        'native_prompt': parent.get('native_prompt'), 'graph': {},
+        'native_prompt': parent.get('native_prompt'),
         'continuations': [], 'bootstrapped': False,
         'parent_turn': parent['id'],
     }
@@ -222,60 +167,12 @@ def ensure_child_state(data):
     return parent
 
 
-def graph_identity(data):
-    graph = Path(data['cwd']) / 'graphify-out/graph.json'
-    try:
-        info = graph.stat()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return [str(graph.absolute()), 'unavailable', None]
-    return [str(graph.resolve()), info.st_mtime_ns, info.st_size]
-
-
-def graph_gate(data, state):
-    if not enabled('graphify', data):
-        return None
-    identity = graph_identity(data)
-    if not identity or not discovery(data) or state.get('graph', {}).get('identity') == identity:
-        return None
-    if identity[1] == 'unavailable' or not shutil.which('graphify'):
-        state['graph'] = {'identity': identity, 'fallback': 'graph or executable unavailable'}
-        return denial('Graphify or its graph is unavailable. Source discovery is available on retry.')
-    return denial(GRAPH_DENIAL)
-
-
-def result_status(data):
-    result = data.get('tool_response')
-    if data.get('hook_event_name') == 'PostToolUseFailure':
-        return False
-    if isinstance(result, dict):
-        if result.get('isError') or result.get('error') or result.get('interrupted'):
-            return False
-        if result.get('resultType') == 'failure':
-            return False
-        for key in ('exit_code', 'exitCode'):
-            if key in result:
-                return result[key] == 0 if type(result[key]) is int else None
-        if data.get('tool_name') == 'WebFetch' and 'code' in result:
-            return type(result['code']) is int and 200 <= result['code'] < 300
-    if data.get('tool_name') == 'Bash' and data.get('_ioncache_harness') == 'codex':
-        return None
-    return True
-
-
 def record_tool(data):
     ensure_child_state(data)
     with store_for(data) as store:
         state = store.get(CATEGORY, 'state')
         if not state or 'id' not in state:
             return None
-        if enabled('graphify', data) and graph_query(data) and state.get('pending_graph') == graph_identity(data):
-            state['graph'] = {
-                'identity': graph_identity(data),
-                'fallback': None if result_status(data) else 'query success unverified; use source discovery',
-            }
-            store.put(CATEGORY, ('state', state))
     if not state.get('bootstrapped'):
         return lifecycle(data['hook_event_name'], data)
     return None
@@ -293,26 +190,20 @@ def pre_tool(data):
     delegation = data.get('tool_name') in DELEGATION_TOOLS
     if (mutating or delegation) and prompt_pending(data):
         return denial('The current user request was not recorded. Submit the request again before authorizing work.')
-    if not mutating and not delegation and not discovery(data) and not graph_query(data):
-        return None
     parent = ensure_child_state(data)
+    if not mutating and not delegation:
+        return None
     with store_for(data) as store:
         state = store.get(CATEGORY, 'state')
         if not state or 'id' not in state:
             return None
         native_prompt = data.get('prompt_id') or data.get('turn_id')
         protected = enabled('scope-exactly-what-asked', data) or enabled('answer-questions', data)
-        if protected and (mutating or delegation) and not parent and state.get('native_prompt') and native_prompt:
+        if protected and not parent and state.get('native_prompt') and native_prompt:
             if native_prompt != state['native_prompt']:
                 return denial('The current native prompt has not been recorded. Resubmit the request.')
-        if protected and (mutating or delegation) and parent and parent.get('id') != state.get('parent_turn'):
+        if protected and parent and parent.get('id') != state.get('parent_turn'):
             return denial('The parent user request changed after this subagent started. New work requires a current assignment.')
-        if enabled('graphify', data) and graph_query(data):
-            state['pending_graph'] = graph_identity(data)
-        output = graph_gate(data, state)
-        store.put(CATEGORY, ('state', state))
-    if output or not (mutating or delegation):
-        return output
     if enabled('answer-questions', data) and state['question'] and mutating:
         return denial('BLOCKED: classified as a question. This turn is answer-only; read-only research remains available.')
     return None
@@ -336,7 +227,7 @@ def run_hook(event, data):
     disabled = snapshot.disabled
     if not enabled('answer-questions', data):
         set_marker(data, False)
-    if {'answer-questions', 'scope-exactly-what-asked', 'graphify',
+    if {'answer-questions', 'scope-exactly-what-asked',
             'documentation-first', 'engineering-judgment'} <= disabled and not any(
                 name.startswith('skill:') for name in disabled):
         return None
@@ -348,10 +239,7 @@ def run_hook(event, data):
     if event == 'PreToolUse':
         return pre_tool(data)
     if event in ('PostToolUse', 'PostToolUseFailure'):
-        result = data.get('tool_response')
-        if event == 'PostToolUseFailure' and result is None:
-            result = {'error': data.get('error'), 'interrupted': data.get('is_interrupt', False)}
-        return record_tool({**data, 'hook_event_name': event, 'tool_response': result})
+        return record_tool({**data, 'hook_event_name': event})
     if event in ('SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart'):
         return lifecycle(event, data)
     raise ValueError('unsupported turn event')

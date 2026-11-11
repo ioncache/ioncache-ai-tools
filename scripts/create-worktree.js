@@ -37,8 +37,7 @@ const DEFAULT_SETUP = {
     'CLAUDE.local.md',
     '.claude/hookify.*.local.md',
     '.github/copilot/settings.local.json',
-    '.github/copilot/ioncache-ai-tools.local.json',
-    '.graphifyignore'
+    '.github/copilot/ioncache-ai-tools.local.json'
   ],
   commands: []
 }
@@ -337,8 +336,11 @@ function selfTest() {
   fs.mkdirSync(path.join(root, '.github/copilot'), { recursive: true })
   fs.mkdirSync(path.join(root, '.claude'), { recursive: true })
   for (const rel of configFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
+  fs.writeFileSync(path.join(root, '.graphifyignore'), 'private/\n')
   const worktree = fs.mkdtempSync(path.join(tmp, 'worktree-'))
   applySetup(root, worktree)
+  assert(!fs.existsSync(path.join(worktree, '.graphifyignore')))
+  assert.strictEqual(fs.readFileSync(path.join(root, '.graphifyignore'), 'utf8'), 'private/\n')
   for (const rel of configFiles) {
     assert(fs.lstatSync(path.join(worktree, rel)).isSymbolicLink())
     assert.strictEqual(fs.realpathSync(path.join(worktree, rel)), fs.realpathSync(path.join(root, rel)))

@@ -15,7 +15,6 @@ Opt-outs: [configuration.md](configuration.md).
 | Lockfiles | Blocks direct file and shell edits; use the package manager |
 | Worktrees | Routes creation through the setup-aware `create-worktree` skill |
 | Punctuation | Fixes or rejects em-dashes |
-| Graphify | Requires a graph query before code discovery when a project graph exists, with bounded failure fallback |
 
 These checks cover common actions, not every shell construct or tool.
 While a question is pending, GraphQL calls must use one inline query without
@@ -59,7 +58,7 @@ the bootstrap. Question turns carry a compact answer-only contract.
 
 Scope records live under `~/.cache/ioncache-ai-tools/claim-evidence/` in the
 `scope-policy` namespace. They retain the current request, question
-classification, request identity, graph-query status, and bounded punctuation
+classification, request identity, and bounded punctuation
 correction messages. They do not collect proposal histories or user answers
 for authorization reviews. Session end clears question markers; resume restores
 them from retained turn state.
@@ -100,12 +99,6 @@ misclassification is not fixed on every host.
 Codex hosted search bypasses local tool hooks. Copilot's built-in general-purpose
 agent lacks subagent start/stop events. Identified child tool events can
 initialize child state.
-
-For Graphify, a successful query unlocks source inspection for that turn and
-graph snapshot. A failed or unverified query permits source fallback. An
-unavailable graph or executable causes one explanatory denial, then ordinary
-discovery is permitted on retry. Help output, echoed commands, and queries
-against another graph do not satisfy the gate.
 
 These are not security boundaries. Host failures can prevent hooks from
 running, and an agent with settings access can disable guards. Keep host

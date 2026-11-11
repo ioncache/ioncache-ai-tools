@@ -395,11 +395,30 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertIn(rule['message'], self.prompt('Implement the feature')['modifiedTransformedPrompt'])
         self.assertEqual(self.prompt('Continue the feature'), {})
 
-    def test_graphify_uses_consumer_cwd(self):
+    def test_graph_files_do_not_gate_discovery_or_weaken_question_recovery(self):
         graph = self.project / 'graphify-out/graph.json'
         graph.parent.mkdir()
         graph.write_text('{}')
-        self.assertIn('graphify query', self.prompt('Investigate the flow')['modifiedTransformedPrompt'])
+        (self.project / 'source.py').write_text('entry = 1\n')
+        self.write_config(self.home / '.copilot/ioncache-ai-tools.local.json', {'features': {'graphify': True}})
+        self.assertNotIn('graphify', str(self.prompt('Why does this fail?')).lower())
+        self.invoke('preCompact')
+        for event, fields in (('sessionStart', {'source': 'resume'}), ('subagentStart', {'agentId': 'child'})):
+            self.assertNotIn('graphify', str(self.invoke(event, **fields)).lower())
+        for child in ({}, {'agentId': 'child'}):
+            for name, args in (('view', {'path': 'source.py'}), ('rg', {'pattern': 'entry'}),
+                               ('glob', {'pattern': '*.py'}), ('bash', {'command': 'cat source.py'})):
+                self.assertEqual(self.invoke('preToolUse', **child, toolName=name, toolArgs=args)[0], {})
+            denied, _ = self.invoke('preToolUse', **child, toolName='create',
+                                    toolArgs={'path': 'source.py', 'file_text': 'edited'})
+            self.assertEqual(denied['permissionDecision'], 'deny')
+        self.prompt('Implement the fix')
+        self.invoke('subagentStart', agentId='child')
+        for child in ({}, {'agentId': 'child'}):
+            self.assertEqual(self.invoke('preToolUse', **child, toolName='create',
+                                         toolArgs={'path': 'source.py', 'file_text': 'fixed'})[0], {})
+        self.assertEqual(self.tool('bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
+        self.assertEqual(graph.read_text(), '{}')
 
     def test_lifecycle_context_is_not_discarded_or_repeated_per_prompt(self):
         output, _ = self.invoke('sessionStart', source='startup')

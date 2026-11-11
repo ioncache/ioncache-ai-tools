@@ -58,9 +58,9 @@ class ConfigurationTests(unittest.TestCase):
     def test_legacy_settings_migrate_and_retired_claim_settings_disappear(self):
         for host, (path, project_path) in config.paths(self.project).items():
             with self.subTest(host=host):
-                self.write(path, {'disabledRules': ['never_kill_without_asking', 'claim-evidence'],
+                self.write(path, {'disabledRules': ['never_kill_without_asking', 'claim-evidence', 'graphify'],
                                   'enabledRules': ['verify-state-before-claiming']})
-                self.write(project_path, {'enabledRules': ['never_kill_without_asking', 'claim-evidence']})
+                self.write(project_path, {'enabledRules': ['never_kill_without_asking', 'claim-evidence', 'graphify']})
                 config.synchronize(str(self.project), host)
                 stored = json.loads(path.read_text())
                 self.assertEqual(set(stored['features']), set(config.defaults()))
@@ -70,6 +70,7 @@ class ConfigurationTests(unittest.TestCase):
                 })
                 self.assertNotIn('disabledRules', stored)
                 self.assertNotIn('claim-evidence', path.read_text())
+                self.assertNotIn('graphify', path.read_text())
                 self.assertNotIn('verify-state-before-claiming', path.read_text())
 
     def test_codex_migrates_once_without_rewriting_host_settings(self):
@@ -360,29 +361,77 @@ class ConfigurationTests(unittest.TestCase):
             worker.assert_not_called()
         self.assertTrue(docs_cache.fresh_facts(docs_cache.cache_key(url, None)))
 
-    def test_graph_and_documentation_reminders_have_independent_opt_outs(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
+    def test_documentation_reminder_has_an_independent_opt_out(self):
         self.write(config.paths(self.project)['claude'][0], {
-            'features': {'graphify': False, 'documentation-first': False},
+            'features': {'documentation-first': False},
         })
         output = scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the code'})
         self.assertNotIn('documentation-backed', str(output))
-        self.assertNotIn('graphify query', str(output))
         self.assertIn('Scope includes', str(output))
         self.assertIsNone(scope_guard.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'Grep', 'tool_input': {'pattern': 'entry'},
         }))
 
-    def test_retired_approval_setting_is_pruned_without_changing_other_preferences(self):
-        path = config.paths(self.project)['copilot'][0]
-        self.write(path, {'features': {'approval-recovery': True, 'answer-questions': False}})
-        config.synchronize(str(self.project), 'copilot')
-        stored = json.loads(path.read_text())['features']
-        self.assertNotIn('approval-recovery', stored)
-        self.assertFalse(stored['answer-questions'])
-        self.assertTrue(stored['fix_emdash'])
+    def test_retired_settings_are_pruned_without_changing_other_preferences(self):
+        for host, (path, project_path) in config.paths(self.project).items():
+            with self.subTest(host=host):
+                self.write(path, {
+                    'features': {'graphify': True, 'approval-recovery': True, 'answer-questions': False},
+                    'projects': {str(self.project): {'features': {'graphify': False, 'fix_emdash': False}}},
+                })
+                self.write(project_path, {'features': {'graphify': True, 'docs-cache': False}})
+                config.synchronize(str(self.project), host)
+                stored = json.loads(path.read_text())
+                self.assertNotIn('graphify', path.read_text())
+                self.assertNotIn('approval-recovery', stored['features'])
+                self.assertFalse(stored['features']['answer-questions'])
+                self.assertTrue(stored['features']['fix_emdash'])
+                self.assertEqual(stored['projects'][str(self.project)], {'features': {'fix_emdash': False}})
+                self.assertEqual(json.loads(project_path.read_text()), {'features': {'docs-cache': False}})
+
+    def test_graph_files_and_stale_state_do_not_gate_shared_hooks(self):
+        graph = self.project / 'graphify-out/graph.json'
+        graph.parent.mkdir()
+        graph.write_text('{}')
+        (self.project / 'source.py').write_text('entry = 1\n')
+        output = run_shared_hooks('UserPromptSubmit', {**self.data, 'prompt': 'Why does this fail?'})
+        self.assertNotIn('graphify', str(output).lower())
+        with scope_guard.store_for(self.data) as store:
+            state = store.get(scope_guard.CATEGORY, 'state')
+            state.update(graph={'identity': None}, pending_graph=[str(graph), 0, 0])
+            store.put(scope_guard.CATEGORY, ('state', state))
+        for event, fields in (('PreCompact', {}), ('SessionStart', {'source': 'resume'})):
+            self.assertNotIn('graphify', str(run_shared_hooks(event, {**self.data, **fields})).lower())
+        for agent in (None, 'child'):
+            data = {**self.data, 'agent_id': agent}
+            for name, args in (('Read', {'file_path': 'source.py'}), ('Grep', {'pattern': 'entry'}),
+                               ('Glob', {'pattern': '*.py'}), ('Bash', {'command': 'cat source.py'})):
+                self.assertEqual(run_shared_hooks('PreToolUse', {
+                    **data, 'tool_name': name, 'tool_input': args,
+                }), [])
+            if agent:
+                with scope_guard.store_for(data) as store:
+                    child = store.get(scope_guard.CATEGORY, 'state')
+                self.assertEqual(child['parent_turn'], state['id'])
+                self.assertTrue(child['question'])
+                output = run_shared_hooks('PostToolUseFailure', {
+                    **data, 'tool_name': 'Read', 'tool_input': {'file_path': 'source.py'},
+                    'error': 'Read interrupted',
+                })
+                self.assertIn('Question turn:', str(output))
+                self.assertNotIn('graphify', str(output).lower())
+            denied = run_shared_hooks('PreToolUse', {
+                **data, 'tool_name': 'Write', 'tool_input': {'file_path': 'source.py', 'content': 'edited'},
+            })
+            self.assertEqual(denied[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+        run_shared_hooks('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+        run_shared_hooks('SubagentStart', {**self.data, 'agent_id': 'child'})
+        for agent in (None, 'child'):
+            self.assertEqual(run_shared_hooks('PreToolUse', {
+                **self.data, 'agent_id': agent, 'tool_name': 'Write',
+                'tool_input': {'file_path': 'source.py', 'content': 'fixed'},
+            }), [])
+        self.assertEqual(graph.read_text(), '{}')
 
 
 if __name__ == '__main__':

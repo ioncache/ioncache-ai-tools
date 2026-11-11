@@ -193,8 +193,7 @@ for configuration examples.
 Hooks run without a skill invocation. They block recognized mutations during
 question turns, reject stale request context, block direct lockfile edits and
 recognized process-kill commands, route worktree creation through the setup
-skill, and fix or reject em-dashes. Projects with `graphify-out/graph.json`
-require a graph query before code discovery.
+skill, and fix or reject em-dashes.
 
 Startup guidance covers scope, answer-only replies, documentation-backed
 research, and engineering judgment. Hooks do not use model reviews to judge

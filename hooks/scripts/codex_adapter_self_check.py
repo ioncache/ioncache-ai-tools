@@ -194,16 +194,39 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_prompt_preserves_all_reminders_and_consumer_cwd(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
         text = self.prompt('Implement the change')
-        self.assertIn('graphify query', text)
         self.assertIn('documentation-backed', text)
         for name in ('engineering-judgment', 'scope-exactly-what-asked'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
         self.assertEqual(self.prompt('Continue the implementation'), '')
+
+    def test_graph_files_do_not_gate_discovery_or_weaken_question_recovery(self):
+        graph = self.project / 'graphify-out/graph.json'
+        graph.parent.mkdir()
+        graph.write_text('{}')
+        (self.project / 'source.py').write_text('entry = 1\n')
+        config = self.home / '.codex/ioncache-ai-tools.local.json'
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({'features': {'graphify': True}}))
+        self.assertNotIn('graphify', self.prompt('Why does this fail?').lower())
+        self.invoke('PreCompact')
+        for event, fields in (('SessionStart', {'source': 'resume'}), ('SubagentStart', {'agent_id': 'child'})):
+            self.assertNotIn('graphify', str(self.invoke(event, **fields)).lower())
+        for child in ({}, {'agent_id': 'child'}):
+            for name, args in (('Read', {'file_path': 'source.py'}), ('Grep', {'pattern': 'entry'}),
+                               ('Glob', {'pattern': '*.py'}), ('Bash', {'command': 'cat source.py'})):
+                self.assertEqual(self.invoke('PreToolUse', **child, tool_name=name, tool_input=args), [{}])
+            denied = self.invoke('PreToolUse', **child, tool_name='apply_patch',
+                                 tool_input={'command': CLEAN_PATCH})[0]
+            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.prompt('Implement the fix')
+        self.invoke('SubagentStart', agent_id='child')
+        for child in ({}, {'agent_id': 'child'}):
+            self.assertEqual(self.invoke('PreToolUse', **child, tool_name='apply_patch',
+                                         tool_input={'command': CLEAN_PATCH}), [{}])
+        self.assertEqual(self.tool('Bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
+        self.assertEqual(graph.read_text(), '{}')
 
     def test_engineering_reminder_can_be_disabled_and_reenabled(self):
         name = 'engineering-judgment'

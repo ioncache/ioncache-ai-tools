@@ -114,12 +114,6 @@ class TurnGuardTests(unittest.TestCase):
         return self.hook(event, tool_name='Write',
                          tool_input={'file_path': 'target.py', 'content': 'requested change'}, **fields)
 
-    def graph(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
-        return graph
-
     def test_bootstrap_once_and_zero_ordinary_prompt_growth(self):
         first = self.hook('SessionStart', source='startup')
         self.assertLessEqual(len(first['hookSpecificOutput']['additionalContext']), 800)
@@ -913,29 +907,6 @@ class TurnGuardTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0)
                 self.assertIn(guard.UNVERIFIED, json.loads(result.stdout)['systemMessage'])
 
-    def test_symlink_loop_runtime_error_exits_with_blocking_status(self):
-        self.prompt('Explain the code flow')
-        loop = self.project / 'loop'
-        loop.symlink_to(loop.name)
-        resolve = Path.resolve
-        def old_resolve(path, *args, **kwargs):
-            if path == loop:
-                raise RuntimeError('Symlink loop: fixture')
-            return resolve(path, *args, **kwargs)
-        data = {**self.data, 'tool_name': 'Bash',
-                'tool_input': {'command': 'graphify query flow --graph loop > output.txt'}}
-        stderr = io.StringIO()
-        with (
-            mock.patch.object(Path, 'resolve', old_resolve),
-            mock.patch.object(sys, 'argv', [guard.__file__, 'PreToolUse']),
-            mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(data))),
-            mock.patch.object(sys, 'stderr', stderr),
-            self.assertRaises(SystemExit) as stopped,
-        ):
-            guard.main()
-        self.assertEqual(stopped.exception.code, 2)
-        self.assertIn('Symlink loop: fixture', stderr.getvalue())
-
     def test_unexpected_stop_errors_remain_warnings(self):
         for event in ('Stop', 'SubagentStop'):
             stdout = io.StringIO()
@@ -1046,58 +1017,29 @@ class TurnGuardTests(unittest.TestCase):
                            [{'fetched_at': time.time() - docs_cache.TTL_SECONDS - 1}], 'Old detail')
         self.assertEqual(guard.review_request(self.data, self.state(), {})['documentation'], [])
 
-    def test_graph_discovery_requires_a_real_completed_query(self):
-        self.graph()
-        self.prompt('Explain the code flow')
-        with mock.patch.object(guard.shutil, 'which', return_value='/bin/graphify'):
-            denied = self.hook('PreToolUse', tool_name='Grep', tool_input={'pattern': 'entry'})
-            self.assertIn('graphify query', str(denied))
-            self.hook('PostToolUse', tool_name='Bash',
-                      tool_input={'command': 'echo graphify query flow'}, tool_response='fake query')
-            self.assertIsNotNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
-            query = {'tool_name': 'Bash', 'tool_input': {'command': 'graphify query "entry flow"'}}
-            self.hook('PreToolUse', **query)
-            self.hook('PostToolUse', **query, tool_response={'exit_code': 0, 'stdout': 'entry.py'})
-            self.assertIsNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
+    def test_graph_files_do_not_gate_retained_guard_or_break_child_evidence(self):
+        graph = self.project / 'graphify-out/graph.json'
+        graph.parent.mkdir()
+        graph.write_text('{}')
+        (self.project / 'source.py').write_text('entry = 1\n')
+        self.assertNotIn('graphify', str(self.prompt('Why does this fail?')).lower())
+        for agent in (None, 'child'):
+            for name, args in (('Grep', {'pattern': 'entry'}), ('Glob', {'pattern': '*.py'}),
+                               ('Bash', {'command': 'cat source.py'}), ('Read', {'file_path': 'source.py'})):
+                fields = {'agent_id': agent, 'tool_name': name, 'tool_input': args}
+                self.assertIsNone(self.hook('PreToolUse', **fields))
+                self.assertNotIn('graphify', str(self.hook('PostToolUse', **fields, tool_response='source')).lower())
+            self.assertIn('classified as a question', str(self.tool(agent_id=agent)))
+        with guard.store_for({**self.data, 'agent_id': 'child'}) as store:
+            child = store.get(guard.CATEGORY, 'state')
+        self.assertEqual(child['parent_turn'], self.state()['id'])
+        self.assertTrue(all(item['correlated'] for item in child['observations']))
+        self.prompt('Implement the fix')
+        self.hook('SubagentStart', agent_id='child')
+        self.assertIsNone(self.tool(agent_id='child'))
+        self.assertEqual(graph.read_text(), '{}')
 
-    def test_graph_help_other_graph_and_changed_graph_do_not_unlock_discovery(self):
-        graph = self.graph()
-        self.prompt()
-        for command in ('graphify query --help', 'graphify query --help --graph graphify-out/graph.json',
-                        'graphify query flow --graph other.json', 'echo graphify query flow'):
-            self.assertFalse(guard.graph_query({**self.data, 'tool_name': 'Bash', 'tool_input': {'command': command}}))
-        query = {'tool_name': 'Bash', 'tool_input': {'command': 'graphify query flow'}}
-        self.hook('PreToolUse', **query)
-        graph.write_text('{"changed":true}')
-        self.hook('PostToolUse', **query, tool_response={'exit_code': 0})
-        with mock.patch.object(guard.shutil, 'which', return_value='/bin/graphify'):
-            self.assertIsNotNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
-
-    def test_missing_and_failed_graph_queries_have_bounded_fallback(self):
-        self.graph()
-        self.prompt()
-        with mock.patch.object(guard.shutil, 'which', return_value=None):
-            self.assertIn('unavailable', str(self.hook('PreToolUse', tool_name='Grep', tool_input={})))
-            self.assertIsNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
-        self.prompt()
-        query = {'tool_name': 'Bash', 'tool_input': {'command': 'graphify query absent'}}
-        self.hook('PreToolUse', **query)
-        self.hook('PostToolUseFailure', **query, tool_response={'error': 'no match', 'exit_code': 4})
-        self.assertIsNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
-
-    def test_unreadable_graph_does_not_permanently_block_source_discovery(self):
-        graph = self.graph()
-        self.prompt()
-        stat = Path.stat
-        def guarded_stat(path, *args, **kwargs):
-            if path == graph:
-                raise PermissionError('unreadable graph directory')
-            return stat(path, *args, **kwargs)
-        with mock.patch.object(Path, 'stat', guarded_stat):
-            self.assertIn('unavailable', str(self.hook('PreToolUse', tool_name='Grep', tool_input={})))
-            self.assertIsNone(self.hook('PreToolUse', tool_name='Grep', tool_input={}))
-
-    def test_shell_wrappers_without_an_executable_are_not_discovery(self):
+    def test_shell_wrappers_without_an_executable_remain_read_only(self):
         self.prompt()
         self.assertIsNone(self.hook('PreToolUse', tool_name='Bash', tool_input={'command': 'env -i'}))
 
@@ -1176,18 +1118,6 @@ class TurnGuardTests(unittest.TestCase):
             self.assertIsNone(self.hook('PreToolUse', tool_name='Agent',
                                        tool_input={'prompt': 'Read source to explain the failure.'}))
         self.assertTrue(reviewer.call_args.args[1]['question_only'])
-
-    def test_shell_source_reads_and_json_reads_cannot_skip_graph_discovery(self):
-        self.graph()
-        (self.project / 'manifest.json').write_text('{}')
-        self.prompt()
-        with mock.patch.object(guard.shutil, 'which', return_value='/bin/graphify'):
-            self.assertIsNotNone(self.hook('PreToolUse', tool_name='Bash',
-                                          tool_input={'command': 'cat manifest.json'}))
-            self.assertIsNotNone(self.hook('PreToolUse', tool_name='Read',
-                                          tool_input={'file_path': 'manifest.json'}))
-        self.assertIsNone(self.hook('PreToolUse', tool_name='Read',
-                                   tool_input={'file_path': str(self.root / 'external-docs.txt')}))
 
     def test_session_end_cleans_child_markers_without_dropping_resume_context(self):
         self.prompt('Why?')
