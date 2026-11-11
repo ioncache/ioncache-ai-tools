@@ -59,6 +59,13 @@ the gap rather than repeatedly relaunching within the same round.
 
 ## Validate and triage every candidate
 
+The coordinator reads and applies
+[../review-code/CRITERIA.md#actionability](../review-code/CRITERIA.md#actionability), including
+documentation accuracy, test coverage, edge-case exclusions, and impact-based
+severity. This shares judgment rules, not the review-code orchestration or
+report format. Do not pass this methodology to the fresh reviewer or change
+its minimal assignment.
+
 The coordinator evaluates the evidence rather than accepting the reviewer's
 labels. Re-read the relevant target and sources. Agreement between models is
 not validation. Record the following separately for every underlying issue,
@@ -126,13 +133,11 @@ earlier reportable claim. Record the old and new assessments and why.
 
 ## Filter the report, not the investigation
 
-A finding is reportable when it warrants one of these:
-
-- Act: a supported, relevant problem with a worthwhile correction.
-- Decide: an unresolved choice that materially affects correctness, risk,
-  implementation, or a significant design commitment.
-- Investigate: a credible consequential uncertainty with a specific useful
-  evidence-gathering action, not an arbitrary hypothetical possibility.
+A finding is reportable when it warrants `Act`, `Decide`, or `Investigate`
+under the shared actionability policy. Map opportunistic and no-action
+dispositions to non-reportable `None`; preserve their reasons in the ledger.
+Do not use a finding quota, inflate severity, or suppress consequential
+uncertainty to improve an apparent success ratio.
 
 P3 opportunistic edits, cosmetic preferences, duplicates, refuted claims, and
 evidence-backed low-value observations remain in the ledger only. Do not turn

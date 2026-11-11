@@ -32,7 +32,8 @@ to the change. Out-of-scope does not mean invalid.
 ## Review method
 
 Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md). They define
-the shared review standards, human report, and evidence handback.
+the shared review standards, actionability policy, human report, and evidence
+handback. Apply that policy to recommendations as well as presentation.
 
 If assigned a bounded specialist pass, perform only that pass and return its
 evidence. Do not start another review or spawn agents. An assigned coordinator
@@ -51,10 +52,11 @@ then sends their result-file paths to a separate flat adjudicator. Keep continuo
 call-chain investigations together. Do not create an external runner to
 work around missing native capabilities.
 
-Choose `specialists` by default, or `sweep-first` for a large or cost-sensitive
-review that fits one whole-source correctness sweep. The latter runs one
-correctness worker before applicable standards/docs passes and targeted deeper
-traces. Both strategies retain integration and independent adjudication.
+Honor an explicit strategy. Otherwise prefer `sweep-first` when one worker can
+read the whole correctness scope and risk does not require specialist-first
+allocation. Use `specialists` when capacity or independent risk areas require
+it. A sweep precedes targeted follow-ups; small standards checks can share a
+worker. Both strategies retain integration and independent adjudication.
 Use ORCHESTRATION.md's capacity and independence rules; strategy is separate
 from inline, nested, or flat topology.
 

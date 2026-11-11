@@ -61,11 +61,12 @@ precedence. Substantial reviews use nested coordination where supported or
 flat worker collection with a separate adjudicator. Missing required
 independence blocks the review.
 
-Specialist-first is the default strategy. Optional `sweep-first` starts with
-one whole-source correctness worker, then applicable standards/docs passes
-and targeted deeper traces. It suits large or cost-sensitive reviews whose
-scope fits one worker; both strategies retain integration and independent
-adjudication.
+An explicit strategy takes precedence. Otherwise `sweep-first` is preferred
+when the whole correctness scope fits one worker and risk does not require
+specialist-first allocation. Follow-ups address concrete risks, evidence gaps,
+and remaining standards/docs coverage. Small standards checks can share a
+worker. Both strategies retain integration and independent adjudication;
+finding counts are not an allocation target.
 
 Both strategies require whole-file reads and propagate caller read/tool
 constraints. Reviewers responsible for consumers also read shared
@@ -83,11 +84,33 @@ tool output does not invalidate scope verdicts; review snapshot checks still
 reject target drift. Background handback limitations and the foreground
 fallback are covered in [guardrails.md#host-coverage-and-limits](guardrails.md#host-coverage-and-limits).
 
-Human reports lead with correctness, security, and contract findings using
-the caller's `main_min_severity` threshold (default `Low`). Standards/docs/style
-findings follow, grouped by rule. Every candidate retains its `observed` or
-`inferred` basis, uncertainty, and provenance. Presentation filtering never
-discards candidates from the handback or changes a calling loop's fix policy.
+The shared actionability policy reports worthwhile corrections (`Act`),
+consequential choices (`Decide`), and credible evidence gaps (`Investigate`).
+Incorrect documentation warrants correction without an observed runtime
+failure; accurate documentation in a nonpreferred style does not. Missing
+coverage of new or changed code is actionable by default, with a 100% coverage
+goal and meaningful assertions. Coverage exceptions need concrete justification,
+not an assumption that simple code needs no test.
+
+Extreme, speculative edge cases are excluded unless evidence supports a
+credible trigger and meaningful performance, security, privacy, or correctness
+impact. Ordinary failure paths are not extreme edge cases. Severity describes
+impact, independently of confidence and priority. No finding quotas or
+automatic severity promotion apply.
+
+Rejected, duplicate, style-only, and low-value observations stay private, with
+counts rather than a second findings table. Every candidate retains its
+`observed` or `inferred` basis, uncertainty, provenance, and assessment.
+The caller's `main_min_severity` threshold (default `Low`) is a display filter
+applied after actionability; it neither accepts risk nor changes fix eligibility.
+The review/fix loop selects only valid, in-scope `Act` findings for corrections,
+not every valid observation. Consequential unresolved evidence gaps remain
+visible and required failed checks still prevent a clean review.
+
+The triage loop's coordinator uses the same actionability policy without
+changing its minimal fresh-reviewer assignments. Unresolved-PR-comment triage
+also uses the policy but accounts for every supplied comment, including
+no-change responses, without treating those responses as actionable defects.
 
 Review-role model choices depend on current availability, suitability evidence,
 and host permissions. When those are missing, preserve configured defaults and
