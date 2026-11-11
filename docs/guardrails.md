@@ -7,8 +7,8 @@ Opt-outs: [configuration.md](configuration.md).
 
 | Guard | Behavior |
 | --- | --- |
-| Answer-only questions | Blocks recognized mutations for the whole question turn and checks replies for unsolicited work |
-| Scope | Checks recognized mutations, delegation, follow-up agent messages, and response work products against authorization |
+| Answer-only questions | Blocks recognized mutations for the whole question turn and supplies answer-only guidance |
+| Scope | Supplies scope guidance and rejects mutations or delegation with stale native request or child-assignment context |
 | Documentation first | Supplies documentation-backed research guidance, not factual verification |
 | Engineering judgment | Directs non-trivial work to coherent solutions within the authorized scope |
 | Process termination | Blocks recognized process-kill commands while enabled; chat approval does not override it |
@@ -29,58 +29,27 @@ Explicitly requested drafts or code may appear in the answer, but that does
 not authorize file edits. A subsequent direct, non-question instruction clears
 the question gate.
 
-Assistant proposals supply context for later approval; they do not authorize
-themselves. Question-tool exchanges retain the user's answer, including
-refusals and unavailable-user replies. Successful tool execution is not consent.
-Missing or truncated context cannot establish authorization.
-
-If work is blocked because context is missing, state the complete task, scope,
-and authorization directly in chat. This recovery route works across hosts
-without requiring a confirmation tool. Genuine restrictions still apply;
-repeating a denied call does not grant permission.
-
-Copilot can recover missing prompt and question-tool history from its native
-transcript at root Stop when `approval-recovery` is enabled. Recovery validates
-the session and exact Stop event, and retains the chronological dialogue as a
-whole or not at all. It becomes available after Stop, not before the first
-blocked edit, and does not retry edits or authorize a new task. Claude and
-Codex do not import historical transcripts for approval recovery.
+Scope and answer content remain instructions for the assistant. Hooks do not
+judge whether a proposed action fits a request, whether an ambiguous approval
+authorizes it, or whether prose offers unsolicited work. Passing a deterministic
+check does not grant host permission or authorize work outside the user's request.
 
 Compaction and resume preserve the active request and question gate. A clear
-discards the active request and recovered dialogue. Copilot fences failed
-prompt updates so stale authorization cannot permit mutations or delegation;
-submit a genuine request successfully to recover.
+discards the active request. Copilot fences failed prompt updates so stale
+question state cannot permit mutations or delegation. Resubmit a complete
+direct instruction to recover. An identified child whose parent request has
+changed needs a fresh assignment before it can mutate or delegate.
 
-## Model usage and failures
+Read-only investigation and genuine user-input tools remain available during
+these denials. Repeating a blocked mutation does not clear a question or refresh
+a child assignment.
 
-Semantic checks launch the same host's CLI outside the consuming repository.
-They use that isolated CLI's default model, with request, candidate, proposal,
-and approval context supplied over stdin. They check authorization and
-answer-only behavior, not factual claims, execution outcomes, or documentation.
+## Model usage
 
-**These calls consume additional host usage and can add latency.** Each has a
-60-second deadline. Decisions are reused until the candidate, authorization,
-or relevant settings change; operational failures are not cached as denials.
-
-The CLI on `PATH` must support the isolation flags and authenticate
-noninteractively. Claude requires `--safe-mode` support (2.1.169+); Codex
-requires `--ignore-user-config` support (0.122.0+). These are flag minimums,
-not compatibility guarantees for every hook event. Use a current supported CLI:
-
-- https://github.com/anthropics/claude-code/releases/tag/v2.1.169
-- https://github.com/openai/codex/releases/tag/rust-v0.122.0
-
-Reviewer runs suppress this plugin's hooks. Claude disables customizations;
-Copilot disables custom instructions; Codex ignores user configuration.
-Claude and Copilot have no tools. Codex disables shell, web, and native
-subagents in read-only mode but may expose utility tools. Unsupported options
-produce upgrade guidance, never a retry with weaker isolation.
-
-An unavailable or malformed reviewer denies recognized mutations. Read-only
-investigation remains available to diagnose the failure. Final checks permit
-at most two model calls and one correction per user turn. Further failure or
-budget exhaustion produces a warning and an unverified result, not a successful
-check or an endless correction loop.
+Scope, question, and punctuation guards do not launch model reviews.
+Documentation-cache distillation is separate and consumes additional model
+usage when enabled. Disable `docs-cache` to prevent those calls. Explicitly
+invoked review skills can also use model agents.
 
 ## Context and privacy
 
@@ -89,27 +58,31 @@ subagent startup, with a first-prompt fallback. Ordinary prompts do not repeat
 the bootstrap. Question turns carry a compact answer-only contract.
 
 Scope records live under `~/.cache/ioncache-ai-tools/claim-evidence/` in the
-`scope-policy` namespace. They can contain user requests and assistant text.
-Session end discards review decisions but retains request context for resume.
-History and reviewer payloads are bounded; omissions are marked rather than
-treated as consent.
+`scope-policy` namespace. They retain the current request, question
+classification, request identity, graph-query status, and bounded punctuation
+correction messages. They do not collect proposal histories or user answers
+for authorization reviews. Session end clears question markers; resume restores
+them from retained turn state.
 
-The isolated host CLI can retain its own session history. Copilot does not
-provide the ephemeral mode used for Claude and Codex here. Documentation-cache
-storage and usage are separate: [documentation-cache.md](documentation-cache.md).
+Documentation-cache storage and usage are separate:
+[documentation-cache.md](documentation-cache.md).
 
 ## Host coverage and limits
 
-| Host | Response coverage |
+| Host | Final punctuation input |
 | --- | --- |
-| Claude Code | Records streamed `MessageDisplay` text and checks the final response |
-| Copilot CLI | Retains root assistant prose through the exact current Stop event, including root task-completion summaries |
-| Codex | Checks the final message only; its unstable transcript format is not parsed |
+| Claude Code | The native `last_assistant_message` field |
+| Copilot CLI | The latest root assistant text at the exact current Stop event, including root task-completion summaries |
+| Codex | The native `last_assistant_message` field; its unstable transcript format is not parsed |
 
-Missing batches, truncated text, or unavailable final text are incomplete
-coverage, not a successful whole-turn check. Checks cannot retract streamed
-prose or undo completed actions. Other plugins' synthetic prompts cannot
-always be distinguished from genuine user messages.
+Missing Copilot final text is reported as an unavailable punctuation check,
+not a clean response. Checks cannot retract streamed prose or undo completed
+actions. Other plugins' synthetic prompts cannot always be distinguished from
+genuine user messages.
+
+Copilot mid-turn steering does not trigger either prompt hook. The question
+gate can therefore retain its previous classification. Resend a complete
+instruction when the agent is idle to refresh it.
 
 Background subagent handbacks have the same provenance limitation. Claude
 Code runs `UserPromptSubmit` for background handbacks, but its documented
@@ -126,8 +99,7 @@ misclassification is not fixed on every host.
 
 Codex hosted search bypasses local tool hooks. Copilot's built-in general-purpose
 agent lacks subagent start/stop events. Identified child tool events can
-initialize child state; anonymous child stops warn without consuming the
-parent's review budget.
+initialize child state.
 
 For Graphify, a successful query unlocks source inspection for that turn and
 graph snapshot. A failed or unverified query permits source fallback. An

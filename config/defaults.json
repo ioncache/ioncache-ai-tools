@@ -1,7 +1,6 @@
 {
   "features": {
     "answer-questions": true,
-    "approval-recovery": true,
     "block_raw_worktree_add": true,
     "docs-cache": true,
     "documentation-first": true,

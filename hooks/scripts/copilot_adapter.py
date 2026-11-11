@@ -9,12 +9,11 @@ import sys
 import time
 
 import docs_cache
-from copilot_history import recover_history
 from classify_question import set_marker
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
 from plugin_config import enabled, synchronize
-from scope_guard import CATEGORY, MAX_RESPONSE_CHARS, prompt_pending, retain_recent_messages, store_for
+from scope_guard import prompt_pending
 
 TRANSCRIPT_WAIT_SECONDS = 2
 
@@ -141,12 +140,7 @@ def pre_tool_use(data):
 def response_context(data):
     """Wait for this stop invocation to be flushed, never inspect a stale turn."""
     deadline = time.monotonic() + TRANSCRIPT_WAIT_SECONDS
-    with store_for(shared_input(data)) as store:
-        state = store.get(CATEGORY, 'state') or {}
-    response = {
-        'text': None, 'messages': [], 'complete': False, 'recent_messages': [], 'recent_messages_omitted': False,
-        'continuations': state.get('continuations', []), 'stop': data,
-    }
+    response = {'text': None, 'stop': data}
     with Path(data['transcriptPath']).open(encoding='utf-8') as transcript:
         while time.monotonic() < deadline:
             position = transcript.tell()
@@ -157,9 +151,6 @@ def response_context(data):
                 continue
             output = consume_response_event(response, json.loads(line))
             if output:
-                output['_recovery_turn'] = state.get('id')
-                if not state.get('history_recovery_disabled') and enabled('approval-recovery', shared_input(data)):
-                    output['_recovered_history'] = recover_history(data)
                 return output
     raise TimeoutError('current Copilot stop invocation was not flushed to the transcript')
 
@@ -169,18 +160,13 @@ def consume_response_event(response, event):
     if event.get('agentId') or payload.get('parentToolCallId'):
         return None
     kind = event.get('type')
-    if kind == 'user.message':
-        response['text'] = None
-        if payload.get('content') not in response['continuations']:
-            response.update(messages=[], complete=True, recent_messages=[], recent_messages_omitted=False)
-    elif kind == 'assistant.turn_start':
+    if kind in ('user.message', 'assistant.turn_start'):
         response['text'] = None
     elif kind == 'assistant.message':
-        append_response_message(response, payload)
+        response['text'] = None if payload.get('toolRequests') else payload.get('content')
     elif kind == 'session.task_complete':
         summary = payload.get('summary')
-        text = summary if isinstance(summary, str) and summary.strip() else None
-        append_response_message(response, {'content': text})
+        response['text'] = summary if isinstance(summary, str) and summary.strip() else None
     elif kind == 'hook.start' and payload.get('hookType') == 'agentStop':
         invocation = payload.get('input') or {}
         if (invocation.get('sessionId') == response['stop']['sessionId']
@@ -188,28 +174,8 @@ def consume_response_event(response, event):
             available = isinstance(response['text'], str)
             return {
                 'last_assistant_message': response['text'] if available else None,
-                '_assistant_messages': response['messages'],
-                '_recent_assistant_messages': response['recent_messages'],
-                '_recent_messages_omitted': response['recent_messages_omitted'],
-                '_response_coverage': 'turn' if response['complete'] and available else 'partial',
             }
     return None
-
-
-def append_response_message(response, payload):
-    content = payload.get('content')
-    response['text'] = None if payload.get('toolRequests') else content
-    if not isinstance(content, str) or not content:
-        return
-    response['recent_messages'].append({'text': content, 'truncated': False})
-    omitted = retain_recent_messages(response['recent_messages'])
-    response['recent_messages_omitted'] |= omitted
-    remaining = max(0, MAX_RESPONSE_CHARS - sum(map(len, response['messages'])))
-    response['messages'].append(content[:remaining])
-    response['complete'] &= len(content) <= remaining
-    if len(response['messages']) > 64:
-        del response['messages'][64:]
-        response['complete'] = False
 
 
 def final_response(data):
@@ -240,10 +206,12 @@ def run_hook(event, data):
         user_warning(notice)
         return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
-        if not any(enabled(name, hook_input) for name in ('fix_emdash', 'scope-exactly-what-asked', 'answer-questions')):
+        if not enabled('fix_emdash', hook_input):
             user_warning(docs_cache_hook(docs_cache.copilot_stop, data))
             return None
         response = response_context(data)
+        if response['last_assistant_message'] is None:
+            user_warning({'systemMessage': 'Final punctuation check unavailable: the current response text is missing.'})
         outputs = run_shared_hooks('Stop', {
             **hook_input, **response,
         })
@@ -260,10 +228,10 @@ def run_hook(event, data):
         Path(f'/tmp/.ioncache-pending-question-{hook_input["session_id"]}').unlink(missing_ok=True)
         run_shared_hooks('SessionEnd', hook_input)
         return None
-    if event in ('sessionStart', 'preCompact', 'subagentStart', 'subagentStop'):
+    if event in ('sessionStart', 'preCompact', 'subagentStart'):
         shared_event = {
             'sessionStart': 'SessionStart', 'preCompact': 'PreCompact',
-            'subagentStart': 'SubagentStart', 'subagentStop': 'SubagentStop',
+            'subagentStart': 'SubagentStart',
         }[event]
         outputs = run_shared_hooks(shared_event, {
             **hook_input, 'last_assistant_message': data.get('response'),

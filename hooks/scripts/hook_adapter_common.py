@@ -18,8 +18,7 @@ def run_shared_hooks(event, hook_input):
     """Use the shared manifest as the sole source of hook order and commands."""
     manifest = json.loads((PLUGIN_ROOT / 'hooks' / 'hooks.json').read_text())
     outputs = []
-    budget = 80 if event in ('PreToolUse', 'Stop', 'SubagentStop') else 20
-    deadline = time.monotonic() + budget
+    deadline = time.monotonic() + 20
     for group in manifest['hooks'].get(event, []):
         for hook in group['hooks']:
             command = [

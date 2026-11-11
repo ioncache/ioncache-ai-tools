@@ -15,13 +15,6 @@
         "timeoutSec": 30
       }
     ],
-    "subagentStop": [
-      {
-        "type": "command",
-        "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" subagentStop",
-        "timeoutSec": 90
-      }
-    ],
     "preCompact": [
       {
         "type": "command",
@@ -47,14 +40,14 @@
       {
         "type": "command",
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" preToolUse",
-        "timeoutSec": 90
+        "timeoutSec": 30
       }
     ],
     "agentStop": [
       {
         "type": "command",
         "bash": "python3 \"${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py\" agentStop",
-        "timeoutSec": 90
+        "timeoutSec": 30
       }
     ],
     "sessionEnd": [

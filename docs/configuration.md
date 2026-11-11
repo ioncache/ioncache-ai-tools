@@ -39,8 +39,7 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Question classification, mutation gate, and answer-only review |
-| `approval-recovery` | Copilot native transcript approval recovery |
+| `answer-questions` | Question classification, mutation gate, answer-only guidance, and shared request-freshness checks |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -50,8 +49,12 @@ remain after synchronization finishes.
 | `never_kill_without_asking` | Recognized process-kill commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
-| `scope-exactly-what-asked` | Startup scope policy and semantic scope checks |
+| `scope-exactly-what-asked` | Startup scope guidance and shared request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
+
+`answer-questions` and `scope-exactly-what-asked` share request-freshness
+checks. They remain active while either setting is enabled, so disabling one
+does not disable the checks needed by the other.
 
 Skill opt-outs block explicit skill-tool loads and instruct the assistant not
 to apply the skill automatically or through slash commands. They do not remove
@@ -59,7 +62,8 @@ skills from the host's discovery menu. Instruction-based activation remains
 subject to host behavior.
 
 Disabling `skill:engineering-judgment` also suppresses the reminder to load
-that skill. Other guard and skill settings are independent.
+that skill. Apart from these dependencies, guard and skill settings are
+independent.
 
 ## Synchronization and recovery
 
@@ -75,8 +79,8 @@ not run this command.
 
 Synchronization preserves retained values, adds new global defaults, and
 removes unknown or retired keys. Writes are locked and atomic, preserve
-intentional symlinks, and skip unchanged files. Tool guards refresh settings
-after semantic review before accepting a verdict.
+intentional symlinks, and skip unchanged files. Settings are reused within
+one hook invocation and are not cached across invocations.
 
 Runtime persistence failures warn but retain valid effective settings.
 Explicit synchronization exits nonzero on read, validation, or persistence

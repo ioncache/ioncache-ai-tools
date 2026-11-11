@@ -190,16 +190,18 @@ for configuration examples.
 
 ## Automatic guardrails
 
-Hooks run without a skill invocation. They enforce answer-only question turns,
-check work against the authorized scope, block direct lockfile edits and
+Hooks run without a skill invocation. They block recognized mutations during
+question turns, reject stale request context, block direct lockfile edits and
 recognized process-kill commands, route worktree creation through the setup
 skill, and fix or reject em-dashes. Projects with `graphify-out/graph.json`
 require a graph query before code discovery.
 
-Startup guidance covers documentation-backed research and engineering judgment.
+Startup guidance covers scope, answer-only replies, documentation-backed
+research, and engineering judgment. Hooks do not use model reviews to judge
+authorization or reply content.
 The documentation cache reuses facts from supported documentation fetches.
-**Scope checks and cache distillation make additional model calls and consume
-the host's usage.** Scope checks can be wrong and do not verify factual claims.
+**Cache distillation makes additional model calls and consumes the host's
+usage.** Disable `docs-cache` to opt out.
 
 ## Configuration
 
@@ -238,12 +240,12 @@ Precedence and synchronization: [docs/configuration.md](docs/configuration.md).
 | --- | --- |
 | A skill is missing | Confirm the plugin is installed and enabled, then start a fresh session or thread. Use the host's skill picker shown above. |
 | A question blocks edits | A mixed question/instruction prompt remains answer-only. Send a separate direct instruction to authorize edits. |
-| Approval context is missing | Restate the complete task, scope, and authorization in chat. Repeating a denied tool call does not grant permission. |
-| A checker fails | Confirm the host CLI on `PATH` is current and its noninteractive login works. Read-only investigation remains available. |
+| Request context is stale or a prompt update fails | Resubmit a complete direct instruction. A child agent needs a fresh assignment after its parent's request changes. |
+| Copilot mid-turn steering | Steering messages do not trigger prompt hooks, so question classification can remain stale. Resend the instruction when the agent is idle. |
 | Sensitive documentation questions | The shared cache can replay Claude's original `WebFetch` question across projects and hosts. Disable `docs-cache` before submitting sensitive questions. |
-| Background review results block continued work | Some hosts mistake reviewer results for new user requests, triggering question or scope checks. Ask the assistant to run reviews in the foreground where supported, waiting for reviewers to finish instead of relying on background notifications. |
+| Background review results block continued work | Some hosts mistake reviewer results for new user requests, triggering question checks. Ask the assistant to run reviews in the foreground where supported, waiting for reviewers to finish instead of relying on background notifications. |
 | Review coordination | Supervised cross-host trials remain pending; not every execution mode is acceptance-verified. |
-| Response checking | Codex checks final responses only. Checks cannot retract streamed prose or undo completed actions. |
+| Response checking | Automatic final-response checks cover punctuation, not scope or factual accuracy. They cannot retract streamed prose or undo completed actions. |
 
 These are guardrails, not a security boundary. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.

@@ -71,7 +71,7 @@ def run_hook(event, data):
         return prompt_submit(data)
     if event == 'PreToolUse':
         return pre_tool_use(data)
-    if event in ('PostToolUse', 'SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart', 'SubagentStop', 'Stop'):
+    if event in ('PostToolUse', 'SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart', 'Stop'):
         outputs = run_shared_hooks(event, {**data, 'evidence_model_output': event == 'PostToolUse'})
         blocked = next((output for output in outputs if output.get('decision') == 'block'), None)
         if blocked:
