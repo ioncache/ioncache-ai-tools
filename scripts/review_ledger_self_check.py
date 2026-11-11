@@ -170,6 +170,11 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse((self.root / ".review-loop").exists())
 
     def test_coordinated_handbacks_preserve_schema_one_evidence(self):
+        style_assessment = {
+            "validator": "review-adjudicator", "report_action": "None",
+            "reachability": "Accurate inline object type violates only a style convention",
+            "confidence": "High", "priority": "No correction warranted",
+        }
         for mode, strategy in product(("nested", "flat"), ("specialists", "sweep-first")):
             self.init()
             self.send("start_review")
@@ -181,9 +186,9 @@ class ReviewLedgerTests(unittest.TestCase):
             self.send("finding", key="specialist-boundary", summary="Same boundary mismatch",
                       locations=["app.txt:1"], severity="High",
                       evidence=["origin=other-specialist; basis=observed; reproduced same failure"])
-            self.send("finding", key="docs-style", summary="Fixture punctuation candidate",
+            self.send("finding", key="docs-style", summary="Accurate inline object type",
                       locations=["app.txt:1"], severity="Low",
-                      evidence=["origin=docs; basis=inferred; grouped=punctuation; main_min_severity=Medium"])
+                      evidence=["origin=docs; basis=inferred; kind=style; main_min_severity=Medium"])
             self.reject("decision", id="F002", validation="invalid", disposition="ignored",
                         severity="High", evidence=["Caller validation waits for completed passes"])
             self.send("review_done", passes=[full_pass], checks=CHECKS)
@@ -191,9 +196,9 @@ class ReviewLedgerTests(unittest.TestCase):
                       evidence=["validator=review-adjudicator; traced specialist evidence"])
             self.send("decision", id="F002", validation="invalid", disposition="ignored",
                       severity="High", evidence=["validator=outer-loop; checked integration claim"])
-            self.send("decision", id="F003", validation="invalid", disposition="ignored",
-                      severity="Low", reason="The fixture requirement does not mandate punctuation",
-                      evidence=["validator=review-adjudicator; checked the applicable rule"])
+            self.send("decision", id="F003", validation="valid", disposition="ignored",
+                      severity="Low", reason="Accurate documentation differs only in presentation",
+                      evidence=[json.dumps(style_assessment)])
             self.send("start_fix", findings=["F001"], files=["app.txt"])
             (self.root / "app.txt").write_text(f"corrected {mode} {strategy}\n")
             self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Correction"}},
@@ -205,7 +210,7 @@ class ReviewLedgerTests(unittest.TestCase):
             self.review()
             self.send("advance")
             report = self.cli(["status", self.ledger])
-            self.assertEqual(report["outcome"], "completed")
+            self.assertEqual(report["outcome"], "completed_with_exceptions")
             self.assertEqual(len(report["loops"]), 2)
             self.assertEqual(len(report["loops"][0]["cycles"]), 1)
             self.assertEqual(report["loops"][0]["review"]["passes"], [full_pass])
@@ -216,8 +221,12 @@ class ReviewLedgerTests(unittest.TestCase):
             self.assertIn("basis=inferred", report["findings"]["F002"]["observations"][0]["evidence"][0])
             self.assertIn("main_min_severity=Medium", report["findings"]["F003"]["observations"][0]["evidence"][0])
             self.assertEqual(report["findings"]["F003"]["severity"], "Low")
+            self.assertEqual(report["findings"]["F003"]["validation"], "valid")
+            self.assertEqual(report["findings"]["F003"]["disposition"], "ignored")
+            self.assertEqual(json.loads(report["findings"]["F003"]["decisions"][0]["evidence"][0]),
+                             style_assessment)
             self.assertEqual(report["findings"]["F003"]["decisions"][0]["reason"],
-                             "The fixture requirement does not mandate punctuation")
+                             "Accurate documentation differs only in presentation")
             self.assertEqual(report["findings"]["F002"]["validation"], "invalid")
             self.assertIn("validator=outer-loop",
                           report["findings"]["F002"]["decisions"][0]["evidence"][0])
@@ -701,8 +710,12 @@ class ReviewLedgerTests(unittest.TestCase):
 class ReviewInstructionTests(unittest.TestCase):
     def test_shared_references_are_packaged(self):
         root = HELPER.parent.parent
-        documents = [*(root / "skills" / "review-code").glob("*.md"),
-                     *(root / "skills" / "review-validate-fix-loop").glob("*.md")]
+        documents = [
+            document
+            for skill in ("review-code", "review-validate-fix-loop", "review-triage-loop",
+                          "verify-unresolved-pr-comments")
+            for document in (root / "skills" / skill).glob("*.md")
+        ]
         for document in documents:
             for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
                 if link.startswith(("https://", "http://", "#")):

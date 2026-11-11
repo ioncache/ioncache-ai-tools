@@ -84,22 +84,26 @@ reads remains a ban even for a large file. Workers report any breach as a
 limitation; breached coverage does not count as complete. Do not relax limits
 to make the assignment fit.
 
-`specialists` is the default strategy. Use `sweep-first` for large PRs or
-cost-sensitive callers when one worker can read the entire correctness scope:
+Honor the caller's strategy. Otherwise prefer `sweep-first` when one worker
+can read the entire correctness scope and no concrete risk requires
+specialist-first allocation:
 
 1. Run one bounded correctness sweep in a single worker using every named
    correctness angle. Collect its report before allocating follow-up passes.
-2. Launch only applicable standards/docs specialists and targeted deeper traces
-   for concrete risks, unknowns, or evidence gaps the sweep flags. Give each a
-   bounded assignment; do not repeat the whole correctness sweep by default.
+2. Allocate follow-ups for concrete risks, consequential unknowns, evidence
+   gaps, or substantial remaining standards/docs coverage. Small standards
+   checks can share a worker while retaining distinct pass records. Give each
+   worker a bounded assignment; do not repeat the whole correctness sweep or
+   launch one agent per standard by default.
 3. Perform the integration pass and adjudicate the sweep's candidates exactly
    like other specialist candidates, including rejections and provenance.
 
 This changes allocation, not required coverage or the model-selection policy.
 Skip it for an inline single-read review, when whole-file capacity is
 insufficient, or when risk or required independent correctness passes need
-specialist-first allocation. Record the choice and remaining coverage. A
-partial sweep cannot stand in for a complete correctness pass.
+specialist-first allocation. Record why each separate worker is needed and the
+remaining coverage. Finding counts are not an allocation target or a measure
+of review success. A partial sweep cannot stand in for a complete correctness pass.
 
 ## Coordinator
 
@@ -147,9 +151,13 @@ handoffs, not empty findings. Verify assignment and snapshot identities.
 
 Verify reachable behavior, requirements, and relevant callers. Resolve
 contradictory evidence instead of voting. Merge observations about the same
-underlying cause while retaining their provenance. Explain rejection,
-uncertainty, accepted findings, and residual risks. Do not drop rejected or
-duplicate observations needed by the caller's ledger.
+underlying cause while retaining their provenance. Apply CRITERIA.md's
+actionability policy to each assessment, including whether a correction is
+warranted and when. Validate inaccurate documentation and missing test coverage
+as substantive issues, without promoting style deviations or speculative
+scenarios into fixes. Explain rejection, uncertainty, accepted findings, and
+residual risks in the handback. Keep non-reportable observations out of the
+human report without dropping evidence needed by the caller's ledger.
 
 Adjudication is the independent validation of specialist findings, not a
 summary that needs another full validation pass. Mark newly discovered

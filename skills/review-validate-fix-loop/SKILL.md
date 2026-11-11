@@ -46,9 +46,12 @@ Git worktree. Read its `--help` if invocation details are unclear.
    of specialist findings rather than repeating every investigation. Validate
    coordinator-originated findings separately. Record each candidate,
    duplicate observation, decision, reason, and evidence through the protocol.
-4. Declare an authorized batch of files and findings before fixing. Use one
-   code writer. Run relevant checks, then delegate an independent focused
-   review of the correction delta and its affected callers.
+   Apply the shared actionability policy, not just the report's severity floor.
+4. Declare an authorized batch of files and valid, in-scope `Act` findings
+   before fixing. Do not automatically fix style observations, decisions, or
+   uncertain investigations. Use one code writer. Run relevant checks, then
+   delegate an independent focused review of the correction delta and its
+   affected callers.
 5. Validate review-fixes findings inside this cycle. Resolve applied-fix
    outcomes, then advance. If actionable issues remain, fix them in the
    same outer loop. Inner exhaustion stops the entire run.
