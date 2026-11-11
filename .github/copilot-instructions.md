@@ -71,11 +71,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   instructions own conditional nested coordination or flat adjudication.
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
-- The `create-worktree` skill invokes `scripts/create-worktree.py`, which checks
-  for Node.js before launching the sibling `create-worktree.js` helper.
+- The `create-worktree` skill invokes `scripts/create-worktree.py`, which requires
+  Node.js 22.12.0+ and checks its version before launching the sibling
+  `create-worktree.js` helper.
   The helper wraps `git worktree add` and applies the main worktree's
-  `.worktree-setup.json`. Missing Node must fail before any worktree/setup writes
-  and remain recoverable by installing Node or correcting `PATH`.
+  `.worktree-setup.json`. Missing, outdated, or unverifiable Node must fail before
+  any worktree/setup writes and remain recoverable by installing or upgrading
+  Node or correcting `PATH`.
   Setup order is copies, `afterCopy` writes, symlinks, then shell commands.
   Missing config is created with generic defaults. Keep repository-specific
   setup in that JSON, not in the helper. Preserve lexical and symlink-resolved
