@@ -399,6 +399,31 @@ class CodexAdapterTests(unittest.TestCase):
                 self.assertIn('retry', stderr.getvalue())
                 invoke.assert_not_called()
 
+    def test_worktree_launcher_reports_launch_failure_and_allows_retry(self):
+        launcher = runpy.run_path(str(ROOT / 'scripts/create-worktree.py'))
+        command = ['/fixture/node', '--version']
+        error = PermissionError(13, 'Permission denied', command[0])
+        with mock.patch.object(shutil, 'which', return_value=command[0]), \
+                mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    command, 0, stdout='v22.12.0\n', stderr='',
+                )), \
+                mock.patch.object(os, 'execv', side_effect=[error, None]) as invoke, \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            self.assertEqual(launcher['main'](), 1)
+            self.assertIn('could not launch Node.js', stderr.getvalue())
+            self.assertIn(str(error), stderr.getvalue())
+            self.assertIn('retry', stderr.getvalue())
+            self.assertIn('No worktree was created', stderr.getvalue())
+            self.assertNotIn('or later is required', stderr.getvalue())
+            self.assertNotIn('Install or upgrade', stderr.getvalue())
+            invoke.assert_called_once()
+
+            stderr.seek(0)
+            stderr.truncate()
+            launcher['main']()
+            self.assertEqual(invoke.call_count, 2)
+            self.assertEqual(stderr.getvalue(), '')
+
     def test_worktree_launcher_preserves_arguments_and_exit_status(self):
         runtime = self.root / 'runtime with spaces'
         runtime.mkdir()
