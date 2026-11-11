@@ -1,5 +1,5 @@
 {
-  "description": "Bounded turn enforcement, documentation caching, and punctuation guards",
+  "description": "Bounded turn enforcement, documentation caching, punctuation guards, and context handoff",
   "hooks": {
     "MessageDisplay": [
       {
@@ -18,6 +18,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SessionStart",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" SessionStart",
             "timeout": 5
           }
         ]
@@ -45,6 +50,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" UserPromptSubmit"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" UserPromptSubmit",
+            "timeout": 5
           }
         ]
       }
@@ -75,6 +85,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude PreToolUse",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" PreToolUse",
+            "timeout": 5
           }
         ]
       }
@@ -91,6 +106,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude PostToolUse",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" PostToolUse",
             "timeout": 5
           }
         ]
@@ -113,6 +133,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PreCompact",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" PreCompact",
             "timeout": 5
           }
         ]
@@ -156,6 +185,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude Stop",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/context_handoff.py\" Stop",
             "timeout": 5
           }
         ]

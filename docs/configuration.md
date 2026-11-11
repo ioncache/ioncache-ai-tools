@@ -42,6 +42,7 @@ remain after synchronization finishes.
 | `answer-questions` | Question classification, mutation gate, and answer-only review |
 | `approval-recovery` | Copilot native transcript approval recovery |
 | `block_raw_worktree_add` | Worktree creation outside the setup skill |
+| `context-handoff` | Claude Code context handoff enforcement, resume, and compaction blocking |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
 | `engineering-judgment` | Startup engineering policy and skill guidance |
@@ -60,6 +61,13 @@ subject to host behavior.
 
 Disabling `skill:engineering-judgment` also suppresses the reminder to load
 that skill. Other guard and skill settings are independent.
+
+Disabling `skill:context-handoff` keeps the handoff flow; the hook then states
+the handoff requirements directly instead of naming the skill.
+
+The context handoff threshold is not in these files. It is the Claude Code
+plugin option `handoff_threshold_percent`, set through `/config`. See
+[context-handoff.md](context-handoff.md).
 
 ## Synchronization and recovery
 

@@ -36,6 +36,8 @@ class ClaimEvidenceTests(unittest.TestCase):
             'COPILOT_HOME': str(self.home / '.copilot'),
             'XDG_CACHE_HOME': str(self.home / '.cache'),
             'PATH': install_reviewers(self.root),
+            'CLAUDE_PLUGIN_DATA': str(self.root / 'plugin-data'),
+            'CLAUDE_PLUGIN_OPTION_HANDOFF_THRESHOLD_PERCENT': '75',
         })
         self.patch.start()
         self.addCleanup(self.patch.stop)

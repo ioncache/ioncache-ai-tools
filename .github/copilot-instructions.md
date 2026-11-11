@@ -57,6 +57,16 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
   page coverage. Keep bypass and notice state separate by harness and session.
+- `hooks/scripts/context_handoff.py` is Claude Code only: it returns early for
+  adapter input marked with `_ioncache_harness` and for subagents. Context usage
+  reaches it only through `context_statusline.py`, which session start copies
+  into `${CLAUDE_PLUGIN_DATA}` and which writes usage beside that copy. The
+  threshold comes from the `userConfig` option exported as
+  `CLAUDE_PLUGIN_OPTION_HANDOFF_THRESHOLD_PERCENT`. Missing plugin variables
+  are reported, never replaced with defaults. `scope_guard.py` and
+  `block_pending_question.py` allow only the session's handoff Write through
+  `is_handoff_write`. Self-checks that run the Claude manifest must set both
+  plugin variables. See [../docs/context-handoff.md](../docs/context-handoff.md).
 - `skills/*/SKILL.md` contains both workflow and behavior instructions with
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
@@ -91,6 +101,7 @@ python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
 python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
 python3 hooks/scripts/docs_cache_self_check.py < /dev/null
 python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
+python3 hooks/scripts/context_handoff_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 python3 scripts/release_self_check.py

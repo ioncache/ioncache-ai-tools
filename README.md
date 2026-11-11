@@ -1,8 +1,9 @@
 # ioncache-ai-tools
 
 A plugin for Claude Code, GitHub Copilot CLI, and Codex CLI. It provides
-19 directly invocable skills for code review, PR work, investigation, writing,
-and implementation, plus automatic guardrails for common tool actions.
+20 directly invocable skills for code review, PR work, investigation, writing,
+and implementation, plus automatic guardrails for common tool actions. In Claude
+Code, it can also replace compaction with a handoff to a fresh session.
 
 ## Install
 
@@ -112,6 +113,7 @@ may require clarification before the skill can proceed.
 | `/ioncache-ai-tools:investigate` | Traces a feature or workflow and explains its behavior without editing files | The feature, workflow, or system to investigate |
 | `/ioncache-ai-tools:triage-errors` | Groups failing checks by root cause and fixes each group | The failing command and relevant error context |
 | `/ioncache-ai-tools:create-worktree` | Creates a git worktree and applies the repository's setup configuration | Worktree arguments, such as `-b feature-name ../feature-name` |
+| `/ioncache-ai-tools:context-handoff` | Claude Code only: writes a handoff prompt for a fresh session and halts this one | Nothing; the context-handoff hook invokes it at the threshold, or invoke it to hand off early |
 
 ### Writing and engineering guidance
 
@@ -182,6 +184,23 @@ creates generic symlink defaults; dependency installation requires a configured
 setup command. See [docs/workflows.md#worktree-setup](docs/workflows.md#worktree-setup)
 for configuration examples.
 
+## Context handoff
+
+Claude Code only. At a context threshold (75% by default), Claude stops, writes
+a self-contained handoff, and the session halts. Type `/clear`, then send any
+message; the new session continues from the handoff. Compaction is blocked.
+
+Hooks cannot see context usage, so run this once in Claude Code after the
+plugin has started one session:
+
+```text
+/statusline Use the command: python3 ~/.claude/plugins/data/ioncache-ai-tools-ioncache-ai-tools/statusline.py
+```
+
+This replaces any existing status line. Change the threshold through the
+plugin's `Context handoff threshold (%)` option in `/config`. Details, files,
+and limits: [docs/context-handoff.md](docs/context-handoff.md).
+
 ## Automatic guardrails
 
 Hooks run without a skill invocation. They enforce answer-only question turns,
@@ -238,6 +257,8 @@ Precedence and synchronization: [docs/configuration.md](docs/configuration.md).
 | Background review results block continued work | Some hosts mistake reviewer results for new user requests, triggering question or scope checks. Ask the assistant to run reviews in the foreground where supported, waiting for reviewers to finish instead of relying on background notifications. |
 | Review coordination | Supervised cross-host trials remain pending; not every execution mode is acceptance-verified. |
 | Response checking | Codex checks final responses only. Checks cannot retract streamed prose or undo completed actions. |
+| Compaction is blocked | The `context-handoff` feature replaces compaction. Run `/ioncache-ai-tools:context-handoff`, then `/clear`, or set `context-handoff` to `false` to allow compaction. |
+| No handoff at the threshold | The status line is not recording usage. Run the `/statusline` command in [Context handoff](#context-handoff). |
 
 These are guardrails, not a security boundary. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.
@@ -251,6 +272,7 @@ Keep the host's own permissions enabled for security-critical restrictions.
 | Settings and synchronization | [docs/configuration.md](docs/configuration.md) |
 | Detailed review workflows and worktree configuration | [docs/workflows.md](docs/workflows.md) |
 | Cache behavior and troubleshooting | [docs/documentation-cache.md](docs/documentation-cache.md) |
+| Context handoff setup, files, and limits | [docs/context-handoff.md](docs/context-handoff.md) |
 | Local development, plugin updates, and releases | [docs/development.md](docs/development.md) |
 
 Host skill-invocation references:

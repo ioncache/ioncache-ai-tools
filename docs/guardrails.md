@@ -16,6 +16,7 @@ Opt-outs: [configuration.md](configuration.md).
 | Worktrees | Routes creation through the setup-aware `create-worktree` skill |
 | Punctuation | Fixes or rejects em-dashes |
 | Graphify | Requires a graph query before code discovery when a project graph exists, with bounded failure fallback |
+| Context handoff | Claude Code only: at the context threshold, denies other tools until a handoff is written, then halts; blocks compaction |
 
 These checks cover common actions, not every shell construct or tool.
 While a question is pending, GraphQL calls must use one inline query without
@@ -45,6 +46,11 @@ the session and exact Stop event, and retains the chronological dialogue as a
 whole or not at all. It becomes available after Stop, not before the first
 blocked edit, and does not retry edits or authorize a new task. Claude and
 Codex do not import historical transcripts for approval recovery.
+
+The context handoff Write to the session's handoff file is plugin-owned state.
+The question gate and scope check allow that one Write; every other action
+keeps its checks. See
+[context-handoff.md](context-handoff.md).
 
 Compaction and resume preserve the active request and question gate. A clear
 discards the active request and recovered dialogue. Copilot fences failed

@@ -69,6 +69,9 @@ jobs:
       - name: Run claim-evidence self-check
         run: python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 
+      - name: Run context-handoff self-check
+        run: python3 hooks/scripts/context_handoff_self_check.py < /dev/null
+
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
 

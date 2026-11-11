@@ -909,11 +909,11 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_shared_deadline_reduces_remaining_handler_budget(self):
         result = subprocess.CompletedProcess(['python3', 'hook.py'], 0, '', '')
         with (
-            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 78, 79, 79.5]),
+            mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 1, 78, 79, 79.5, 79.75]),
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5])
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5, 0.25])
 
 
 if __name__ == '__main__':

@@ -33,6 +33,8 @@ class ConfigurationTests(unittest.TestCase):
             'HOME': str(self.root / 'home'), 'CODEX_HOME': str(self.root / 'codex'),
             'COPILOT_HOME': str(self.root / 'copilot'), 'XDG_CACHE_HOME': str(self.root / 'cache'),
             'IONCACHE_DOCS_DISTILLER': '', 'PYTHONDONTWRITEBYTECODE': '1',
+            'CLAUDE_PLUGIN_DATA': str(self.root / 'plugin-data'),
+            'CLAUDE_PLUGIN_OPTION_HANDOFF_THRESHOLD_PERCENT': '75',
         })
         patcher.start()
         self.addCleanup(patcher.stop)

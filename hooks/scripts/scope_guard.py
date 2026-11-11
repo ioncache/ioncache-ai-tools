@@ -9,6 +9,7 @@ import sys
 import uuid
 
 from block_pending_question import is_mutating
+from context_handoff import is_handoff_write
 from classify_question import QUESTION_CONTRACT, has_marker, has_question, set_marker
 from plugin_config import enabled, feature_settings
 from evidence_store import EvidenceStore
@@ -460,6 +461,9 @@ def pre_tool(data):
             setting = 'skill:' + name
             if namespace in ('', 'ioncache-ai-tools') and setting in feature_settings(data).catalog and not enabled(setting, data):
                 return denial(f'The {name} plugin skill is disabled in configuration.')
+    # The handoff file is plugin-private session state, not user work to authorize.
+    if is_handoff_write(data):
+        return None
     mutating = is_mutating(data.get('tool_name'), data.get('tool_input'))
     delegation = data.get('tool_name') in DELEGATION_TOOLS
     if (mutating or delegation) and prompt_pending(data):

@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plugin_config import enabled  # noqa: E402
 from classify_question import marker_path  # noqa: E402
+from context_handoff import is_handoff_write  # noqa: E402
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
     without_redirections,
@@ -291,7 +292,7 @@ def main():
     if not any(flag.exists() for flag in flags):
         return
 
-    if not is_mutating(tool_name, tool_input):
+    if not is_mutating(tool_name, tool_input) or is_handoff_write(data):
         return
 
     print(

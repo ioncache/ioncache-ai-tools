@@ -5,5 +5,15 @@
   "author": {
     "name": "Mark Jubenville"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "userConfig": {
+    "handoff_threshold_percent": {
+      "type": "number",
+      "title": "Context handoff threshold (%)",
+      "description": "Context window usage at which Claude stops, writes a handoff for a fresh session, and halts. Requires the status line setup described in the README.",
+      "default": 75,
+      "min": 1,
+      "max": 99
+    }
+  }
 }
