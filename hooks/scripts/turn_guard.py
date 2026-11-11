@@ -1,10 +1,9 @@
-"""Silent turn state, graph discovery, and bounded evidence-aware checks."""
+"""Silent turn state and bounded evidence-aware checks."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -15,10 +14,7 @@ from block_pending_question import allows_review_metadata, is_mutating
 from classify_question import QUESTION_CONTRACT, has_marker, has_question, set_marker
 from docs_cache import DISTILLER_ENV, TTL_SECONDS
 from evidence_store import EvidenceStore
-from rule_engine import (
-    get_disabled_rule_ids, load_rules_for_event, run_rules,
-    skip_wrappers, split_into_simple_commands, tokenize_command,
-)
+from rule_engine import get_disabled_rule_ids, load_rules_for_event, run_rules
 import turn_review
 
 CATEGORY = 'turn-policy'
@@ -33,13 +29,7 @@ BOOTSTRAP = (
     'This session uses documentation-backed third-party specifics, not recalled '
     'API or CLI behavior. Applicable verified documentation can be reused; '
     'cached summaries establish only the details they contain. Question replies '
-    'contain the answer and reasoning, with work products only when requested. '
-    'In projects with graphify-out/graph.json, code discovery starts with a '
-    'relevant graphify query, followed by targeted source reads.'
-)
-GRAPH_DENIAL = (
-    'Code discovery requires a relevant graphify query first. '
-    'Run graphify query with the codebase question, then inspect the sources.'
+    'contain the answer and reasoning, with work products only when requested.'
 )
 UNVERIFIED = 'Turn check did not verify this response: '
 DELEGATION_TOOLS = {
@@ -160,7 +150,7 @@ def begin_turn(data):
             'docs': bounded([item for item in previous.get('docs', [])
                              if time.time() - item['observed_at'] < TTL_SECONDS]),
             'bootstrapped': True, 'continuations': [], 'stop_attempts': 0, 'stop_checks': 0,
-            'reviews': {}, 'graph': {},
+            'reviews': {},
             'pending_tools': {}, 'history': history, 'messages': [],
             'messages_truncated': False, 'recent_messages': [], 'recent_messages_omitted': False,
             'native_prompt': data.get('prompt_id') or data.get('turn_id'),
@@ -208,49 +198,6 @@ def prompt_pending(data):
     return has_marker(data, 'prompt') or has_marker({**data, 'agent_id': None}, 'prompt')
 
 
-def shell_commands(data):
-    if data.get('tool_name') != 'Bash':
-        return []
-    commands = split_into_simple_commands(tokenize_command(data['tool_input'].get('command', '')))
-    return [executable for command in commands if command and (executable := skip_wrappers(command))]
-
-
-def graph_query(data):
-    commands = shell_commands(data)
-    if len(commands) != 1:
-        return False
-    args = commands[0]
-    if (len(args) < 3 or Path(args[0]).name != 'graphify' or args[1] != 'query'
-            or not args[2].strip() or args[2].startswith('-')
-            or any(value in ('--help', '-h') for value in args)):
-        return False
-    expected = Path(data['cwd']) / 'graphify-out/graph.json'
-    for index, value in enumerate(args):
-        if value == '--graph':
-            return index + 1 < len(args) and (Path(data['cwd']) / args[index + 1]).resolve() == expected.resolve()
-        if value.startswith('--graph='):
-            return (Path(data['cwd']) / value.split('=', 1)[1]).resolve() == expected.resolve()
-    return True
-
-
-def discovery(data):
-    if data.get('tool_name') in ('Grep', 'Glob', 'grep', 'rg', 'glob', 'semantic_code_search'):
-        return True
-    if data.get('tool_name') == 'Read':
-        path = str(data.get('tool_input', {}).get('file_path', ''))
-        target = (Path(data['cwd']) / path).resolve()
-        return (target.is_relative_to(Path(data['cwd']).resolve())
-                and target.name not in ('CLAUDE.md', 'AGENTS.md', 'GEMINI.md', 'copilot-instructions.md'))
-    for command in shell_commands(data):
-        executable = Path(command[0]).name
-        if executable in ('rg', 'grep', 'find'):
-            return True
-        if executable in ('cat', 'sed', 'head', 'tail'):
-            if any(not arg.startswith('-') and (Path(data['cwd']) / arg).is_file() for arg in command[1:]):
-                return True
-    return False
-
-
 def parent_state(data):
     if data.get('agent_id') in (None, '', 'root'):
         return None
@@ -260,7 +207,7 @@ def parent_state(data):
 
 def child_state(parent):
     return {
-        **parent, 'id': uuid.uuid4().hex, 'observations': [], 'reviews': {}, 'graph': {},
+        **parent, 'id': uuid.uuid4().hex, 'observations': [], 'reviews': {},
         'continuations': [], 'stop_attempts': 0, 'stop_checks': 0, 'bootstrapped': False,
         'parent_turn': parent['id'],
         'pending_tools': {}, 'last_response': None,
@@ -278,27 +225,6 @@ def ensure_child_state(data):
             if 'id' not in (store.get(CATEGORY, 'state') or {}):
                 store.put(CATEGORY, ('state', child_state(parent)))
     return parent
-
-
-def graph_identity(data):
-    graph = Path(data['cwd']) / 'graphify-out/graph.json'
-    try:
-        info = graph.stat()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return [str(graph.absolute()), 'unavailable', None]
-    return [str(graph.resolve()), info.st_mtime_ns, info.st_size]
-
-
-def graph_gate(data, state):
-    identity = graph_identity(data)
-    if not identity or not discovery(data) or state.get('graph', {}).get('identity') == identity:
-        return None
-    if identity[1] == 'unavailable' or not shutil.which('graphify'):
-        state['graph'] = {'identity': identity, 'fallback': 'graph or executable unavailable'}
-        return denial('Graphify or its graph is unavailable. Source discovery is available on retry.')
-    return denial(GRAPH_DENIAL)
 
 
 def result_status(data):
@@ -457,11 +383,6 @@ def record_tool(data):
         record_command(state, data, item)
         key = 'docs' if is_documentation(data) else 'observations'
         state[key] = bounded([*state.get(key, []), item])
-        if graph_query(data) and state.get('pending_graph') == graph_identity(data):
-            state['graph'] = {
-                'identity': graph_identity(data),
-                'fallback': None if item['success'] else 'query success unverified; use source discovery',
-            }
         store.put(CATEGORY, ('state', state))
     if not state.get('bootstrapped'):
         return lifecycle(data['hook_event_name'], data)
@@ -550,28 +471,20 @@ def pre_tool(data):
     delegation = data.get('tool_name') in DELEGATION_TOOLS
     if (mutating or delegation) and prompt_pending(data):
         return denial('The current user request was not recorded. Submit the request again before authorizing work.')
-    if not mutating and not delegation and not discovery(data) and not graph_query(data):
+    parent = ensure_child_state(data)
+    if not mutating and not delegation:
         record_start(data)
         return None
-    parent = ensure_child_state(data)
     with store_for(data) as store:
         state = store.get(CATEGORY, 'state')
         if not state or 'id' not in state:
             return None
         native_prompt = data.get('prompt_id') or data.get('turn_id')
-        if (mutating or delegation) and not parent and state.get('native_prompt') and native_prompt:
+        if not parent and state.get('native_prompt') and native_prompt:
             if native_prompt != state['native_prompt']:
                 return denial('The current native prompt has not been recorded. Resubmit the request.')
-        if (mutating or delegation) and parent and parent.get('id') != state.get('parent_turn'):
+        if parent and parent.get('id') != state.get('parent_turn'):
             return denial('The parent user request changed after this subagent started. New work requires a current assignment.')
-        if graph_query(data):
-            state['pending_graph'] = graph_identity(data)
-        output = graph_gate(data, state)
-        store.put(CATEGORY, ('state', state))
-    if output or not (mutating or delegation):
-        if not output:
-            record_start(data)
-        return output
     if allows_review_metadata(data):
         record_start(data)
         return None

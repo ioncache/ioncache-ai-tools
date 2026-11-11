@@ -6,7 +6,6 @@
     "documentation-first": true,
     "engineering-judgment": true,
     "fix_emdash": true,
-    "graphify": true,
     "never_kill_without_asking": true,
     "no-manual-lockfile-edit": true,
     "no_manual_lockfile_edit_bash": true,

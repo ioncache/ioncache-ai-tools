@@ -42,13 +42,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, and output
   merging. `plugin_config.py` reconciles and resolves the shipped catalog.
   Rules live in `hooks/rules/`; `scope_guard.py` keeps current request,
-  classification, child-assignment, and graph state in `EvidenceStore`, using
+  classification, and child-assignment state in `EvidenceStore`, using
   the `scope-policy` namespace. Its checks are deterministic and never launch
   model reviews. Scope and answer content remain assistant guidance.
   `scope_review.py`, `copilot_history.py`, `turn_guard.py`, `turn_review.py`,
   and the experimental claim checkers remain inactive source, with no registered
   hooks or active import paths. The shared store must not import these modules.
-  Tool results affect graph-query completion, not authorization verdicts.
+  Post-tool hooks restore child and compacted-session guidance, not authorization verdicts.
   Final-response punctuation remains a separate guard; Copilot reads only the
   current final text. Do not collect streamed prose for semantic review.
 - `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
@@ -168,7 +168,7 @@ construct the character with `chr(0x2014)` to pass this source check.
 - Resolve shipped files relative to the script or the host's plugin-root
   variable (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, or `${COPILOT_PLUGIN_ROOT}`).
   The process working directory is the consuming project, used for project
-  config and graphify detection, not the installed plugin directory.
+  config, not the installed plugin directory.
 - Add one `.json` or `.py` file per rule and its default setting without modifying the engine.
   JSON rules declare `event`, optional `toolNames`, `matcher`, `action`, and
   `message`. Python rules export `EVENT`, optional `TOOL_NAMES`,

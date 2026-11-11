@@ -45,7 +45,6 @@ remain after synchronization finishes.
 | `documentation-first` | Documentation-first startup guidance |
 | `engineering-judgment` | Startup engineering policy and skill guidance |
 | `fix_emdash` | Em-dashes in edits, shell input, and final responses |
-| `graphify` | Graph-discovery guidance and gate |
 | `never_kill_without_asking` | Recognized process-kill commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |

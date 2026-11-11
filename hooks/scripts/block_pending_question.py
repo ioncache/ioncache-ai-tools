@@ -26,7 +26,7 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_pa
 # Bash commands that change state - git/gh mutations, filesystem writes,
 # package installs, and arbitrary-code interpreters that can do any of the
 # above without ever matching a specific pattern. Read-only commands (git
-# log/diff/show/status, ls, cat, grep, graphify query, gh pr view) are
+# log/diff/show/status, ls, cat, grep, gh pr view) are
 # intentionally not matched here. `gh api graphql` is handled separately
 # (see _is_graphql_mutation_document), since it can be either a read or
 # a write.
