@@ -131,18 +131,22 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.project / 'package-lock.json').is_file())
         self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
-        self.assertEqual(self.tool('bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
-        worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
-        try:
-            command = f'kill {worker.pid}'
-            self.assertEqual(self.tool('bash', {'command': command}), {})
-            subprocess.run(['kill', str(worker.pid)], check=True, timeout=5)
-            worker.wait(timeout=5)
-        finally:
-            if worker.poll() is None:
-                worker.terminate()
-                worker.wait(timeout=5)
-        self.assertEqual(self.tool('bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
+        for prefix in ('', 'exec '):
+            with self.subTest(prefix=prefix):
+                broad = prefix + 'pkill fixture-worker'
+                self.assertEqual(self.tool('bash', {'command': broad})['permissionDecision'], 'deny')
+                worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
+                try:
+                    self.assertIsNone(worker.poll())
+                    command = f'{prefix}kill {worker.pid}'
+                    self.assertEqual(self.tool('bash', {'command': command}), {})
+                    subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+                    self.assertLess(worker.wait(timeout=5), 0)
+                finally:
+                    if worker.poll() is None:
+                        worker.terminate()
+                        worker.wait(timeout=5)
+                self.assertEqual(self.tool('bash', {'command': broad})['permissionDecision'], 'deny')
 
     def test_worktree_denial_recovers_without_loading_a_skill(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
@@ -595,6 +599,7 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_native_shell_rules(self):
         for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
                         'kill -TERM 00', 'kill -TERM +0',
+                        'exec pkill worker', 'exec kill -TERM +0', "exec sed -i 's/a/b/' package-lock.json",
                         'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
                         'echo ready # status\npkill worker', "echo ready; pkill worker\nprintf 'unfinished"):
             with self.subTest(command=command):
@@ -602,6 +607,8 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('bash', {'command': 'echo kill'}), {})
         self.assertEqual(self.tool('bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('bash', {'command': "echo '>' package-lock.json"}), {})
+        self.assertEqual(self.tool('bash', {'command': 'exec echo pkill worker'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'exec npm install --package-lock-only --ignore-scripts'}), {})
         self.assertEqual(self.tool('bash', json.dumps({'command': 'git status'})), {})
 
 

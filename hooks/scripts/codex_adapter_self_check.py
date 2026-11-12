@@ -563,6 +563,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_native_shell_rules(self):
         for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
                         'kill -TERM 00', 'kill -TERM +0',
+                        'exec pkill worker', 'exec kill -TERM +0', "exec sed -i 's/a/b/' package-lock.json",
                         'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
                         f'echo a{EM_DASH}b', 'echo ready # status\npkill worker',
                         "echo ready; pkill worker\nprintf 'unfinished"):
@@ -572,6 +573,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('Bash', {'command': 'echo kill'}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo '>' package-lock.json"}), {})
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'exec echo pkill worker'}), [{}])
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'exec npm install --package-lock-only --ignore-scripts'}), [{}])
         self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
                                      tool_input={'command': 'kill -TERM 12345'}), [{}])
 
@@ -596,28 +601,31 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_process_denial_recovers_with_owned_pid_and_continued_work(self):
         self.prompt('Stop the disposable worker and continue writing the report')
-        worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
-        try:
-            self.assertIsNone(worker.poll())
-            denied = self.tool('Bash', {'command': 'pkill fixture-worker'})
-            self.assertEqual(denied['permissionDecision'], 'deny')
-            self.assertIn('exact positive PID', denied['permissionDecisionReason'])
-            self.assertIsNone(worker.poll())
-            command = f'kill {worker.pid}'
-            self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
-                                         tool_input={'command': command}), [{}])
-            subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
-            self.assertLess(worker.wait(timeout=5), 0)
-            command = 'printf continued > cleanup-report.txt'
-            self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
-                                         tool_input={'command': command}), [{}])
-            subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
-            self.assertEqual((self.project / 'cleanup-report.txt').read_text(), 'continued')
-            self.assertEqual(self.tool('Bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
-        finally:
-            if worker.poll() is None:
-                worker.terminate()
-                worker.wait(timeout=5)
+        for prefix in ('', 'exec '):
+            with self.subTest(prefix=prefix):
+                worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
+                try:
+                    self.assertIsNone(worker.poll())
+                    broad = prefix + 'pkill fixture-worker'
+                    denied = self.tool('Bash', {'command': broad})
+                    self.assertEqual(denied['permissionDecision'], 'deny')
+                    self.assertIn('exact positive PID', denied['permissionDecisionReason'])
+                    self.assertIsNone(worker.poll())
+                    command = f'{prefix}kill {worker.pid}'
+                    self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                                 tool_input={'command': command}), [{}])
+                    subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+                    self.assertLess(worker.wait(timeout=5), 0)
+                    command = 'printf continued > cleanup-report.txt'
+                    self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                                 tool_input={'command': command}), [{}])
+                    subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+                    self.assertEqual((self.project / 'cleanup-report.txt').read_text(), 'continued')
+                    self.assertEqual(self.tool('Bash', {'command': broad})['permissionDecision'], 'deny')
+                finally:
+                    if worker.poll() is None:
+                        worker.terminate()
+                        worker.wait(timeout=5)
 
 
     def test_patch_header_whitespace_is_denied(self):

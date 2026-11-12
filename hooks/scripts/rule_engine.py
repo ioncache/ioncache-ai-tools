@@ -217,7 +217,7 @@ def split_into_simple_commands(tokens):
 # knowledge, real scope beyond what this covers, and stays a known,
 # accepted gap. env additionally supports ignore-environment/unset options
 # and assignments; split-string and other env options remain uninterpreted.
-NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf'}
+NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf', 'exec'}
 DURATION_ARG_WRAPPERS = {'timeout'}
 
 
