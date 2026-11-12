@@ -74,7 +74,7 @@ def pre_tool_use(data, completed_outputs=None):
 
 def run_hook(event, data):
     try:
-        with invocation_deadline(4 if event == 'SessionEnd' else ADAPTER_TIMEOUT_SECONDS):
+        with invocation_deadline(2 if event == 'SessionEnd' else ADAPTER_TIMEOUT_SECONDS):
             return dispatch(event, data)
     except InvocationDeadline as error:
         output = None

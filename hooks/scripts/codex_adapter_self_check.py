@@ -166,6 +166,25 @@ class CodexAdapterTests(unittest.TestCase):
         self.prompt('Implement the revised change')
         self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
 
+    def test_session_end_reports_deadline_before_host_timeout_and_recovers(self):
+        settings = Path(self.env['CODEX_HOME']) / 'ioncache-ai-tools.local.json'
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        # A FIFO without a writer stalls the real adapter's configuration read.
+        os.mkfifo(settings)
+        try:
+            output, = self.invoke('SessionEnd')
+        finally:
+            settings.unlink()
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertEqual(set(output), {'systemMessage'})
+        self.assertEqual(self.invoke('SessionEnd'), [{}])
+        command = 'printf continued > shutdown-recovery.txt'
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': command}), [{}])
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / 'shutdown-recovery.txt').read_text(), 'continued')
+        self.assertEqual(self.tool('Bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
+
     def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
         rewrite = {'hookSpecificOutput': {
             'hookEventName': 'PreToolUse', 'updatedInput': {'content': 'a, b'},

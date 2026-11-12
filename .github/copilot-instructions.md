@@ -199,7 +199,8 @@ construct the character with `chr(0x2014)` to pass this source check.
   Shared adapter execution has an internal deadline before the native hook
   timeout: 20 seconds for shared execution, with smaller per-handler limits.
   The adapters also bound the whole invocation to 25 seconds, including
-  configuration work, or four seconds for session end. Config writer locks
+  configuration work. Session-end deadlines are two seconds for Codex and
+  four seconds for Copilot. Config writer locks
   use short bounded waits and preserve readable preferences on runtime failure.
   Pre-tool and final adapter hooks have 30-second native limits.
   Self-checks install isolated fake reviewer executables to catch accidental
