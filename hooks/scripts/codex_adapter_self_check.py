@@ -543,6 +543,31 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('Bash', {'command': original})['permissionDecision'], 'deny')
         self.assertIn('chr(0x2014)', denied['permissionDecisionReason'])
 
+    def test_process_denial_recovers_with_owned_pid_and_continued_work(self):
+        self.prompt('Stop the disposable worker and continue writing the report')
+        worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
+        try:
+            self.assertIsNone(worker.poll())
+            denied = self.tool('Bash', {'command': 'pkill fixture-worker'})
+            self.assertEqual(denied['permissionDecision'], 'deny')
+            self.assertIn('exact positive PID', denied['permissionDecisionReason'])
+            self.assertIsNone(worker.poll())
+            command = f'kill {worker.pid}'
+            self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                         tool_input={'command': command}), [{}])
+            subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+            self.assertLess(worker.wait(timeout=5), 0)
+            command = 'printf continued > cleanup-report.txt'
+            self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                         tool_input={'command': command}), [{}])
+            subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+            self.assertEqual((self.project / 'cleanup-report.txt').read_text(), 'continued')
+            self.assertEqual(self.tool('Bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
+        finally:
+            if worker.poll() is None:
+                worker.terminate()
+                worker.wait(timeout=5)
+
 
     def test_patch_header_whitespace_is_denied(self):
         for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',
