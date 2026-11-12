@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -271,6 +272,54 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 0.5)
         self.assertIn('invocation deadline', notices.getvalue())
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+
+    def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
+        rewrite = {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'updatedInput': {'content': 'a, b'},
+        }}
+        for completed, expected in (({}, None), (rewrite, {'modifiedArgs': {'path': 'x', 'file_text': 'a, b'}})):
+            with self.subTest(completed=completed):
+                def handler(*args, **kwargs):
+                    if run.call_count == 1:
+                        return subprocess.CompletedProcess(args[0], 0, json.dumps(completed), '')
+                    signal.setitimer(signal.ITIMER_REAL, 0.01)
+                    time.sleep(1)
+                    return subprocess.CompletedProcess(args[0], 0, '', '')
+
+                with (
+                    mock.patch.object(hook_adapter_common.subprocess, 'run', side_effect=handler) as run,
+                    mock.patch.object(docs_cache, 'copilot_pre') as cache,
+                    mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
+                    mock.patch.object(sys, 'stderr', io.StringIO()),
+                ):
+                    output = copilot_adapter.run_hook('preToolUse', {
+                        **self.payload, 'toolName': 'create', 'toolArgs': {'path': 'x', 'file_text': f'a{EM_DASH}b'},
+                    })
+                self.assertEqual(run.call_count, 2, 'No handler may start after invocation expiry')
+                cache.assert_not_called()
+                self.assertEqual(output, expected)
+                self.assertIn('invocation deadline', notices.getvalue())
+        self.assertEqual(self.tool('create', {'path': 'continued.txt', 'file_text': 'continued'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
+
+    def test_invocation_deadline_escapes_native_cache_failure_recovery(self):
+        def slow_cache(data):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+
+        with (
+            mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[]),
+            mock.patch.object(docs_cache, 'copilot_pre', side_effect=slow_cache),
+            mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = copilot_adapter.run_hook('preToolUse', {
+                **self.payload, 'toolName': 'view', 'toolArgs': {'path': 'x'},
+            })
+        self.assertIsNone(output)
+        self.assertIn('checks unavailable', notices.getvalue())
+        self.assertIn('invocation deadline', notices.getvalue())
+        self.assertNotIn('permissionDecision', notices.getvalue())
 
 
     def test_stop_does_not_collect_response_text(self):

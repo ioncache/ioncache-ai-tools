@@ -8,6 +8,7 @@ from pathlib import Path
 import runpy
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ import uuid
 import codex_adapter
 import docs_cache
 import guidance
+import hook_adapter_common
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -163,6 +165,55 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('request_user_input', {}), {})
         self.prompt('Implement the revised change')
         self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+
+    def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
+        rewrite = {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'updatedInput': {'content': 'a, b'},
+        }}
+        for completed in ({}, rewrite):
+            with self.subTest(completed=completed):
+                def handler(*args, **kwargs):
+                    if run.call_count == 1:
+                        return subprocess.CompletedProcess(args[0], 0, json.dumps(completed), '')
+                    signal.setitimer(signal.ITIMER_REAL, 0.01)
+                    time.sleep(1)
+                    return subprocess.CompletedProcess(args[0], 0, '', '')
+
+                with (
+                    mock.patch.object(hook_adapter_common.subprocess, 'run', side_effect=handler) as run,
+                    mock.patch.object(docs_cache, 'native_hook') as cache,
+                    mock.patch.object(sys, 'stderr', io.StringIO()),
+                ):
+                    output = codex_adapter.run_hook('PreToolUse', {
+                        **self.payload, 'tool_name': 'Write',
+                        'tool_input': {'file_path': 'x', 'content': f'a{EM_DASH}b'},
+                    })
+                self.assertEqual(run.call_count, 2, 'No handler may start after invocation expiry')
+                cache.assert_not_called()
+                self.assertIn('invocation deadline', output.pop('systemMessage'))
+                expected = {'hookSpecificOutput': {
+                    **rewrite['hookSpecificOutput'], 'permissionDecision': 'allow',
+                }} if completed else {}
+                self.assertEqual(output, expected)
+        self.assertEqual(self.invoke('PreToolUse', tool_name='apply_patch',
+                                     tool_input={'command': CLEAN_PATCH}), [{}])
+        self.assertEqual(self.tool('Bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
+
+    def test_invocation_deadline_escapes_native_cache_failure_recovery(self):
+        def slow_cache(data):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+
+        with (
+            mock.patch.object(codex_adapter, 'run_shared_hooks', return_value=[]),
+            mock.patch.object(docs_cache, 'codex_pre', side_effect=slow_cache),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = codex_adapter.run_hook('PreToolUse', {
+                **self.payload, 'tool_name': 'Read', 'tool_input': {'file_path': 'x'},
+            })
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertNotIn('hookSpecificOutput', output)
 
     def test_native_web_open_uses_shared_cache_without_granting_permission(self):
         args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}

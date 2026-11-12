@@ -7,7 +7,7 @@ import sys
 
 import docs_cache
 from docs_cache import DISTILLER_ENV
-from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, invocation_deadline, run_shared_hooks, unavailable
+from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, InvocationDeadline, invocation_deadline, run_shared_hooks, unavailable
 from plugin_config import synchronize
 
 
@@ -33,7 +33,7 @@ def prompt_submit(data):
     }
 
 
-def pre_tool_use(data):
+def pre_tool_use(data, completed_outputs=None):
     name = data.get('tool_name')
     if not isinstance(name, str) or not name:
         raise ValueError('missing or invalid Codex tool_name')
@@ -43,7 +43,8 @@ def pre_tool_use(data):
             raise ValueError(f'{name} tool_input.command must be a string')
     rewrite = None
     warnings = []
-    for output in run_shared_hooks('PreToolUse', data):
+    outputs = run_shared_hooks('PreToolUse', data) if completed_outputs is None else completed_outputs
+    for output in outputs:
         if output.get('systemMessage'):
             warnings.append(output['systemMessage'])
         decision = output.get('hookSpecificOutput', {})
@@ -65,7 +66,7 @@ def pre_tool_use(data):
         if warnings:
             rewrite['systemMessage'] = '\n\n'.join(warnings)
         return rewrite
-    output = docs_cache.native_hook('codex', 'PreToolUse', data)
+    output = docs_cache.native_hook('codex', 'PreToolUse', data) if completed_outputs is None else None
     if warnings:
         return {**(output or {}), 'systemMessage': '\n\n'.join(warnings)}
     return output
@@ -75,6 +76,15 @@ def run_hook(event, data):
     try:
         with invocation_deadline(4 if event == 'SessionEnd' else ADAPTER_TIMEOUT_SECONDS):
             return dispatch(event, data)
+    except InvocationDeadline as error:
+        output = None
+        if event == 'PreToolUse' and error.outputs:
+            output = pre_tool_use(data, error.outputs)
+        else:
+            output = next((item for item in error.outputs if item.get('decision') == 'block'), None)
+        warning = unavailable('codex-adapter', error)['systemMessage']
+        output = output or {}
+        return {**output, 'systemMessage': '\n\n'.join(filter(None, (output.get('systemMessage'), warning)))}
     except Exception as error:
         return unavailable('codex-adapter', error)
 

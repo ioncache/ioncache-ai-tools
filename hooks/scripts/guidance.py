@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from classify_question import has_question
-from hook_adapter_common import invocation_deadline, unavailable
+from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable
 from plugin_config import feature_settings
 from rule_engine import load_rules_for_event, run_rules
 
@@ -75,7 +75,7 @@ def run_hook(event, data):
     try:
         with invocation_deadline(4):
             return evaluate(event, data)
-    except Exception as error:
+    except (InvocationDeadline, Exception) as error:
         return unavailable('guidance', error)
 
 

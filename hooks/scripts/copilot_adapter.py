@@ -8,7 +8,7 @@ import sys
 
 import docs_cache
 from docs_cache import DISTILLER_ENV
-from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, invocation_deadline, run_shared_hooks, unavailable
+from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, InvocationDeadline, invocation_deadline, run_shared_hooks, unavailable
 from plugin_config import synchronize
 
 
@@ -97,13 +97,14 @@ def normalized_tools(data):
     return [(name, args)]
 
 
-def pre_tool_use(data):
+def pre_tool_use(data, completed_outputs=None):
     hook_input = shared_input(data)
     rewrite = None
     for name, args in normalized_tools(data):
-        for output in run_shared_hooks('PreToolUse', {
+        outputs = run_shared_hooks('PreToolUse', {
             **hook_input, 'tool_name': name, 'tool_input': args,
-        }):
+        }) if completed_outputs is None else completed_outputs
+        for output in outputs:
             user_warning(output)
             decision = output.get('hookSpecificOutput', {})
             if decision.get('permissionDecision') == 'deny':
@@ -114,7 +115,7 @@ def pre_tool_use(data):
             if 'updatedInput' in decision:
                 rewrite = decision['updatedInput']
     if rewrite is None:
-        return docs_cache_hook(docs_cache.copilot_pre, data)
+        return docs_cache_hook(docs_cache.copilot_pre, data) if completed_outputs is None else None
     if data['toolName'] == 'apply_patch':
         return {
             'permissionDecision': 'deny',
@@ -136,6 +137,11 @@ def run_hook(event, data):
     try:
         with invocation_deadline(4 if event == 'sessionEnd' else ADAPTER_TIMEOUT_SECONDS):
             return dispatch(event, data)
+    except InvocationDeadline as error:
+        user_warning(unavailable('copilot-adapter', error))
+        if event == 'preToolUse' and error.outputs:
+            return pre_tool_use(data, error.outputs)
+        return next((item for item in error.outputs if item.get('decision') == 'block'), None)
     except Exception as error:
         user_warning(unavailable('copilot-adapter', error))
         return None

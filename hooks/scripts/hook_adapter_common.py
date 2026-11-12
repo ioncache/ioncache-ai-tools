@@ -17,8 +17,16 @@ PATCH_REWRITE_REASON = (
 )
 
 
+class InvocationDeadline(BaseException):
+    """Escape ordinary failure recovery while retaining completed shared decisions."""
+
+    def __init__(self):
+        super().__init__('hook invocation deadline exceeded')
+        self.outputs = []
+
+
 def deadline_expired(signum, frame):
-    raise RuntimeError('hook invocation deadline exceeded')
+    raise InvocationDeadline()
 
 
 def unavailable(component, error):
@@ -51,41 +59,45 @@ def invocation_deadline(seconds):
 
 def run_shared_hooks(event, hook_input):
     """Use the shared manifest as the sole source of hook order and commands."""
-    manifest = json.loads((PLUGIN_ROOT / 'hooks' / 'hooks.json').read_text())
     outputs = []
-    deadline = time.monotonic() + 20
-    for group in manifest['hooks'].get(event, []):
-        for hook in group['hooks']:
-            command = [
-                arg.replace('${CLAUDE_PLUGIN_ROOT}', str(PLUGIN_ROOT))
-                for arg in shlex.split(hook['command'])
-            ]
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                outputs.append(unavailable(event, 'hooks exceeded their internal deadline'))
-                return outputs
-            try:
-                result = subprocess.run(
-                    command, input=json.dumps(hook_input), capture_output=True,
-                    text=True, cwd=hook_input['cwd'], timeout=min(hook.get('timeout', 5), remaining),
-                )
-                if result.stderr:
-                    print(result.stderr, file=sys.stderr, end='')
-                if result.returncode:
-                    raise RuntimeError(f'handler exited with {result.returncode}')
-                if result.stdout.strip():
-                    output = json.loads(result.stdout)
-                    if not isinstance(output, dict):
-                        raise ValueError('handler returned a non-object result')
-                    detail = output.get('hookSpecificOutput', {})
-                    if not isinstance(detail, dict):
-                        raise ValueError('handler returned a non-object hookSpecificOutput')
-                    outputs.append(output)
-                    if (output.get('decision') == 'block'
-                            or detail.get('permissionDecision') == 'deny'):
-                        return outputs
-            except Exception as error:
-                outputs.append(unavailable(Path(command[1]).name, error))
+    try:
+        manifest = json.loads((PLUGIN_ROOT / 'hooks' / 'hooks.json').read_text())
+        deadline = time.monotonic() + 20
+        for group in manifest['hooks'].get(event, []):
+            for hook in group['hooks']:
+                command = [
+                    arg.replace('${CLAUDE_PLUGIN_ROOT}', str(PLUGIN_ROOT))
+                    for arg in shlex.split(hook['command'])
+                ]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    outputs.append(unavailable(event, 'hooks exceeded their internal deadline'))
+                    return outputs
+                try:
+                    result = subprocess.run(
+                        command, input=json.dumps(hook_input), capture_output=True,
+                        text=True, cwd=hook_input['cwd'], timeout=min(hook.get('timeout', 5), remaining),
+                    )
+                    if result.stderr:
+                        print(result.stderr, file=sys.stderr, end='')
+                    if result.returncode:
+                        raise RuntimeError(f'handler exited with {result.returncode}')
+                    if result.stdout.strip():
+                        output = json.loads(result.stdout)
+                        if not isinstance(output, dict):
+                            raise ValueError('handler returned a non-object result')
+                        detail = output.get('hookSpecificOutput', {})
+                        if not isinstance(detail, dict):
+                            raise ValueError('handler returned a non-object hookSpecificOutput')
+                        outputs.append(output)
+                        if (output.get('decision') == 'block'
+                                or detail.get('permissionDecision') == 'deny'):
+                            return outputs
+                except Exception as error:
+                    outputs.append(unavailable(Path(command[1]).name, error))
+    except InvocationDeadline as error:
+        error.outputs = outputs
+        raise
     return outputs
 
 

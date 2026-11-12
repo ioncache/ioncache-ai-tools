@@ -7,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import uuid
@@ -43,6 +45,25 @@ class ConfigurationTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
+
+    def test_guidance_deadline_reports_unavailability_and_next_call_recovers(self):
+        def slow_settings(*args, **kwargs):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+
+        with (
+            mock.patch.object(guidance, 'feature_settings', side_effect=slow_settings),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertNotIn('hookSpecificOutput', output)
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'continued'},
+        }))
+        self.assertIn('additionalContext', guidance.run_hook('UserPromptSubmit', {
+            **self.data, 'prompt': 'Implement the fix',
+        })['hookSpecificOutput'])
 
     def test_install_update_adds_preserves_and_removes_settings(self):
         path = self.root / 'config.json'
