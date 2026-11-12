@@ -521,6 +521,25 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('Bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo '>' package-lock.json"}), {})
 
+    def test_literal_data_recovers_without_rewriting_paths_or_content(self):
+        original = f"printf 'a{EM_DASH}b' > 'literal{EM_DASH}.txt'"
+        denied = self.tool('Bash', {'command': original})
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        script = (
+            'from pathlib import Path; '
+            'Path("literal" + chr(0x2014) + ".txt").write_text('
+            '"a" + chr(0x2014) + "b", encoding="utf-8")'
+        )
+        command = shlex.join([sys.executable, '-c', script])
+        self.assertNotIn(EM_DASH, command)
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': command}), [{}])
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / f'literal{EM_DASH}.txt').read_bytes(),
+                         f'a{EM_DASH}b'.encode('utf-8'))
+        self.assertEqual(self.tool('Bash', {'command': original})['permissionDecision'], 'deny')
+        self.assertIn('chr(0x2014)', denied['permissionDecisionReason'])
+
 
     def test_patch_header_whitespace_is_denied(self):
         for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',

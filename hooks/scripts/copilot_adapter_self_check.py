@@ -578,6 +578,24 @@ class CopilotAdapterTests(unittest.TestCase):
         args = {'path': 'x', 'old_str': f'old{EM_DASH}text', 'new_str': 'clean'}
         self.assertEqual(self.tool('edit', args), {})
 
+    def test_literal_data_recovers_without_rewriting_paths_or_content(self):
+        original = f"printf 'a{EM_DASH}b' > 'literal{EM_DASH}.txt'"
+        denied = self.tool('bash', {'command': original})
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        script = (
+            'from pathlib import Path; '
+            'Path("literal" + chr(0x2014) + ".txt").write_text('
+            '"a" + chr(0x2014) + "b", encoding="utf-8")'
+        )
+        command = shlex.join([sys.executable, '-c', script])
+        self.assertNotIn(EM_DASH, command)
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / f'literal{EM_DASH}.txt').read_bytes(),
+                         f'a{EM_DASH}b'.encode('utf-8'))
+        self.assertEqual(self.tool('bash', {'command': original})['permissionDecision'], 'deny')
+        self.assertIn('chr(0x2014)', denied['permissionDecisionReason'])
+
     def test_lockfile_denial_wins_over_rewrite(self):
         for name, args in [
             ('create', {'path': 'package-lock.json', 'file_text': EM_DASH}),

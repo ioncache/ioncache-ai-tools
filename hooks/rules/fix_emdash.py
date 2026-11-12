@@ -45,9 +45,12 @@ def check(hook_input):
                 'This Bash command contains an em-dash. Rewriting it automatically '
                 'would insert a space, which can split one shell argument into two '
                 '(e.g. `rm -- foo' + EM_DASH + 'bar` becoming two arguments). '
-                'Rewrite the command yourself using a comma, period, parentheses, '
-                'or colon instead, then resubmit it. Do not change literal filenames '
-                'or data: use a structured file/search tool for those instead.'
+                'For prose, use a comma, period, parentheses, or colon instead, '
+                'then resubmit. Preserve required literal filenames and data: '
+                'use structured path/search arguments, or an ASCII-only command '
+                'that constructs the character (e.g. Python chr(0x2014)) for '
+                'literal writes or shell paths. Write/Edit/MultiEdit content '
+                'is rewritten and does not preserve literal em-dashes.'
             ),
         }
 

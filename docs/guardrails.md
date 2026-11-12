@@ -28,6 +28,9 @@ answer content. Native host permissions remain authoritative.
 Structured file edits containing em-dashes are rewritten without bypassing
 normal host permissions. For literal paths or search patterns containing that
 character, use structured file/search tools instead of changing the literal.
+For literal data writes or shell paths, use an ASCII-only command that constructs
+the character, for example Python `chr(0x2014)`. Write/Edit/MultiEdit content
+rewrites do not preserve literal em-dashes.
 Ambiguous patch-header whitespace is rejected; resubmit unpadded headers.
 
 These checks recognize common actions, not every shell construct or tool.
