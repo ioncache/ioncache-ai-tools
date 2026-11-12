@@ -22,14 +22,15 @@ project values in the global file's `projects` map, then the project file.
 A feature disabled by any host's effective settings is disabled across all
 three hosts.
 
-For example, disable the process-termination guard globally:
+For example, disable the broad-process-termination guard globally:
 
 ```json
-{ "features": { "never_kill_without_asking": false } }
+{ "features": { "no_broad_process_kill": false } }
 ```
 
 Re-enable that guard for one project by setting the same key to `true` in its
-project settings. Chat approval does not override this guard while it is enabled.
+project settings. While enabled, use an exact positive PID for an owned or
+explicitly assigned process instead of a name or process-group target.
 
 Ignore project-local settings and their generated
 `.ioncache-ai-tools.local.json.lock` files in consuming repositories. Lock files
@@ -39,26 +40,29 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Question classification, mutation gate, answer-only guidance, and shared request-freshness checks |
-| `block_raw_worktree_add` | Worktree creation outside the setup skill |
+| `answer-questions` | Direct-answer guidance without cancelling existing assignments |
+| `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
 | `engineering-judgment` | Startup engineering policy and skill guidance |
-| `fix_emdash` | Em-dashes in edits, shell input, and final responses |
-| `never_kill_without_asking` | Recognized process-kill commands |
+| `fix_emdash` | Em-dashes in edits and shell input |
+| `no_broad_process_kill` | Name-based and process-group termination commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
-| `scope-exactly-what-asked` | Startup scope guidance and shared request-freshness checks |
+| `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
 
-`answer-questions` and `scope-exactly-what-asked` share request-freshness
-checks. They remain active while either setting is enabled, so disabling one
-does not disable the checks needed by the other.
+Scope and question settings control instructions, not permission gates.
+Disabling them does not disable independent action checks. The plugin stores
+no task approvals or shared root/child authorization state.
 
 Skill opt-outs block explicit skill-tool loads and instruct the assistant not
 to apply the skill automatically or through slash commands. They do not remove
 skills from the host's discovery menu. Instruction-based activation remains
 subject to host behavior.
+When a skill is disabled, continue with other available tools. The worktree
+guard supplies its setup helper's path, so recovery does not depend on loading
+the `create-worktree` skill.
 
 Disabling `skill:engineering-judgment` also suppresses the reminder to load
 that skill. Apart from these dependencies, guard and skill settings are
@@ -82,6 +86,8 @@ intentional symlinks, and skip unchanged files. Settings are reused within
 one hook invocation and are not cached across invocations.
 
 Runtime persistence failures warn but retain valid effective settings.
+Writer-lock waits are bounded. A busy lock follows the same persistence-failure
+path rather than indefinitely stalling the hook.
 Explicit synchronization exits nonzero on read, validation, or persistence
 failure. Malformed or unreadable preferences remain untouched and pause plugin
 features until repaired; the host's own permissions still apply.

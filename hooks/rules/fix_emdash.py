@@ -46,7 +46,8 @@ def check(hook_input):
                 'would insert a space, which can split one shell argument into two '
                 '(e.g. `rm -- foo' + EM_DASH + 'bar` becoming two arguments). '
                 'Rewrite the command yourself using a comma, period, parentheses, '
-                'or colon instead, then resubmit it.'
+                'or colon instead, then resubmit it. Do not change literal filenames '
+                'or data: use a structured file/search tool for those instead.'
             ),
         }
 

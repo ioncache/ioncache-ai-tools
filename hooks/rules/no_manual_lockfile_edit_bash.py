@@ -15,7 +15,7 @@ Scope, by design (see README's `hooks/rules/` section): this catches
 common redirection/`sed`/`perl`/`tee`/`cp`/`mv` forms, not every possible
 one. A less common redirection operator (`>|`, `&>`) or a deliberately
 obfuscated command is an accepted, out-of-scope gap, the same trade-off
-`never_kill_without_asking` documents for itself.
+`no_broad_process_kill` uses for common accidental process termination.
 
 Leading literal cd chains are resolved without executing the shell. Later
 directory changes, expansions, and complex control flow leave cwd unknown;
@@ -27,7 +27,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
-    without_redirections,
+    without_redirections, command_executable,
 )
 
 LOCKFILE_NAMES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
@@ -99,7 +99,7 @@ def _mutates_lockfile(simple_command, cwd):
     for i, token in enumerate(simple_command):
         if is_shell_operator(token, {'>', '>>'}) and i + 1 < len(simple_command) and _is_lockfile(simple_command[i + 1]):
             return True
-    executable = skip_wrappers(without_redirections(simple_command))
+    executable = command_executable(simple_command)
     if not executable:
         return False
     head = os.path.basename(executable[0])

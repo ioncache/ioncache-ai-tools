@@ -767,7 +767,7 @@ class TurnGuardTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['decision'], 'block')
-        self.assertIn('continuation', result.stderr)
+        self.assertEqual(result.stderr, '')
 
     def test_emdash_correction_preserves_the_question_turn(self):
         self.prompt('Why does this happen?')

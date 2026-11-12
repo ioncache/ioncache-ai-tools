@@ -11,9 +11,11 @@ spaces. Do not assume a host-specific plugin-root environment variable exists.
 
 The Python launcher requires Node.js 22.12.0 or later and checks its version
 before invoking the JavaScript helper. If Node.js is missing, too old, or its
-version cannot be verified, report the diagnostic and stop without creating a
-worktree or setup files. Do not install or upgrade Node.js without separate
-authorization or bypass the launcher with a direct Node or raw Git command.
+version cannot be verified, leave the worktree and setup files untouched.
+Use a compatible installed Node.js via `PATH`, or the project's authorized
+runtime setup procedure, then retry the launcher. Do not bypass its checks with
+a direct Node or raw Git command. If the prerequisite remains unavailable,
+report that operation as pending and continue other authorized work.
 
 For example, after resolving the actual installed path:
 
@@ -21,5 +23,6 @@ For example, after resolving the actual installed path:
 python3 "/absolute/plugin root/scripts/create-worktree.py" -b feature "../feature worktree"
 ```
 
-Report the command's output. If it failed, show the diagnostic and stop,
-don't retry with different arguments on your own.
+Report the command's output. On failure, address the reported cause before
+retrying; do not repeat an unchanged failing command or silently change the
+requested branch and destination.

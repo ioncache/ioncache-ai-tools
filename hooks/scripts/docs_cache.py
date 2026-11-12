@@ -10,6 +10,7 @@ Every hook path fails open: an error or doubt lets the fetch go ahead,
 because a blocking gate on docs lookups once bricked a session.
 """
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -168,15 +169,22 @@ def take_bypass(session_id, key):
     """Record a denial; on the repeat of a denied call, allow it once."""
     if not SESSION_ID.fullmatch(session_id or ''):
         raise ValueError('invalid session id')
-    path = cache_dir() / 'sessions' / session_id
-    denied = set(path.read_text().split()) if path.exists() else set()
-    bypass = key in denied
-    if bypass:
-        denied.discard(key)
-    else:
-        denied.add(key)
-    write_private(path, '\n'.join(sorted(denied)))
-    return bypass
+    root = cache_dir()
+    descriptor = os.open(root / '.bypass.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, 'r+') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        path = root / 'sessions' / session_id
+        denied = set(path.read_text().split()) if path.exists() else set()
+        bypass = key in denied
+        if bypass:
+            denied.discard(key)
+        else:
+            denied.add(key)
+        write_private(path, '\n'.join(sorted(denied)))
+        return bypass
 
 
 def render(url, facts, tool='web_fetch'):

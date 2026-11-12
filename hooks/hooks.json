@@ -1,12 +1,12 @@
 {
-  "description": "Deterministic turn guards, documentation caching, and punctuation checks",
+  "description": "Stateless guidance, recoverable action checks, and documentation caching",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SessionStart",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guidance.py\" SessionStart",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SubagentStart",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guidance.py\" SubagentStart",
             "timeout": 5
           }
         ]
@@ -28,12 +28,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" UserPromptSubmit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guidance.py\" UserPromptSubmit",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" UserPromptSubmit"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" UserPromptSubmit",
+            "timeout": 7
           }
         ]
       }
@@ -44,7 +45,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block_pending_question.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guidance.py\" PreToolUse",
+            "timeout": 5
           }
         ]
       },
@@ -53,12 +55,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" PreToolUse"
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PreToolUse",
-            "timeout": 5
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/rule_engine.py\" PreToolUse",
+            "timeout": 7
           },
           {
             "type": "command",
@@ -74,46 +72,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PostToolUse",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude PostToolUse",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PostToolUseFailure",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" PreCompact",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope_guard.py\" SessionEnd",
-            "timeout": 2
           }
         ]
       }
@@ -122,10 +82,6 @@
       {
         "matcher": "*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block_emdash_turn.py\""
-          },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/docs_cache.py\" claude Stop",

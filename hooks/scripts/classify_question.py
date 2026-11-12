@@ -76,7 +76,7 @@ def has_question(text):
 
 
 def main():
-    from scope_guard import run_hook
+    from guidance import run_hook
 
     data = json.load(sys.stdin)
     data.setdefault('cwd', str(Path.cwd()))

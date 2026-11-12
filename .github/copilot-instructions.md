@@ -30,27 +30,37 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   native inputs and outputs. Use `userPromptTransformed`, not
   `userPromptSubmitted`, for reminders: Copilot drops the latter's command
   output. The adapter preserves transformed prompt content and adds context.
-  Fence prompt processing before running shared handlers because this event
-  cannot block. Failed updates must not reuse old authorization.
-- Claude and Codex launch matching hooks concurrently. Emit classification
-  and its compact turn contract from one handler, not a separate marker reader.
+  Prompt processing supplies stateless guidance; failures must not create fences.
+- Claude and Codex launch matching hooks concurrently. Emit question guidance
+  from one handler, without marker readers or stored classification state.
   Codex registers one adapter per prompt/tool event. Both adapters pass
   `apply_patch` to the shared hooks once using `tool_input.command`; the
   engine checks all targets and added lines with one rules/config load.
   Deny required rewrites instead of altering patch context.
-  Adapter errors exit 2 to block; safe calls leave permissions unchanged.
+  Adapter errors report unavailability without blocking or granting host permission.
 - `hooks/scripts/rule_engine.py` owns rule discovery, matching, and output
   merging. `plugin_config.py` reconciles and resolves the shipped catalog.
-  Rules live in `hooks/rules/`; `scope_guard.py` keeps current request,
-  classification, and child-assignment state in `EvidenceStore`, using
-  the `scope-policy` namespace. Its checks are deterministic and never launch
-  model reviews. Scope and answer content remain assistant guidance.
+  Rules live in `hooks/rules/`; `guidance.py` supplies scope, question, and
+  documentation instructions plus explicit skill opt-outs. It creates no task,
+  turn, launch, request-freshness, or root/child permission state.
   `scope_review.py`, `copilot_history.py`, `turn_guard.py`, `turn_review.py`,
-  and the experimental claim checkers remain inactive source, with no registered
-  hooks or active import paths. The shared store must not import these modules.
-  Post-tool hooks restore child and compacted-session guidance, not authorization verdicts.
-  Final-response punctuation remains a separate guard; Copilot reads only the
-  current final text. Do not collect streamed prose for semantic review.
+  `block_pending_question.py`, and experimental claim checkers remain inactive
+  source, with no registered hooks or active import paths. The shared store
+  must not import these modules. Do not restore authorization fallbacks when
+  guidance is disabled or checking fails.
+  Keep narrow action denials paired with executable alternatives. Broad process
+  termination is denied; exact positive PIDs and native stop controls remain
+  available for processes the worker owns or was assigned to manage. The rule
+  does not verify ownership. Worktree denial must expose the setup launcher
+  directly even when the corresponding skill is disabled.
+  Exercise defaults with real commands in disposable directories and interleaved
+  root/child questions, including actual Copilot child `sessionId`/`agentId`
+  payloads. Isolated adapter checks do not establish live host usability.
+  Assistant display and final text are not rewritten or gated. Stop hooks only
+  deliver cache notices; Copilot does not scan final transcripts.
+  `block_emdash_turn.py` is retained inactive source.
+  The retired `block_pending_question.py` CLI emits no decision even if an old
+  registration invokes it; its helpers remain only for inactive review code.
 - `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
@@ -182,11 +192,15 @@ construct the character with `chr(0x2014)` to pass this source check.
   concatenated with blank lines. Preserve per-rule error isolation and the
   engine's five-second watchdog. Missing, non-directory, or unlistable rule
   paths are discovery failures, not empty rule sets. Discovery exceptions
-  propagate to `main()`, which logs and exits 2; a readable empty directory
+  propagate to `main()`, which reports checker unavailability; a readable empty directory
   or no enabled rules for an event remains valid. Engine-wide errors and
-  watchdog expiry also log and exit 2.
+  watchdog expiry report unavailability without granting permission or blocking
+  the entire worker. Preserve already-computed decisions; a known denial wins.
   Shared adapter execution has an internal deadline before the native hook
   timeout: 20 seconds for shared execution, with smaller per-handler limits.
+  The adapters also bound the whole invocation to 25 seconds, including
+  configuration work, or four seconds for session end. Config writer locks
+  use short bounded waits and preserve readable preferences on runtime failure.
   Pre-tool and final adapter hooks have 30-second native limits.
   Self-checks install isolated fake reviewer executables to catch accidental
   model launches; never let offline tests launch a real model against fixtures.
@@ -208,7 +222,7 @@ construct the character with `chr(0x2014)` to pass this source check.
   and bootstrap instructions cover automatic/slash-command activation.
   Skill visibility remains host-managed; do not claim plugin config unregisters
   a skill. Keep self-check HOME and both host directories isolated.
-- Reuse `tokenize_command`, `split_into_simple_commands`, and `skip_wrappers`
+- Reuse `tokenize_command`, `split_into_simple_commands`, and `command_executable`
   for checks that depend on executable position or related options/targets.
   Use `is_shell_operator` for punctuation comparisons: decoded shell words
   can contain the same characters without being operators.
@@ -216,21 +230,15 @@ construct the character with `chr(0x2014)` to pass this source check.
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an
   exhaustive shell interpreter.
-- `scope_guard.py` invokes the question classifier and emits its turn contract
-  from the same handler that updates question state and the marker.
-  `block_pending_question.py` denies recognized mutations for the whole turn.
-  A subsequent non-question user prompt clears the marker; plugin-generated
-  punctuation corrections preserve it. Resume/compaction preserve question state.
-  Native child identities isolate state; do not infer identity from agent type.
+- `guidance.py` uses the pure question classifier for advisory text only.
+  Questions do not suspend existing assignments. Native identities are passed
+  through rather than mapped into shared permission storage; one agent's
+  conversation must never create a tool fence for another.
 - Cache diagnostics use user-facing `systemMessage` or Copilot progress
   output, never repeated `additionalContext` or mandatory final-answer prose.
   Keep progress parsing at the Copilot boundary; shared handlers emit one JSON
   object. Never call the retained claim-evidence receipt path from cache delivery.
-- Claude/Codex final-response checks use `last_assistant_message`. Copilot
-  lacks this field, so its adapter waits for the exact current `agentStop`
-  record in `events.jsonl` before reading the latest root assistant text.
-  Never treat a stale turn or an unreadable transcript as a clean response.
-  `fix_emdash.py` rewrites edit/write content but denies
+- `fix_emdash.py` rewrites edit/write content but denies
   Bash input: inserting whitespace could change shell arguments.
 
 ## Prompts, documentation, and local development
@@ -251,7 +259,9 @@ construct the character with `chr(0x2014)` to pass this source check.
   for host-specific commands.
   Rule-disable config is outside that cache and takes effect immediately.
   Use `copilot --plugin-dir .` to load a live checkout without installing;
-  `copilot plugin install .` refreshes a directly installed local copy.
+  For persistent local Copilot loading, register the checkout with
+  `copilot plugin marketplace add /absolute/path/to/checkout`, then install
+  `ioncache-ai-tools@ioncache-ai-tools`. Direct `plugin install .` is unsupported.
 - [../README.md](../README.md) is the concise guide to current functionality,
   installation, usage, and known issues for plugin users. Keep repository
   contributor setup and release workflows out of it.

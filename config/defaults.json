@@ -6,7 +6,7 @@
     "documentation-first": true,
     "engineering-judgment": true,
     "fix_emdash": true,
-    "never_kill_without_asking": true,
+    "no_broad_process_kill": true,
     "no-manual-lockfile-edit": true,
     "no_manual_lockfile_edit_bash": true,
     "scope-exactly-what-asked": true,

@@ -1,17 +1,52 @@
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+ADAPTER_TIMEOUT_SECONDS = 25
 PATCH_REWRITE_REASON = (
     'This patch contains added text that a rule would rewrite. '
     'Remove em-dashes from the added text and resubmit the patch. '
     'Patch context and removed lines must not be auto-rewritten.'
 )
+
+
+def deadline_expired(signum, frame):
+    raise RuntimeError('hook invocation deadline exceeded')
+
+
+def unavailable(component, error):
+    message = (
+        f'{component} checks unavailable: {error}. The failed check produced no policy verdict; '
+        'other rule decisions and native permissions still apply. '
+        'Continue using the task instructions and native host permissions; do not retry solely to satisfy this check.'
+    )
+    print(message, file=sys.stderr)
+    return {'systemMessage': message}
+
+
+@contextmanager
+def invocation_deadline(seconds):
+    started = time.monotonic()
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    limit = min(seconds, previous_timer[0]) if previous_timer[0] else seconds
+    signal.signal(signal.SIGALRM, deadline_expired)
+    signal.setitimer(signal.ITIMER_REAL, limit)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0]:
+            remaining = max(0.000001, previous_timer[0] - (time.monotonic() - started))
+            signal.setitimer(signal.ITIMER_REAL, remaining, previous_timer[1])
 
 
 def run_shared_hooks(event, hook_input):
@@ -27,23 +62,30 @@ def run_shared_hooks(event, hook_input):
             ]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f'{event} hooks exceeded their internal deadline')
-            result = subprocess.run(
-                command, input=json.dumps(hook_input), capture_output=True,
-                text=True, cwd=hook_input['cwd'], timeout=min(hook.get('timeout', 5), remaining),
-            )
-            if result.stderr:
-                print(result.stderr, file=sys.stderr, end='')
-            if result.returncode:
-                raise RuntimeError(f'{Path(command[1]).name} exited with {result.returncode}')
-            if result.stdout.strip():
-                output = json.loads(result.stdout)
-                if not isinstance(output, dict):
-                    raise ValueError(f'{Path(command[1]).name} returned a non-object result')
-                outputs.append(output)
-                if (output.get('decision') == 'block'
-                        or output.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'):
-                    return outputs
+                outputs.append(unavailable(event, 'hooks exceeded their internal deadline'))
+                return outputs
+            try:
+                result = subprocess.run(
+                    command, input=json.dumps(hook_input), capture_output=True,
+                    text=True, cwd=hook_input['cwd'], timeout=min(hook.get('timeout', 5), remaining),
+                )
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr, end='')
+                if result.returncode:
+                    raise RuntimeError(f'handler exited with {result.returncode}')
+                if result.stdout.strip():
+                    output = json.loads(result.stdout)
+                    if not isinstance(output, dict):
+                        raise ValueError('handler returned a non-object result')
+                    detail = output.get('hookSpecificOutput', {})
+                    if not isinstance(detail, dict):
+                        raise ValueError('handler returned a non-object hookSpecificOutput')
+                    outputs.append(output)
+                    if (output.get('decision') == 'block'
+                            or detail.get('permissionDecision') == 'deny'):
+                        return outputs
+            except Exception as error:
+                outputs.append(unavailable(Path(command[1]).name, error))
     return outputs
 
 

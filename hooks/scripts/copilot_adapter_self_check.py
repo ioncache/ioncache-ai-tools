@@ -4,10 +4,10 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from unittest import mock
@@ -17,7 +17,6 @@ import copilot_adapter
 import copilot_history
 import docs_cache
 import hook_adapter_common
-import scope_guard as turn_guard
 from classify_question import marker_path
 from turn_guard_self_check import install_reviewers
 
@@ -34,6 +33,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.project.mkdir()
         self.home = self.root / 'home'
         self.home.mkdir()
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
         self.env = {
             **os.environ,
             'HOME': str(self.home),
@@ -80,6 +80,114 @@ class CopilotAdapterTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config))
 
+    def test_autonomous_work_continues_across_questions_and_stale_state(self):
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
+        self.prompt('Implement the requested report with two independent workers')
+        self.marker.write_text('stale question')
+        actors = ({}, {'sessionId': 'worker-a', 'agentId': 'worker-a',
+                       'parentAgentId': self.payload['sessionId']},
+                  {'sessionId': 'worker-b', 'agentId': 'worker-b',
+                   'parentAgentId': self.payload['sessionId']})
+        self.assertEqual(self.tool('task', {'prompt': 'Write the requested report'}), {})
+        for index, actor in enumerate(actors):
+            self.invoke('userPromptTransformed', **actor,
+                        prompt='What have you found?', transformedPrompt='What have you found?')
+            self.invoke('preCompact', **actor)
+            self.invoke('sessionStart', **actor, source='resume')
+            for worker in actors:
+                self.assertEqual(self.invoke('preToolUse', **worker, toolName='create',
+                                            toolArgs={'path': f'report-{index}.txt', 'file_text': 'continued'})[0], {})
+            command = f'printf "continued" > report-{index}.txt'
+            self.assertEqual(self.invoke('preToolUse', **actor, toolName='bash',
+                                         toolArgs={'command': command})[0], {})
+            subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+            self.assertEqual((self.project / f'report-{index}.txt').read_text(), 'continued')
+        self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
+
+    def test_checker_failure_does_not_require_human_recovery(self):
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
+        data = {**self.payload, 'toolName': 'create', 'toolArgs': {'path': 'report.txt', 'file_text': 'x'}}
+        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('checker unavailable')), \
+                mock.patch.object(sys, 'stderr', io.StringIO()), \
+                mock.patch.object(sys, 'stdout', io.StringIO()) as notices:
+            self.assertIsNone(copilot_adapter.run_hook('preToolUse', data))
+        self.assertIn('unavailable', notices.getvalue())
+        self.assertNotIn('permissionDecision', notices.getvalue())
+        self.assertIsNone(copilot_adapter.run_hook('preToolUse', data))
+        self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'npm install --package-lock-only --ignore-scripts'}), {})
+
+    def test_lockfile_and_process_denials_have_executable_recovery(self):
+        self.prompt('Update dependencies and clean up the test process')
+        self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
+        package = '{"name":"autonomous-recovery-fixture","version":"1.0.0","private":true}'
+        self.assertEqual(self.tool('create', {'path': 'package.json', 'file_text': package}), {})
+        (self.project / 'package.json').write_text(package)
+        command = 'npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        result = subprocess.run(command, shell=True, cwd=self.project, env=self.env,
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.project / 'package-lock.json').is_file())
+        self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
+        worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
+        try:
+            command = f'kill {worker.pid}'
+            self.assertEqual(self.tool('bash', {'command': command}), {})
+            subprocess.run(['kill', str(worker.pid)], check=True, timeout=5)
+            worker.wait(timeout=5)
+        finally:
+            if worker.poll() is None:
+                worker.terminate()
+                worker.wait(timeout=5)
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture-worker'})['permissionDecision'], 'deny')
+
+    def test_worktree_denial_recovers_without_loading_a_skill(self):
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
+                          {'features': {'skill:create-worktree': False}})
+        subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=self.project, check=True, env=self.env)
+        subprocess.run([
+            'git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+            '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm',
+            'test: initialize fixture\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
+        ], cwd=self.project, check=True, env=self.env)
+        destination = self.root / 'recovered-worktree'
+        args = ['-b', 'recovered', str(destination)]
+        raw = shlex.join(['git', 'worktree', 'add', *args])
+        denied = self.tool('bash', {'command': raw})
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        self.assertIn(str(ROOT / 'scripts/create-worktree.py'), denied['permissionDecisionReason'])
+        command = [sys.executable, str(ROOT / 'scripts/create-worktree.py'), *args]
+        self.assertEqual(self.tool('bash', {'command': shlex.join(command)}), {})
+        result = subprocess.run(command, cwd=self.project, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((destination / '.git').is_file())
+
+
+    def test_default_reads_do_not_need_a_command_or_tool_allowlist(self):
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
+        self.prompt('What changed in this checkout?')
+        (self.project / 'input.txt').write_text('inspection fixture\n')
+        for command in (
+            'find . -type f',
+            f'{sys.executable} -c "from pathlib import Path; print(Path(\'input.txt\').read_text())"',
+            'git --version',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.tool('bash', {'command': command}), {})
+                result = subprocess.run(command, shell=True, cwd=self.project, env=self.env,
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        for command in ('rg --files --hidden', 'node -e "console.log(process.cwd())"',
+                        'gh pr view 123 --json title', 'project-inspector --summary'):
+            self.assertEqual(self.tool('bash', {'command': command}), {})
+        self.assertEqual(self.tool('new_provider_lookup', {'query': 'checkout status'}), {})
+        self.assertEqual(self.tool('mcp__provider__get_record', {'id': '123'}), {})
+        self.assertEqual(self.tool('mcp__provider__update_record', {'id': '123'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'touch report.txt'}), {})
+
+
     def transcript_events(self, text):
         return [
             {'type': 'user.message', 'data': {'content': 'a prompt'}},
@@ -119,7 +227,7 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIn('${COPILOT_PLUGIN_ROOT}/hooks/scripts/copilot_adapter.py', entries[0]['bash'])
             self.assertTrue(entries[0]['bash'].endswith(event))
 
-    def test_prompt_preserves_transformation_and_bootstraps_only_once(self):
+    def test_prompt_preserves_transformation_and_supplies_stateless_guidance(self):
         output = self.prompt('Implement the feature')
         text = output['modifiedTransformedPrompt']
         self.assertTrue(text.startswith('expanded prompt\n\n'))
@@ -128,7 +236,7 @@ class CopilotAdapterTests(unittest.TestCase):
         for name in ('engineering-judgment', 'scope-exactly-what-asked'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
-        self.assertEqual(self.prompt('Continue the feature'), {})
+        self.assertIn('documentation-backed', str(self.prompt('Continue the feature')))
 
     def test_tools_and_replies_do_not_launch_scope_reviewers(self):
         capture = self.root / 'unexpected-review.txt'
@@ -141,26 +249,31 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertFalse(capture.exists())
         self.prompt('Why did that change?')
-        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', command), {})
         self.assertEqual(self.tool('view', {'path': 'source.py'}), {})
         self.prompt('Commit the requested fix')
         self.assertEqual(self.tool('bash', command), {})
-        self.assertEqual(self.tool('bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
         self.assertFalse(capture.exists())
 
-    def test_failed_prompt_update_cannot_reuse_old_authorization(self):
+
+    def test_adapter_deadline_includes_configuration_before_shared_hooks(self):
         self.prompt('Implement the requested file')
-        question = {**self.payload, 'prompt': 'Why is this different?', 'transformedPrompt': 'Why is this different?'}
-        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('database unavailable')):
-            with self.assertRaises(RuntimeError):
-                copilot_adapter.transform_prompt(question)
-        for name, args in (('create', {'path': 'x', 'file_text': 'y'}),
-                           ('write_agent', {'agent_id': 'old', 'message': 'Implement the old change'})):
-            self.assertEqual(self.tool(name, args).get('permissionDecision'), 'deny')
-        self.prompt('Implement the newly requested file')
+        question = {**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'}
+        with (
+            mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
+            mock.patch.object(copilot_adapter, 'synchronize', side_effect=lambda *_: time.sleep(1)),
+            mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            started = time.monotonic()
+            self.assertIsNone(copilot_adapter.run_hook('userPromptTransformed', question))
+            self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn('invocation deadline', notices.getvalue())
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
-    def test_stop_supplies_only_current_final_text(self):
+
+    def test_stop_does_not_collect_response_text(self):
         self.prompt('Why does this happen?')
         events = self.transcript_events('The final explanation.')
         events[2:2] = [
@@ -171,65 +284,9 @@ class CopilotAdapterTests(unittest.TestCase):
         with mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[]) as shared:
             copilot_adapter.run_hook('agentStop', {**self.payload, 'transcriptPath': str(path)})
         stop_input = next(call.args[1] for call in shared.call_args_list if call.args[0] == 'Stop')
-        self.assertEqual(stop_input['last_assistant_message'], 'The final explanation.')
+        self.assertNotIn('last_assistant_message', stop_input)
         self.assertNotIn('Here is an unsolicited plan.', json.dumps(stop_input))
 
-    def test_failed_prompt_fence_survives_old_feedback_and_resume(self):
-        self.prompt('Implement the change')
-        turn_guard.remember_continuation(copilot_adapter.shared_input(self.payload), 'old feedback')
-        with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('unavailable')):
-            with self.assertRaises(RuntimeError):
-                copilot_adapter.transform_prompt({**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'})
-        stderr = io.StringIO()
-        with mock.patch.object(sys, 'stderr', stderr), self.assertRaisesRegex(RuntimeError, 'scope_guard.py exited with 2'):
-            copilot_adapter.transform_prompt({**self.payload, 'prompt': 'old feedback', 'transformedPrompt': 'old feedback'})
-        self.assertIn('scope-guard: the current user request has not been recorded', stderr.getvalue())
-        self.invoke('sessionEnd')
-        self.invoke('sessionStart', source='resume')
-        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
-
-    def test_dangling_prompt_fence_cannot_reopen_authorization(self):
-        self.prompt('Implement the change')
-        path = marker_path(copilot_adapter.shared_input(self.payload), 'prompt')
-        path.symlink_to(self.root / 'missing')
-        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}).get('permissionDecision'), 'deny')
-
-    def test_mid_turn_compaction_recovers_on_native_post_tool_output(self):
-        self.prompt('Why does this happen?')
-        self.invoke('preCompact')
-        fields = {'toolName': 'view', 'toolArgs': {'path': 'source.py'},
-                  'toolResult': {'resultType': 'success', 'textResultForLlm': 'source'}}
-        output, _ = self.invoke('postToolUse', **fields)
-        self.assertIn('Question turn:', output['additionalContext'])
-        self.assertEqual(self.invoke('postToolUse', **fields)[0], {})
-
-    def test_view_does_not_collect_claim_evidence(self):
-        self.prompt('Explain this file')
-        path = self.project / 'failure-example.txt'
-        path.write_text('The example fails with exit code: 1.')
-        fields = {'toolName': 'view', 'toolArgs': {'path': str(path)}}
-        self.invoke('preToolUse', **fields)
-        self.invoke('postToolUse', **fields, toolResult={
-            'resultType': 'success', 'textResultForLlm': path.read_text(),
-        })
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertNotIn('observations', state)
-        self.assertNotIn(path.read_text(), json.dumps(state))
-
-    def test_shell_output_is_not_collected_for_claim_review(self):
-        self.prompt('Inspect the command output')
-        fields = {'toolName': 'bash', 'toolArgs': {'command': 'printf "exit code: 1"'}}
-        for event, result_type, expected in (
-            ('postToolUse', 'success', True), ('postToolUseFailure', 'failure', False),
-        ):
-            with self.subTest(event=event):
-                self.invoke('preToolUse', **fields)
-                self.invoke(event, **fields, toolResult={'resultType': result_type, 'textResultForLlm': 'exit code: 1'})
-                with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-                    state = store.get(turn_guard.CATEGORY, 'state')
-                self.assertNotIn('observations', state)
-                self.assertNotIn('command_history', state)
 
     def test_stop_excludes_execution_and_documentation_evidence(self):
         self.prompt('Run the tests and report the observed result')
@@ -247,38 +304,6 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertFalse(capture.exists())
 
-    def test_stop_does_not_retain_assistant_proposals(self):
-        self.prompt('Propose one change and wait')
-        proposal = 'Change reader.py only; leave writer.py untouched.'
-        events = self.transcript_events('Waiting for approval.')
-        events[2:2] = [
-            {'type': 'assistant.message', 'data': {'content': 'Earlier research. ' + 'x' * 16_000}},
-            {'type': 'assistant.message', 'data': {'content': proposal}},
-        ]
-        path = self.write_events(events)
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.prompt('Yes, proceed')
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertNotIn('history', state)
-        self.assertNotIn(proposal, json.dumps(state))
-
-    def test_user_answers_do_not_create_authorization_records(self):
-        self.prompt('Propose the fix, get approval, then implement it')
-        proposal = 'Plan details. ' * 400 + 'Update the guard self-check. No commits or pushes.'
-        args = {'message': proposal, 'requestedSchema': {'properties': {}}}
-        fields = {'toolName': 'ask_user', 'toolArgs': json.dumps(args), 'toolCallId': 'approval'}
-        answer = {'resultType': 'success', 'textResultForLlm': 'User responded: Approve this plan'}
-        self.invoke('preToolUse', **fields)
-        self.invoke('postToolUse', **fields, toolResult=answer)
-        capture = self.root / 'review-input.txt'
-        self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
-        self.assertEqual(self.tool('create', {'path': 'turn_guard_self_check.py', 'file_text': 'requested change'}), {})
-        self.assertFalse(capture.exists())
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertNotIn('user_interactions', state)
-        self.assertNotIn('pending_tools', state)
 
     def approval_history(self, answer='User responded: Approve this plan'):
         return [
@@ -375,12 +400,6 @@ class CopilotAdapterTests(unittest.TestCase):
                 self.assertEqual(recovered['dialogue'], [])
                 self.assertTrue(recovered['problem'])
 
-    def test_clear_discards_the_question_gate(self):
-        self.prompt('Why did that change?')
-        self.assertEqual(self.tool('create', {'path': 'target.py', 'file_text': 'x'})['permissionDecision'], 'deny')
-        self.invoke('sessionStart', source='clear')
-        self.prompt('Implement the change')
-        self.assertEqual(self.tool('create', {'path': 'target.py', 'file_text': 'x'}), {})
 
     def test_engineering_reminder_can_be_disabled_and_reenabled(self):
         name = 'engineering-judgment'
@@ -393,50 +412,25 @@ class CopilotAdapterTests(unittest.TestCase):
         self.write_config(self.project / '.github/copilot/ioncache-ai-tools.local.json', {'enabledRules': [name]})
         self.invoke('preCompact')
         self.assertIn(rule['message'], self.prompt('Implement the feature')['modifiedTransformedPrompt'])
-        self.assertEqual(self.prompt('Continue the feature'), {})
+        self.assertIn(rule['message'], str(self.prompt('Continue the feature')))
 
-    def test_graph_files_do_not_gate_discovery_or_weaken_question_recovery(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
-        (self.project / 'source.py').write_text('entry = 1\n')
-        self.write_config(self.home / '.copilot/ioncache-ai-tools.local.json', {'features': {'graphify': True}})
-        self.assertNotIn('graphify', str(self.prompt('Why does this fail?')).lower())
-        self.invoke('preCompact')
-        for event, fields in (('sessionStart', {'source': 'resume'}), ('subagentStart', {'agentId': 'child'})):
-            self.assertNotIn('graphify', str(self.invoke(event, **fields)).lower())
-        for child in ({}, {'agentId': 'child'}):
-            for name, args in (('view', {'path': 'source.py'}), ('rg', {'pattern': 'entry'}),
-                               ('glob', {'pattern': '*.py'}), ('bash', {'command': 'cat source.py'})):
-                self.assertEqual(self.invoke('preToolUse', **child, toolName=name, toolArgs=args)[0], {})
-            denied, _ = self.invoke('preToolUse', **child, toolName='create',
-                                    toolArgs={'path': 'source.py', 'file_text': 'edited'})
-            self.assertEqual(denied['permissionDecision'], 'deny')
-        self.prompt('Implement the fix')
-        self.invoke('subagentStart', agentId='child')
-        for child in ({}, {'agentId': 'child'}):
-            self.assertEqual(self.invoke('preToolUse', **child, toolName='create',
-                                         toolArgs={'path': 'source.py', 'file_text': 'fixed'})[0], {})
-        self.assertEqual(self.tool('bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
-        self.assertEqual(graph.read_text(), '{}')
 
-    def test_lifecycle_context_is_not_discarded_or_repeated_per_prompt(self):
+    def test_lifecycle_and_prompt_events_supply_guidance(self):
         output, _ = self.invoke('sessionStart', source='startup')
         self.assertIn('documentation-backed', output['additionalContext'])
-        self.assertEqual(self.prompt('Implement the change'), {})
-        self.assertEqual(self.invoke('sessionStart', source='resume')[0], {})
+        self.assertIn('documentation-backed', str(self.prompt('Implement the change')))
+        self.assertIn('documentation-backed', str(self.invoke('sessionStart', source='resume')[0]))
         self.assertIn('documentation-backed', self.invoke('subagentStart', agentName='explore')[0]['additionalContext'])
         self.assertEqual(self.invoke('preCompact')[0], {})
         self.assertIn('documentation-backed', self.prompt('Continue')['modifiedTransformedPrompt'])
 
-    def test_stop_correction_preserves_question_mode(self):
+    def test_stop_does_not_retry_visible_text_or_gate_tools(self):
         self.prompt('Why is this different?')
         path = self.write_events(self.transcript_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
-        self.assertEqual(output['decision'], 'block')
-        self.assertEqual(self.prompt(output['reason']), {})
-        self.assertTrue(self.marker.exists())
-        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+        self.assertEqual(output, {})
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
         self.write_events(self.transcript_events('Corrected punctuation.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
 
@@ -523,11 +517,11 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_failed_shared_hook_does_not_consume_an_undelivered_notice(self):
         docs_cache.set_status('worker unavailable')
         with mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=RuntimeError('fixture failure')):
-            with self.assertRaises(RuntimeError):
-                copilot_adapter.run_hook('postToolUse', {
+            with mock.patch.object(sys, 'stdout', io.StringIO()), mock.patch.object(sys, 'stderr', io.StringIO()):
+                self.assertIsNone(copilot_adapter.run_hook('postToolUse', {
                     **self.payload, 'toolName': 'bash', 'toolArgs': {'command': 'true'},
                     'toolResult': {'resultType': 'success', 'textResultForLlm': ''},
-                })
+                }))
         self.assertIsNotNone(docs_cache.pending_notice(self.payload['sessionId']))
 
     def test_docs_cache_warning_does_not_depend_on_response_punctuation(self):
@@ -539,7 +533,7 @@ class CopilotAdapterTests(unittest.TestCase):
         notice = self.progress[-1]
         self.assertNotIn(EM_DASH, notice)
         path = self.write_events(self.transcript_events(f'{notice}\nBad{EM_DASH}punctuation'))
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         path = self.write_events(self.transcript_events('Clean requested answer.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertEqual(self.progress, [notice])
@@ -548,41 +542,18 @@ class CopilotAdapterTests(unittest.TestCase):
         self.env['IONCACHE_DOCS_DISTILLER'] = '1'
         self.assertEqual(self.prompt('Implement the feature'), {})
 
-    def test_question_blocks_mutations_until_non_question_prompt(self):
-        text = self.prompt('why is this behavior different')['modifiedTransformedPrompt']
-        self.assertIn('Question turn: answer and reasoning only', text)
-        self.assertTrue(self.marker.exists())
-        for name, args in [
-            ('create', {'path': 'x', 'file_text': 'y'}),
-            ('edit', {'path': 'x', 'old_str': 'a', 'new_str': 'b'}),
-            ('apply_patch', '*** Begin Patch\n*** Add File: x\n+y\n*** End Patch'),
-            ('bash', {'command': 'git commit -m change'}),
-            ('bash', {'command': "gh api graphql -f 'query=query Read { q } mutation Change { m }' -f operationName=Change"}),
-        ]:
-            with self.subTest(name=name):
-                self.assertEqual(self.tool(name, args)['permissionDecision'], 'deny')
-        self.assertEqual(self.tool('view', {'path': 'x'}), {})
-        self.assertEqual(self.tool('bash', {'command': 'git status --short'}), {})
-        self.assertEqual(self.tool('bash', {'command': "echo '>' output.txt"}), {})
-        self.prompt('Implement the change')
-        self.assertFalse(self.marker.exists())
-        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
     def test_native_shell_rules(self):
-        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json',
-                        'echo ready # status\nkill 123', "echo ready; kill 123\nprintf 'unfinished"):
+        for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
+                        'echo ready # status\npkill worker', "echo ready; pkill worker\nprintf 'unfinished"):
             with self.subTest(command=command):
                 self.assertEqual(self.tool('bash', {'command': command})['permissionDecision'], 'deny')
         self.assertEqual(self.tool('bash', {'command': 'echo kill'}), {})
-        self.assertEqual(self.tool('bash', {'command': "echo ';' kill 123"}), {})
+        self.assertEqual(self.tool('bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('bash', {'command': "echo '>' package-lock.json"}), {})
         self.assertEqual(self.tool('bash', json.dumps({'command': 'git status'})), {})
 
-    def test_graphql_template_cannot_hide_mutation(self):
-        self.prompt('why is this different')
-        command = "gh api graphql -f 'query=mutation { m }' --template '-fquery=query { q }'"
-        self.assertEqual(self.tool('bash', {'command': command}).get('permissionDecision'), 'deny')
-        self.assertEqual(self.tool('bash', {'command': command.replace('mutation { m }', 'query { q }')}), {})
 
     def test_patch_header_whitespace_is_denied(self):
         for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',
@@ -654,13 +625,13 @@ class CopilotAdapterTests(unittest.TestCase):
     def test_copilot_config_overrides_and_cross_host_union(self):
         global_path = self.home / '.copilot/ioncache-ai-tools.local.json'
         local_path = self.project / '.github/copilot/ioncache-ai-tools.local.json'
-        rule = 'never_kill_without_asking'
+        rule = 'no_broad_process_kill'
         self.write_config(global_path, {'disabledRules': [rule]})
-        self.assertEqual(self.tool('bash', {'command': 'kill 123'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill worker'}), {})
         self.write_config(local_path, {'enabledRules': [rule]})
-        self.assertEqual(self.tool('bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
         self.write_config(self.project / '.claude/ioncache-ai-tools.local.json', {'disabledRules': [rule]})
-        self.assertEqual(self.tool('bash', {'command': 'kill 123'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill worker'}), {})
         self.write_config(local_path, {'disabledRules': ['fix_emdash']})
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': EM_DASH}), {})
 
@@ -668,13 +639,13 @@ class CopilotAdapterTests(unittest.TestCase):
         config = self.home / '.copilot/ioncache-ai-tools.local.json'
         config.parent.mkdir()
         config.write_text('{bad')
-        output, stderr = self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'kill 123'})
+        output, stderr = self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'pkill worker'})
         self.assertEqual(output, {})
         self.assertIn('failed to read', stderr)
         self.assertIn('features paused', stderr)
         self.assertEqual(config.read_text(), '{bad')
 
-    def test_stop_checks_only_current_root_response(self):
+    def test_stop_does_not_require_a_readable_transcript(self):
         events = self.transcript_events('clean')
         events.insert(0, {'type': 'assistant.message', 'data': {'content': EM_DASH}})
         events.insert(-1, {'type': 'assistant.message', 'agentId': 'child', 'data': {'content': EM_DASH}})
@@ -682,73 +653,32 @@ class CopilotAdapterTests(unittest.TestCase):
         path = self.write_events(events)
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         path = self.write_events(self.transcript_events(f'bad{EM_DASH}text'))
-        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0]['decision'], 'block')
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        path.write_text('{invalid transcript')
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        path.unlink()
+        self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
+        self.assertEqual(self.invoke('agentStop')[0], {})
 
-    def test_stop_reads_native_completion_summary_without_a_review(self):
+    def test_stop_does_not_review_native_completion_summary(self):
         self.prompt('Implement the requested change')
         summary = 'Completed the requested change.'
         path = self.write_events(self.completion_events(summary))
         capture = self.root / 'completion-review.txt'
         self.env['REVIEW_FIXTURE_CAPTURE'] = str(capture)
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        self.assertEqual(copilot_adapter.final_response({**self.payload, 'transcriptPath': str(path)}), summary)
         self.assertFalse(capture.exists())
-        with turn_guard.store_for(copilot_adapter.shared_input(self.payload)) as store:
-            state = store.get(turn_guard.CATEGORY, 'state')
-        self.assertNotIn('last_review', state)
-        self.assertNotIn('last_response', state)
+        self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
 
-    def test_completion_summary_still_gets_normal_response_checks(self):
+    def test_completion_summary_does_not_trigger_a_visible_rewrite(self):
         self.prompt('Implement the requested change')
         path = self.write_events(self.completion_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
-        self.assertIn('em-dash', output['reason'])
-        self.prompt(output['reason'])
+        self.assertEqual(output, {})
         events = self.completion_events('Only the observed result is reported.')
         events.insert(0, {'type': 'session.task_complete', 'data': {'summary': 'Stale summary.'}})
         self.write_events(events)
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-
-    def test_stop_rejects_missing_stale_and_non_root_completion_text(self):
-        for variant in ('missing', 'empty', 'malformed', 'child', 'legacy-child',
-                        'tool-output', 'new-request', 'new-turn'):
-            with self.subTest(variant=variant):
-                events = self.completion_events('Do not promote this result.')
-                if variant == 'missing':
-                    events[-2]['data'].pop('summary')
-                elif variant == 'empty':
-                    events[-2]['data']['summary'] = ' '
-                elif variant == 'malformed':
-                    events[-2]['data']['summary'] = {'text': 'not a string'}
-                elif variant == 'child':
-                    events[-2]['agentId'] = 'child'
-                elif variant == 'legacy-child':
-                    events[-2]['data']['parentToolCallId'] = 'child'
-                elif variant == 'tool-output':
-                    events[-2] = {'type': 'tool.execution_complete', 'data': {
-                        'toolCallId': 'finish', 'success': True, 'result': {'content': 'Not assistant text.'},
-                    }}
-                elif variant == 'new-request':
-                    events.insert(-1, {'type': 'user.message', 'data': {'content': 'Stop this work.'}})
-                else:
-                    events.insert(-1, {'type': 'assistant.turn_start', 'data': {'turnId': 'next'}})
-                path = self.write_events(events)
-                result = copilot_adapter.response_context({**self.payload, 'transcriptPath': str(path)})
-                self.assertIsNone(result['last_assistant_message'])
-                self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-                self.assertIn('punctuation check unavailable', self.progress[-1])
-
-    def test_stop_waits_for_async_transcript_flush(self):
-        path = self.write_events([])
-        def flush():
-            time.sleep(0.15)
-            self.write_events(self.transcript_events('flushed response'))
-        writer = threading.Thread(target=flush)
-        writer.start()
-        try:
-            self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
-        finally:
-            writer.join()
 
     def test_stop_accepts_corrected_response_after_a_block(self):
         old_events = self.transcript_events(EM_DASH)
@@ -761,19 +691,6 @@ class CopilotAdapterTests(unittest.TestCase):
         path = self.write_events(old_events + corrected)
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
 
-    def test_stop_does_not_accept_previous_invocation(self):
-        events = self.transcript_events('stale response')
-        events[-1]['data']['input'] = {**self.payload, 'timestamp': 123455}
-        path = self.write_events(events)
-        with mock.patch.object(copilot_adapter, 'TRANSCRIPT_WAIT_SECONDS', 0.05):
-            with self.assertRaises(TimeoutError):
-                copilot_adapter.final_response({**self.payload, 'transcriptPath': str(path)})
-
-    def test_session_end_cleans_its_own_marker(self):
-        self.prompt('why is this different')
-        self.assertTrue(self.marker.exists())
-        self.assertEqual(self.invoke('sessionEnd')[0], {})
-        self.assertFalse(self.marker.exists())
 
     def test_invalid_input_fails_visibly(self):
         result = subprocess.run(
@@ -781,27 +698,50 @@ class CopilotAdapterTests(unittest.TestCase):
             input=json.dumps({**self.payload, 'toolName': 'apply_patch', 'toolArgs': 'malformed'}),
             text=True, capture_output=True, env=self.env, timeout=10,
         )
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0)
         self.assertIn('no recognized file headers', result.stderr)
+        self.assertNotIn('permissionDecision', result.stdout)
 
     def test_shared_hook_failure_is_not_silently_ignored(self):
         failure = subprocess.CompletedProcess(['python3', 'hook.py'], 1, '', 'fixture failure\n')
         with mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=failure):
             with mock.patch('sys.stderr') as stderr:
-                with self.assertRaises(RuntimeError):
-                    hook_adapter_common.run_shared_hooks('PreToolUse', {
-                        'cwd': str(self.project), 'tool_name': 'Read', 'tool_input': {},
-                    })
+                outputs = hook_adapter_common.run_shared_hooks('PreToolUse', {
+                    'cwd': str(self.project), 'tool_name': 'Read', 'tool_input': {},
+                })
+                self.assertTrue(outputs)
+                self.assertTrue(all('checks unavailable' in item['systemMessage'] for item in outputs))
+                self.assertNotIn('permissionDecision', str(outputs))
                 stderr.write.assert_any_call('fixture failure\n')
+
+    def test_malformed_handler_output_cannot_erase_an_independent_denial(self):
+        outputs = [
+            {'hookSpecificOutput': []},
+            {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                                    'permissionDecisionReason': 'Use the package manager'}},
+        ]
+        results = [subprocess.CompletedProcess(['python3', 'hook.py'], 0, json.dumps(value), '')
+                   for value in outputs]
+        with (
+            mock.patch.object(hook_adapter_common.subprocess, 'run', side_effect=results),
+            mock.patch.object(sys, 'stdout', io.StringIO()),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = copilot_adapter.run_hook('preToolUse', {
+                **self.payload, 'toolName': 'create', 'toolArgs': {'path': 'yarn.lock', 'file_text': 'x'},
+            })
+        self.assertEqual(output, {'permissionDecision': 'deny', 'permissionDecisionReason': 'Use the package manager'})
 
     def test_shared_deadline_expires_before_native_timeout(self):
         with (
             mock.patch.object(hook_adapter_common.time, 'monotonic', side_effect=[0, 21]),
             mock.patch.object(hook_adapter_common.subprocess, 'run') as run,
-            self.assertRaisesRegex(TimeoutError, 'internal deadline'),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
         ):
-            hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
+            output = hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
         run.assert_not_called()
+        self.assertIn('internal deadline', str(output))
+        self.assertNotIn('permissionDecision', str(output))
 
     def test_shared_deadline_reduces_remaining_handler_budget(self):
         result = subprocess.CompletedProcess(['python3', 'hook.py'], 0, '', '')
@@ -810,25 +750,7 @@ class CopilotAdapterTests(unittest.TestCase):
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5])
-
-    def test_child_question_gate_and_stale_assignment_recover(self):
-        child = {'agentId': 'child'}
-        child_input = copilot_adapter.shared_input({**self.payload, **child})
-        self.addCleanup(lambda: marker_path(child_input).unlink(missing_ok=True))
-        edit = {'toolName': 'create', 'toolArgs': {'path': 'x', 'file_text': 'y'}, **child}
-        self.prompt('Implement the requested change')
-        self.invoke('subagentStart', **child)
-        self.assertEqual(self.invoke('preToolUse', **edit)[0], {})
-        self.prompt('Why did that change?')
-        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
-        self.invoke('subagentStart', **child)
-        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
-        self.assertEqual(self.invoke('preToolUse', **child, toolName='view', toolArgs={'path': 'x'})[0], {})
-        self.prompt('Implement the revised change')
-        self.assertEqual(self.invoke('preToolUse', **edit)[0]['permissionDecision'], 'deny')
-        self.invoke('subagentStart', **child)
-        self.assertEqual(self.invoke('preToolUse', **edit)[0], {})
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1])
 
 
 if __name__ == '__main__':
