@@ -1,5 +1,6 @@
 """Reject name-based and process-group signals; exact owned targets remain usable."""
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
@@ -36,6 +37,6 @@ def matches(hook_input):
             args = args[1:]
         if args[:1] == ['--']:
             args = args[1:]
-        if any(arg == '0' or (arg.startswith('-') and arg[1:].isdigit()) for arg in args):
+        if any(re.fullmatch(r'\+?0+', arg) or (arg.startswith('-') and arg[1:].isdigit()) for arg in args):
             return True
     return False

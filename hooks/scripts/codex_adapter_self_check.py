@@ -511,6 +511,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_native_shell_rules(self):
         for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        'kill -TERM 00', 'kill -TERM +0',
                         'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
                         f'echo a{EM_DASH}b', 'echo ready # status\npkill worker',
                         "echo ready; pkill worker\nprintf 'unfinished"):
@@ -520,6 +521,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('Bash', {'command': 'echo kill'}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo '>' package-lock.json"}), {})
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'kill -TERM 12345'}), [{}])
 
     def test_literal_data_recovers_without_rewriting_paths_or_content(self):
         original = f"printf 'a{EM_DASH}b' > 'literal{EM_DASH}.txt'"

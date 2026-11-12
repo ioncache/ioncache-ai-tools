@@ -545,6 +545,7 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_native_shell_rules(self):
         for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        'kill -TERM 00', 'kill -TERM +0',
                         'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
                         'echo ready # status\npkill worker', "echo ready; pkill worker\nprintf 'unfinished"):
             with self.subTest(command=command):
