@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.10.0 (2026-11-12)
+
+### New
+
+* None.
+
+### Updated
+
+* remove graphify integration ([#48](https://github.com/ioncache/ioncache-ai-tools/issues/48)) ([0984426](https://github.com/ioncache/ioncache-ai-tools/commit/09844261de403721fbfe6dd0ed2fab3c714185d5))
+
+### Fixed
+
+* None.
+
 ## 1.9.3 (2026-11-11)
 
 ### New
