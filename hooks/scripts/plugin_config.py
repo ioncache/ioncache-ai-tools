@@ -155,7 +155,7 @@ def sync_file(path, catalog, complete=True, legacy=None, *, strict=True):
     return result
 
 
-def synchronize(project, harness=None, *, strict=False, catalog=None):
+def synchronize(project, harness=None, *, strict=False, catalog=None, persist=True):
     catalog = defaults() if catalog is None else catalog
     disabled = set()
     for host, (global_path, project_path) in paths(project).items():
@@ -165,7 +165,10 @@ def synchronize(project, harness=None, *, strict=False, catalog=None):
             if host == 'codex' and not global_path.exists():
                 legacy = legacy_codex(legacy_path)
             if host == harness or global_path.exists() or legacy:
-                global_config = sync_file(global_path, catalog, legacy=legacy, strict=strict)
+                if persist:
+                    global_config = sync_file(global_path, catalog, legacy=legacy, strict=strict)
+                else:
+                    global_config = read_settings(global_path.resolve(), catalog, True, legacy)[1]
             else:
                 global_config = {'features': catalog}
             values = {
@@ -173,7 +176,11 @@ def synchronize(project, harness=None, *, strict=False, catalog=None):
                 **global_config.get('projects', {}).get(str(project), {}).get('features', {}),
             }
             if project_path.exists():
-                values.update(sync_file(project_path, catalog, complete=False, strict=strict)['features'])
+                if persist:
+                    project_config = sync_file(project_path, catalog, complete=False, strict=strict)
+                else:
+                    project_config = read_settings(project_path.resolve(), catalog, False, None)[1]
+                values.update(project_config['features'])
             disabled.update(name for name, enabled in values.items() if not enabled)
         except (OSError, ValueError, TypeError) as error:
             if strict:

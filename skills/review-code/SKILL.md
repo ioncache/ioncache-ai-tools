@@ -1,6 +1,7 @@
 ---
 name: review-code
 description: Reviews code for correctness, security, performance, and project standards using independent review passes. Use when asked to review files, a branch, a pull request, or a repository; reports findings without applying fixes.
+argument-hint: "[target] [--help] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
 ---
 
 # Read-only code review
@@ -8,8 +9,18 @@ description: Reviews code for correctness, security, performance, and project st
 Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
-The only permitted writes are assigned result files in the caller's private
-scratch directory outside that tree. They never authorize code or ledger edits.
+The caller may write private request/option records; workers may write only
+assigned result files. All belong in private scratch outside the reviewed tree.
+They never authorize code or ledger edits.
+
+## Invocation
+
+Follow [OPTIONS.md](OPTIONS.md) before target discovery. Bare invocation runs
+with defaults; `--help` displays options without a review. Explicit role model
+and effort flags override defaults within host restrictions. Automatic model
+selection is the default for unspecified roles, with configured-model recovery
+and an independent `review-auto-model-selection` opt-out.
+No mandatory form or `--non-interactive` flag is needed.
 
 ## Scope
 
@@ -45,7 +56,7 @@ Otherwise the caller owns scope, permissions, and the execution-mode decision.
 The caller may be an invoking agent or an explicitly approved scripted
 controller, following [ORCHESTRATION.md](ORCHESTRATION.md). Handle a review
 inline only when all required evidence fits a single direct read and no
-substantial independent pass is needed. Explicit independence requirements
+substantial independent pass or explicit role override is needed. Explicit independence requirements
 override this shortcut. Autonomous development requires fresh review contexts
 separate from implementation, even for small tasks.
 
@@ -64,12 +75,13 @@ worker. Both strategies retain integration and independent adjudication.
 Use ORCHESTRATION.md's capacity and independence rules; strategy is separate
 from inline, nested, or flat topology.
 
-The caller selects the coordinator/adjudicator model before launch.
-The coordinator selects worker models under the shared runtime-selection
-policy. Check permission to override before selection research; reuse applicable
-evidence within the review. Preserve configured defaults when discovery,
-suitability evidence, or permission to override is unavailable. Never ship or
-invent a model ranking.
+The caller selects the lead and any caller validator before launch.
+The coordinator selects workers using the same normalized options and
+runtime-selection policy. Invocation permits bounded automatic selection where
+the host allows it, not a bypass of host restrictions. Honor explicit choices
+without second-guessing their suitability. For unspecified roles, attempt
+evidence-backed selection, otherwise preserve configured defaults and explain
+the limitation. Never ship or invent a model ranking.
 
 Reuse the caller's snapshot. For a standalone Git review, resolve
 `../../scripts/review_ledger.py` relative to this installed skill and run:

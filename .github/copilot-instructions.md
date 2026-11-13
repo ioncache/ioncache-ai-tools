@@ -106,6 +106,7 @@ python3 hooks/scripts/docs_cache_self_check.py < /dev/null
 python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
+python3 scripts/review_options_self_check.py
 python3 scripts/release_self_check.py
 npm run release:check
 ```
@@ -142,7 +143,7 @@ for f in scripts/*.js; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
          .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
-         hooks/copilot-hooks.json config/defaults.json; do
+         hooks/copilot-hooks.json config/defaults.json scripts/fixtures/review_quality.json; do
   python3 -m json.tool "$f" > /dev/null || exit 1
 done
 ```

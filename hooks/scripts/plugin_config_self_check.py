@@ -333,6 +333,41 @@ class ConfigurationTests(unittest.TestCase):
             **self.data, 'tool_name': 'skill', 'tool_input': {'skill': 'another-plugin:review-code'},
         }))
 
+    def test_review_model_opt_out_preserves_skill_and_other_guards(self):
+        path = config.paths(self.project)['claude'][0]
+        self.write(path, {'features': {'review-auto-model-selection': False}})
+        for event in ('SessionStart', 'SubagentStart', 'UserPromptSubmit'):
+            output = guidance.run_hook(event, {**self.data, 'prompt': 'Review this branch'})
+            self.assertIn('Automatic review model selection is disabled', str(output))
+            self.assertIn('explicit user model choices', str(output))
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
+            **self.data, 'tool_name': 'Skill', 'tool_input': {'skill': 'review-code'},
+        }))
+        self.assertIn('deny', str(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
+        })))
+        self.assertEqual(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'git status --short'},
+        }), [])
+        self.write(path, {'features': {'review-auto-model-selection': True}})
+        self.assertNotIn('Automatic review model selection is disabled', str(
+            guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review this branch'})
+        ))
+
+    def test_read_only_resolution_preserves_legacy_files_and_matches_sync(self):
+        paths = config.paths(self.project)
+        legacy = paths['codex'][0].with_name('config.toml')
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text('[ioncache-ai-tools]\ndisabled_rules = ["review-auto-model-selection"]\n')
+        self.write(paths['claude'][0], {'features': {'fix_emdash': False}})
+        self.write(paths['claude'][1], {'features': {'fix_emdash': True}})
+        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        with mock.patch.object(config, 'write_atomic', side_effect=AssertionError('unexpected write')):
+            disabled = config.synchronize(str(self.project), 'copilot', strict=True, persist=False)
+        self.assertEqual(disabled, {'review-auto-model-selection'})
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
+        self.assertEqual(config.synchronize(str(self.project), 'copilot', strict=True), disabled)
+
     def test_retired_question_entrypoint_cannot_reactivate_stale_markers(self):
         legacy = self.root / 'legacy-registration'
         self.write(legacy / 'hooks/hooks.json', {'hooks': {'PreToolUse': [{

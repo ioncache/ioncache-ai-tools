@@ -2,6 +2,11 @@
 
 ## Scope and starting
 
+Normalize invocation with [../review-code/OPTIONS.md](../review-code/OPTIONS.md).
+Help performs no review or ledger initialization. Preserve the normalized
+request and explicit-choice provenance; this is not permission to change the
+fixing model or host settings.
+
 Interpret the target as `repository`, `branch`, a PR reference, or specific
 files/directories. With no target, use the active PR if present; otherwise
 use the branch change against the local default branch. Resolve its
@@ -20,6 +25,9 @@ If the PR is not represented by the current worktree, report the mismatch.
 Initialize the helper with the resolved `--objective`, `--scope` description,
 `--base` commit, and limits. Defaults are three outer loops and three inner
 cycles per outer loop. Store effective choices in the ledger before reviewing.
+Include `review_options` as JSON in the first `start_review` reason, using the
+existing string field. Retain it in pass evidence too, so replay and resume do
+not depend on private prompt files. Do not add option fields to ledger events.
 The helper allows only one running or resumable run per worktree. Independent
 runs need isolated worktrees or a terminal prior run.
 
@@ -38,6 +46,8 @@ remains the sole ledger writer and owns limits and fixes.
 Pass the chosen strategy separately from topology, following the shared
 capacity and risk rules for `sweep-first` or `specialists`. Count the sweep
 and its follow-ups inside the same review.
+Forward `review_options` unchanged to full reviews, focused review-fixes, and
+caller validators. Apply each role's fallback without resetting loop allowances.
 Do not use it to skip standards, independent validation, or whole-file reads.
 Assign reports in private scratch outside the reviewed tree and forward their
 paths for direct adjudicator reads. These reports are separate from the loop's
@@ -73,8 +83,11 @@ can validate an issue. Model agreement alone cannot. Distinguish truth from
 scope, actionability, and risk acceptance. Apply
 [../review-code/CRITERIA.md#actionability](../review-code/CRITERIA.md#actionability), not a
 blanket rule that valid observations on new code require edits. Inaccurate
-documentation and missing test coverage are actionable under that policy;
-accurate documentation in a nonpreferred style is not. Preserve `report_action`,
+documentation needs a concrete mistaken action, consequential misunderstanding,
+or maintenance risk. Missing coverage needs a meaningful regression it would
+detect; a reachable production failure is a defect, not merely a test gap.
+Harmless wording and accurate documentation in a nonpreferred style are not
+fix targets. Preserve `report_action`,
 reachability, confidence, priority, and the rationale in decision evidence.
 New evidence can reopen an ignored or resolved entry; repeat wording alone
 should not re-report it as new.
@@ -142,6 +155,13 @@ report source; it does not mutate the run.
 A running run can continue its recorded phase after interruption. If it was
 explicitly stopped as interrupted/blocked, send `resume` with a reason after
 checking the actual files. Retain counts, original scope, and finding history.
+Recover saved review options and pass them, with any resolved conversational
+choices, to the options helper's context input under OPTIONS.md. Use its merged
+output, including recomputed fallback and effective selection. Recheck host
+authority before launch.
+Put the merged request in the `resume` reason, or the next phase event's
+reason/evidence when continuing a running run. Never replace saved role choices
+with the parser's omitted-option defaults.
 Inspect partially applied edits before doing more work in an interrupted fix.
 
 Read-only-phase drift requires `reconcile` with evidence. This invalidates

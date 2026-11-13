@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import review_ledger
+import review_options
 
 
 HELPER = Path(__file__).with_name("review_ledger.py")
@@ -26,6 +27,10 @@ def coordinated_pass(snapshot, mode, strategy="specialists"):
             "evidence": json.dumps({
                 "assignment": "correctness", "snapshot": snapshot, "mode": mode,
                 "strategy": strategy, "result_file": "/private/review-fixture/correctness.json",
+                "review_options": review_options.parse_options("review-validate-fix-loop", [
+                    "--model-selection", "configured", "--lead-model", "fixture-lead",
+                    "--fallback", "configured", "--strategy", strategy,
+                ]),
                 "selection": {"requested": "configured default", "selected": "configured default",
                               "actual": "unknown", "reason": "Discovery unavailable in fixture",
                               "availability_source": "unavailable",

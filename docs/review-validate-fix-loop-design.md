@@ -47,10 +47,11 @@ arguments, and intermediate and final reports. Upgrade `review-code`
 while preserving its standalone read-only use.
 
 A small ledger helper is recommended to validate and persist the record
-reliably. There are no per-phase effort or model invocation flags.
-Review-role selection follows the shared orchestration policy, including
-configured defaults when discovery, suitability evidence, or override
-permission is unavailable. Respect existing harness and agent settings.
+reliably. Fixing-phase effort and model invocation flags remain out of scope.
+Review-only role options were added after this initial design; see
+[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md). They do not
+control the fixing model. Selection follows current shared orchestration,
+including host restrictions and configured fallback for unspecified roles.
 Loop counts must not be presented as token or spending limits.
 
 The workflow, ledger, and termination contracts below define this phase.
@@ -374,9 +375,10 @@ starts. These are parameters for that run, not defaults for future runs.
 Resumption preserves them and the consumed allowances. Do not silently
 raise a limit or reset counters to make a run finish.
 
-There are no separate model or effort invocation flags. Existing harness
-settings and explicit conversational review-role selections follow
-[skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md),
+The current interface also accepts review-role model, effort, selection,
+fallback, and strategy flags from
+[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md).
+They follow [../skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md),
 subject to higher-priority policy. Fixing-phase overrides remain deferred.
 Different phases remain distinct even without separate settings. Existing
 settings never authorize broader edits or skipped standards.

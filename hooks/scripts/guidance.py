@@ -61,6 +61,11 @@ def evaluate(event, data):
     if skills:
         messages.append('Disabled plugin skills: ' + ', '.join(skills) +
                         '. Continue without these skills; do not invoke or apply them.')
+    if 'review-auto-model-selection' in disabled:
+        messages.append(
+            'Automatic review model selection is disabled. Use configured models for '
+            'unspecified review roles; explicit user model choices still follow host restrictions.'
+        )
     policy = output.get('hookSpecificOutput', {}).get('additionalContext')
     if policy:
         messages.append(policy)

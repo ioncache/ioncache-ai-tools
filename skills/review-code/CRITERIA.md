@@ -58,14 +58,38 @@ constraints to reviewers explicitly; do not assume they inherit this guidance.
     lists that hide failures from a caller or observer.
   - Races against cached or asynchronous state, including stale reads.
   - Cleanup and teardown that stop at the first failure or leave partial state.
+  - Changed batching, enumeration, cleanup, and retries: check relevant third-party
+    defaults, pagination, maximum sizes, rate limits, and completion semantics
+    against realistic volume. A successful response can still be partial.
+    Consult authoritative docs or implementation where correctness depends on
+    these details, including unchanged calls whose inputs the change enlarges.
   - Mode, flag, and configuration interactions, including boundary values.
   - Module-boundary contracts, especially moved code and newly shared consumers.
+  - Runtime handoffs: webhook/event ordering, background work, polling, and
+    readiness. Trace producer and consumer together. A readiness signal must
+    establish the prerequisites its consumer needs, not merely occur last
+    among the events a reviewer happened to inspect.
   - Security boundaries and performance under realistic load or hostile input.
   Support findings with reachable scenarios and evidence.
 - Do usage documentation, examples, and stated business rules match the contract?
   Readable implementation is not a substitute for caller-facing documentation.
 - Are project-specific standards and exceptions respected? Do not retroactively
   impose unrelated conventions on untouched code in a change review.
+
+### Evidence and rejected premises
+
+Comments, READMEs, plans, PR descriptions, and test stubs describing another
+component or a third party are claims, not proof of its behavior. Corroborate
+consequential premises against that component's source, authoritative docs,
+or a permitted discriminating check. Owner-approved requirements can establish
+intended behavior; do not dismiss them merely because they are documentation.
+Separate intended requirements from claims about what an implementation does.
+
+Apply the same evidence standard when rejecting a candidate. "Known",
+"acknowledged", or a changed comment alone does not establish the claimed
+cause, safety, or acceptance of risk. Preserve legitimate settled decisions;
+reopen them only when relevant new evidence contradicts their premise.
+Missing documentation establishes uncertainty, not that the claim is false.
 
 ## Actionability
 
@@ -82,10 +106,13 @@ missing test coverage under the criteria below. Explain the affected behavior,
 contract, or concrete maintenance consequence. A stylistic preference or
 metric violation alone is not a substantive issue.
 
-Incorrect behavior descriptions, parameter or return types, examples, and
-operational instructions should be fixed. No runtime failure is required.
-Resolve mismatches against the intended contract; do not assume the code is
-right and rewrite documentation to match a bug.
+Report inaccurate descriptions, types, examples, or operational instructions
+when they cause a concrete mistaken action, consequential misunderstanding,
+or maintenance risk. Name that consequence. No runtime incident is required,
+but inaccuracy alone is insufficient. Stale rationale that changes nothing
+a reader should do belongs in `None`, not a wording-cleanup backlog.
+Resolve mismatches against the intended contract; do not assume the code
+is right and rewrite documentation to match a bug.
 
 Accurate documentation that differs only in style or shape is not an actionable
 finding. For example, an accurate inline JSDoc object type instead of a named
@@ -114,12 +141,20 @@ branches and failure paths. Do not decide a test is unnecessary merely because
 the implementation looks simple or the path seems less important.
 
 Identify the uncovered behavior and what an assertion must detect if it
-regresses. Use that explanation to design the test, not to justify skipping it.
+regresses, including the consequence. Use that explanation to design the test,
+not to justify skipping meaningful coverage. If a proposed test describes
+production misbehavior, first investigate whether the trigger is reachable
+and report the underlying defect when supported, with the test as regression
+protection. Do not downgrade a production bug into a test-gap finding.
 Coverage measures execution, not whether assertions detect wrong behavior.
 Exceptions need concrete evidence tied to the supported contract or the
 extreme-edge-case rule; record their rationale. Missing coverage measurements
 are unknown, not proof of a gap or proof of 100% coverage. Respect the caller's
 check permissions and distinguish source inspection from executed coverage.
+Neither small code nor an immediately visible error is a blanket exemption:
+check whether side effects or damage can precede that error. Conversely, a
+second assertion of already-protected behavior needs a distinct regression
+it would catch, not just another route through the implementation.
 
 ### Judgment and next action
 
@@ -142,9 +177,11 @@ Select one `report_action`:
 - `None`: no warranted action, including refuted claims, style-only deviations,
   and evidence-backed low-value observations.
 
-Merge duplicate observations into their canonical issue and preserve its
-assessment. A duplicate needs no separate report row; it does not make the
-underlying issue non-actionable.
+Match issues by trigger, incorrect behavior, and consequence, not just a shared
+file, symbol, or label. Merge genuine duplicates into their canonical issue and
+preserve the assessment and provenance. Opposing interpretations or fixes need
+contract evidence, not voting or whichever sibling implementation is more common.
+A duplicate needs no separate report row; it does not make the issue non-actionable.
 
 Do not turn uncertainty into a confirmed defect, automatic fix, or silent
 acceptance. A failed required check remains a coverage limitation; hiding its
