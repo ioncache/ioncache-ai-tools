@@ -85,6 +85,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   JavaScript; general categories adapt to the actual stack. Unknown language
   facts leave coverage unresolved, not a permission fence. Retain old evidence
   and consumed work when a corrected contract requires a new phase.
+- `scripts/development_manifest.py` validates approved inputs, and
+  `scripts/development_run.py` owns private development-run bookkeeping outside
+  the repository. It does not launch models or publish. The Claude script in
+  `workflows/` dispatches fresh workers and flat review roles; keep offline
+  lifecycle checks distinct from live-host qualification.
 - The `create-worktree` skill invokes `scripts/create-worktree.py`, which requires
   Node.js 22.12.0+ and checks its version before launching the sibling
   `create-worktree.js` helper.
@@ -114,6 +119,8 @@ node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 python3 scripts/review_options_self_check.py
 python3 scripts/review_assignments_self_check.py
+python3 scripts/development_run_self_check.py
+node scripts/development_workflow_self_check.js
 python3 scripts/release_self_check.py
 npm run release:check
 ```

@@ -19,6 +19,15 @@ on stdin. Supply the revision from the latest successful response. A stale
 revision is rejected; inspect history before retrying rather than duplicating
 an event whose response was lost.
 
+Initialization publishes the run directory only after its baseline is complete.
+An interruption before publication may leave `.review-loop/.initializing-*`
+artifacts. They contain no published run and do not prevent retrying `init`.
+The helper preserves these abandoned artifacts; no manual cleanup is required
+to continue. If publication succeeded but the response was lost, `init` reports
+the existing run instead. Inspect that run with `status` and continue it rather
+than replacing its history or limits. Missing or corrupt published ledgers
+remain errors, not permission to start over.
+
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" apply \
   ".review-loop/<run-id>/REVIEW_LEDGER.json" --revision 0 <<'JSON'

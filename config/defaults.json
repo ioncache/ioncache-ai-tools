@@ -1,6 +1,7 @@
 {
   "features": {
     "answer-questions": true,
+    "autonomous-development": true,
     "block_raw_worktree_add": true,
     "docs-cache": true,
     "documentation-first": true,
@@ -24,6 +25,7 @@
     "review-unit-tests": true,
     "scope-exactly-what-asked": true,
     "skill:answer-questions": true,
+    "skill:autonomous-development": true,
     "skill:code-complexity": true,
     "skill:comments": true,
     "skill:create-worktree": true,

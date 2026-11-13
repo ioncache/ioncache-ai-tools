@@ -70,6 +70,15 @@ def safe_path(root, relative):
     return path
 
 
+def sync_directory(path):
+    """Make directory-entry changes durable before reporting publication."""
+    directory = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def atomic_write(path, data):
     """Replace one file only after its complete bytes are durably written."""
     require(not path.is_symlink(), f"Symlink not allowed: {path}")
@@ -81,11 +90,7 @@ def atomic_write(path, data):
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -208,6 +213,8 @@ def assert_available(base):
         require(not folder.is_symlink(), "Symlink in run storage")
         if not folder.is_dir():
             continue
+        if re.fullmatch(r"\.initializing-[a-f0-9]{32}", folder.name):
+            continue
         ledger, state = load(folder / "REVIEW_LEDGER.json")
         require(state["outcome"] not in ("running", "interrupted", "blocked"),
                 f"Existing active run: {ledger['run_id']}; resume or stop it first")
@@ -221,14 +228,19 @@ def init(args, root):
     for value in (args.objective, args.scope):
         text(value)
     git(root, ["rev-parse", "--verify", "--end-of-options", args.base + "^{commit}"])
-    folder = base / uuid4().hex
+    run_id = uuid4().hex
+    folder = base / f".initializing-{run_id}"
     folder.mkdir(mode=0o700)
     try:
-        return create_ledger(args, root, folder)
-    except (OSError, LedgerError):
-        if not (folder / "REVIEW_LEDGER.json").exists():
+        result = create_ledger(args, root, folder)
+        published = base / run_id
+        os.rename(folder, published)
+        sync_directory(base)
+        result["ledger"] = str(published / "REVIEW_LEDGER.json")
+        return result
+    finally:
+        if folder.exists():
             shutil.rmtree(folder)
-        raise
 
 
 def create_ledger(args, root, folder):
@@ -236,7 +248,7 @@ def create_ledger(args, root, folder):
     initial = snapshot(root, folder)
     require(initial == snapshot(root), "Worktree changed during initial snapshot")
     key = digest(encode(initial))
-    ledger = {"schema": 1, "run_id": folder.name, "root": str(root),
+    ledger = {"schema": 1, "run_id": folder.name.removeprefix(".initializing-"), "root": str(root),
               "objective": args.objective, "scope": args.scope,
               "base": git(root, ["rev-parse", "--verify", "--end-of-options",
                                  args.base + "^{commit}"]).decode().strip(),

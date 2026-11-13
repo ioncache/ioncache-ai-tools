@@ -42,15 +42,48 @@ const DEFAULT_SETUP = {
   commands: []
 }
 
+/**
+ * Reads unquoted worktree paths, including paths containing line breaks.
+ * @param {string} cwd - Directory within the repository
+ * @returns {string[]} Registered paths, with the main worktree first
+ * @throws {Error} If Git cannot list the worktrees
+ * @example
+ * const roots = listWorktrees('/repo')
+ */
 function listWorktrees(cwd) {
-  const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+  const out = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
     cwd,
     encoding: 'utf8'
   })
   return out
-    .split('\n')
+    .split('\0')
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.slice('worktree '.length))
+}
+
+/**
+ * Finds the destination operand without inferring ownership from other worktrees.
+ * Git still validates the complete invocation before any setup is applied.
+ * @param {string[]} args - Arguments following git worktree add
+ * @returns {string} Requested destination, relative to the invocation directory
+ * @throws {Error} If the destination operand is missing
+ * @example
+ * const destination = worktreeDestination(['-b', 'feature', '../feature'])
+ */
+function worktreeDestination(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]
+    if (argument === '--') {
+      if (args[index + 1]) return args[index + 1]
+      break
+    }
+    if (!argument.startsWith('-') || argument === '-') return argument
+    if (/^-[qfdt]*[bB]$/.test(argument) ||
+        (argument.startsWith('--') && '--reason'.startsWith(argument))) {
+      index += 1
+    }
+  }
+  throw new Error('Missing worktree destination; pass a path after the add options and retry')
 }
 
 function escapeRegExp(text) {
@@ -270,7 +303,7 @@ function report(applied, worktreePath) {
 function selfTestRestoredWorktree(tmp) {
   const assert = require('assert')
   const main = path.join(tmp, 'recovery-main')
-  const linked = path.join(tmp, 'recovery-linked')
+  const linked = path.join(tmp, 'recovery linked\nwith "quotes"')
   const stale = path.join(tmp, 'recovery-a-stale')
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
   execFileSync('git', ['init', '--quiet', main], { env })
@@ -288,6 +321,75 @@ function selfTestRestoredWorktree(tmp) {
   fs.rmSync(linked, { recursive: true })
   execFileSync(process.execPath, [__filename, '--force', '--detach', linked], { cwd: main, env, stdio: 'pipe' })
   assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'configured\n')
+}
+
+/**
+ * Interleaves another worktree creation before this invocation starts setup.
+ * @param {string} tmp - Isolated fixture directory
+ * @returns {void}
+ * @throws {Error} If Git fails or setup reaches the wrong worktree
+ * @example
+ * selfTestConcurrentWorktree(fixtureDirectory)
+ */
+function selfTestConcurrentWorktree(tmp) {
+  const assert = require('assert')
+  const main = path.join(tmp, 'concurrent-main')
+  const linked = path.join(tmp, 'concurrent-z-owned')
+  const other = path.join(tmp, 'concurrent-a-other')
+  const env = {
+    ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    FIXTURE_MAIN: main, FIXTURE_OTHER: other
+  }
+  execFileSync('git', ['init', '--quiet', main], { env })
+  execFileSync('git', [
+    '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '--quiet', '--allow-empty', '-m', 'Fixture'
+  ], { cwd: main, env })
+  fs.writeFileSync(path.join(main, SETUP_FILE), JSON.stringify({
+    afterCopy: [{ path: 'ready.txt', content: 'owned setup\n' }]
+  }))
+  fs.writeFileSync(path.join(main, '.git/hooks/post-checkout'), [
+    '#!/bin/sh',
+    'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE',
+    'exec git -C "$FIXTURE_MAIN" -c core.hooksPath=/dev/null worktree add --detach "$FIXTURE_OTHER"',
+    ''
+  ].join('\n'), { mode: 0o700 })
+  execFileSync(process.execPath, [
+    __filename, '--lock', '--reason', 'fixture lock', '-bconcurrent-linked',
+    path.relative(main, linked), 'HEAD'
+  ], { cwd: main, env, stdio: 'pipe' })
+  assert(fs.existsSync(path.join(other, '.git')), 'the competing worktree must actually exist')
+  assert(!fs.existsSync(path.join(other, 'ready.txt')), 'another caller must not receive setup')
+  assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'owned setup\n')
+  fs.unlinkSync(path.join(main, '.git/hooks/post-checkout'))
+  selfTestWorktreeArguments(main, env)
+}
+
+/**
+ * Exercises option operands, attached short options, and literal path arguments.
+ * @param {string} main - Isolated fixture repository
+ * @param {import('node:process').ProcessEnv} env - Isolated Git environment
+ * @returns {void}
+ * @throws {Error} If Git fails or the requested destination is not configured
+ * @example
+ * selfTestWorktreeArguments(fixtureRepository, fixtureEnvironment)
+ */
+function selfTestWorktreeArguments(main, env) {
+  const assert = require('assert')
+  const cases = [
+    { options: ['-b', 'separated'], destination: '../separated path' },
+    { options: ['-Battached'], destination: '../attached path' },
+    { options: ['-qfb', 'clustered'], destination: '../clustered path' },
+    { options: ['--lock', '--reason=fixture reason', '--detach'], destination: '../equals path' },
+    { options: ['--lock', '--rea', 'fixture reason', '--det'], destination: '../abbreviated path' },
+    { options: ['--detach', '--'], destination: '-literal-path' }
+  ]
+  for (const { options, destination } of cases) {
+    execFileSync(process.execPath, [__filename, ...options, destination, 'HEAD'],
+      { cwd: main, env, stdio: 'pipe' })
+    assert.strictEqual(fs.readFileSync(path.resolve(main, destination, 'ready.txt'), 'utf8'),
+      'owned setup\n')
+  }
 }
 
 function selfTest() {
@@ -364,12 +466,20 @@ function selfTest() {
     applySetup(root, worktree)
     assert.strictEqual(fs.readFileSync(path.join(worktree, 'cache/nested/x'), 'utf8'), 'copied')
     selfTestRestoredWorktree(tmp)
+    selfTestConcurrentWorktree(tmp)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
   console.log('create-worktree self-test passed')
 }
 
+/**
+ * Runs Git creation and setup for the explicitly requested worktree.
+ * @returns {void}
+ * @throws {Error} If the destination or its repository cannot be verified, or setup fails
+ * @example
+ * // CLI: node scripts/create-worktree.js -b feature ../feature
+ */
 function main() {
   if (process.argv[2] === '--self-test') {
     selfTest()
@@ -383,16 +493,16 @@ function main() {
   }
 
   const cwd = process.cwd()
-  const before = new Set(listWorktrees(cwd).filter((worktreePath) => fs.existsSync(worktreePath)))
+  const destination = worktreeDestination(args)
+  const mainWorktree = listWorktrees(cwd)[0]
 
   const result = spawnSync('git', ['worktree', 'add', ...args], { cwd, stdio: 'inherit' })
   if (result.status !== 0) process.exit(result.status ?? 1)
 
-  const after = listWorktrees(cwd)
-  const newWorktree = after.find((worktreePath) => !before.has(worktreePath) && fs.existsSync(worktreePath))
-  if (!newWorktree) return
-
-  const mainWorktree = listWorktrees(newWorktree)[0]
+  const newWorktree = fs.realpathSync(path.resolve(cwd, destination))
+  if (!listWorktrees(cwd).includes(newWorktree)) {
+    throw new Error(`Requested worktree is not registered after creation: ${newWorktree}`)
+  }
   applySetup(mainWorktree, newWorktree)
 }
 
