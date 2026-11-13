@@ -2,7 +2,7 @@
 """Exercise the ledger CLI against isolated Git repositories, without host agents."""
 
 import json
-from itertools import product
+from itertools import count, product
 import os
 from pathlib import Path
 import re
@@ -20,13 +20,18 @@ HELPER = Path(__file__).with_name("review_ledger.py")
 PASSES = [{"name": "correctness", "worker": "independent-reviewer",
            "result": "complete", "evidence": "Traced fixture callers and requirements"}]
 CHECKS = [{"name": "fixture check", "result": "passed", "evidence": "Fixture assertion passed"}]
+WORKER_IDS = count()
 
 
-def coordinated_pass(snapshot, mode, strategy="specialists"):
-    return {**PASSES[0], "worker": f"{mode}-specialist",
+def coordinated_pass(snapshot, mode, strategy="specialists", *, review_type="correctness"):
+    return {**PASSES[0], "name": review_type,
+            "worker": f"{mode}-{review_type}-specialist-{next(WORKER_IDS)}",
             "evidence": json.dumps({
-                "assignment": "correctness", "snapshot": snapshot, "mode": mode,
-                "strategy": strategy, "result_file": "/private/review-fixture/correctness.json",
+                "assignment": review_type, "review_type": review_type,
+                "instruction_set": {"sources": [f"fixture/{review_type}.md"],
+                                    "identity": f"fixture-{review_type}-instructions"},
+                "snapshot": snapshot, "mode": mode, "strategy": strategy,
+                "result_file": f"/private/review-fixture/{review_type}.json",
                 "review_options": review_options.parse_options("review-validate-fix-loop", [
                     "--model-selection", "configured", "--lead-model", "fixture-lead",
                     "--fallback", "configured", "--strategy", strategy,
@@ -183,7 +188,10 @@ class ReviewLedgerTests(unittest.TestCase):
         for mode, strategy in product(("nested", "flat"), ("specialists", "sweep-first")):
             self.init()
             self.send("start_review")
-            full_pass = coordinated_pass(self.state["snapshot"], mode, strategy)
+            full_passes = [
+                coordinated_pass(self.state["snapshot"], mode, strategy, review_type=purpose)
+                for purpose in ("correctness", "documentation", "integration")
+            ]
             for origin, basis in (("specialist", "observed"), ("coordinator", "inferred")):
                 self.send("finding", key=f"{origin}-boundary", summary="Fixture boundary mismatch",
                           locations=["app.txt:1"], severity="High",
@@ -196,11 +204,11 @@ class ReviewLedgerTests(unittest.TestCase):
                       evidence=["origin=docs; basis=inferred; kind=style; main_min_severity=Medium"])
             self.reject("decision", id="F002", validation="invalid", disposition="ignored",
                         severity="High", evidence=["Caller validation waits for completed passes"])
-            self.send("review_done", passes=[full_pass], checks=CHECKS)
+            self.send("review_done", passes=full_passes, checks=CHECKS)
             self.send("decision", id="F001", validation="valid", disposition="open", severity="High",
                       evidence=["validator=review-adjudicator; traced specialist evidence"])
             self.send("decision", id="F002", validation="invalid", disposition="ignored",
-                      severity="High", evidence=["validator=outer-loop; checked integration claim"])
+                      severity="High", evidence=["validator=independent-caller-validator; checked adjudicator claim"])
             self.send("decision", id="F003", validation="valid", disposition="ignored",
                       severity="Low", reason="Accurate documentation differs only in presentation",
                       evidence=[json.dumps(style_assessment)])
@@ -208,8 +216,11 @@ class ReviewLedgerTests(unittest.TestCase):
             (self.root / "app.txt").write_text(f"corrected {mode} {strategy}\n")
             self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Correction"}},
                       checks=CHECKS)
-            focused_pass = coordinated_pass(self.state["snapshot"], mode, strategy)
-            self.send("fixes_reviewed", passes=[focused_pass])
+            focused_passes = [
+                coordinated_pass(self.state["snapshot"], mode, strategy, review_type=purpose)
+                for purpose in ("correctness", "documentation", "integration")
+            ]
+            self.send("fixes_reviewed", passes=focused_passes)
             self.decide(disposition="fixed")
             self.send("advance")
             self.review()
@@ -218,8 +229,8 @@ class ReviewLedgerTests(unittest.TestCase):
             self.assertEqual(report["outcome"], "completed_with_exceptions")
             self.assertEqual(len(report["loops"]), 2)
             self.assertEqual(len(report["loops"][0]["cycles"]), 1)
-            self.assertEqual(report["loops"][0]["review"]["passes"], [full_pass])
-            self.assertEqual(report["loops"][0]["cycles"][0]["review"]["passes"], [focused_pass])
+            self.assertEqual(report["loops"][0]["review"]["passes"], full_passes)
+            self.assertEqual(report["loops"][0]["cycles"][0]["review"]["passes"], focused_passes)
             self.assertEqual(len(report["findings"]["F001"]["observations"]), 2)
             self.assertIn("basis=observed", report["findings"]["F001"]["observations"][0]["evidence"][0])
             self.assertIn("origin=other-specialist", report["findings"]["F001"]["observations"][1]["evidence"][0])
@@ -233,7 +244,7 @@ class ReviewLedgerTests(unittest.TestCase):
             self.assertEqual(report["findings"]["F003"]["decisions"][0]["reason"],
                              "Accurate documentation differs only in presentation")
             self.assertEqual(report["findings"]["F002"]["validation"], "invalid")
-            self.assertIn("validator=outer-loop",
+            self.assertIn("validator=independent-caller-validator",
                           report["findings"]["F002"]["decisions"][0]["evidence"][0])
             self.assertEqual(json.loads(Path(self.ledger).read_text())["schema"], 1)
 

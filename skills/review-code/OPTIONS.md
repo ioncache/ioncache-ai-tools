@@ -12,12 +12,12 @@ Use `/ioncache-ai-tools:review-code` in Claude Code or Copilot CLI, and
 | --- | --- |
 | `[target ...]` | Active PR, otherwise branch and local changes under SKILL.md's baseline rules. Explicit scope takes precedence. |
 | `--model-selection auto\|configured` | `auto`: attempt suitable role selection when the host permits it. `configured` leaves unspecified roles on host defaults. Neither setting replaces explicit role choices. |
-| `--lead-model MODEL` | Coordinator or flat adjudicator. Omitted: selection policy. |
-| `--reviewer-model MODEL` | Default for all specialist passes, including the correctness sweep. Omitted: selection policy. |
+| `--lead-model MODEL` | Coordinator and separately launched adjudicator. Omitted: selection policy. |
+| `--reviewer-model MODEL` | Default for correctness, each standards pass, and the separate integration specialist. Omitted: selection policy. |
 | `--validator-model MODEL` | Independent caller validation. Omitted: selection policy. |
 | `--lead-effort LEVEL`, `--reviewer-effort LEVEL`, `--validator-effort LEVEL` | Omitted: host/model default. Explicit values must be supported by the native host and selected model. |
 | `--fallback configured\|fail` | Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. |
-| `--strategy auto\|sweep-first\|specialists` | `auto`: choose under ORCHESTRATION.md's capacity and risk rules. |
+| `--strategy auto\|sweep-first\|specialists` | `auto`: deterministically use `specialists`. `sweep-first` runs correctness first without changing the remaining required single-purpose assignments. |
 | `--help` | Show help only. |
 
 Model and effort values are opaque native identifiers, not a plugin-maintained
@@ -65,6 +65,9 @@ invocation, preserve the JSON output as `review_options` in the request. Forward
 its `roles`, requested and effective selection policy, fallback, strategy, and
 `specified` and `option_sources` fields intact. Do not turn a configured default
 into an explicit user model selection.
+Use `effective_strategy` for scheduling while retaining `strategy` as requested.
+The helper resolves `auto` to `specialists`; the orchestrator does not decide
+whether a review is small enough to run inline or combine purposes.
 
 If there are conversational role choices or saved options, the caller first
 writes a private context JSON file outside the reviewed tree. Resolve conflicts
@@ -118,8 +121,8 @@ before native launches. Automatic selection is best effort, not a reason to ask
 for a setup decision or block when configured defaults can satisfy the role.
 
 An explicit role model or effort requires execution of that role rather than
-silently treating it as an unused hint. Use the smallest supported fresh-context
-assignment plan that honors the requested roles and independence. A requested
+silently treating it as an unused hint. Execute the complete single-purpose
+assignment roster regardless of change size or strategy. A requested
 validator may check the final handback even when there are no candidates.
 Do not change the parent model to emulate an inline override. If the host
 cannot honor an explicit choice, follow its role's fallback and report the
@@ -146,3 +149,6 @@ that prior choices could not be recovered; do not invent them.
 Re-read plugin settings and host authority and discard stale availability
 observations. Saved choices are request evidence, not permission to override
 current host restrictions. This changes neither scope nor consumed allowances.
+The helper recomputes `effective_strategy` on resume, including for older saved
+requests. Do not resume a bundled worker or an inline-review plan: rebuild
+those assignments with fresh single-purpose contexts under the same run limits.

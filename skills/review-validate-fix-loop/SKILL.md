@@ -37,16 +37,19 @@ Git worktree. Read its `--help` if invocation details are unclear.
 2. Record `start_review` before any full-review launch, then invoke
    `review-code` with the pinned request and ledger snapshot. In nested mode
    the review coordinator owns specialist launches. In flat mode the loop
-   launches and collects workers, then delegates adjudication. The loop owns
+   launches and collects workers, then delegates adjudication. Both modes use
+   a fresh worker per review purpose, including separate integration and
+   adjudication assignments; neither owner performs review work inline. The loop owns
    the request, all ledger writes, and limits in both modes.
-   Pass through normalized review options, the resolved `specialists` or
-   `sweep-first` strategy, and main table severity floor. Preserve option
+   Pass through normalized review options, their `effective_strategy` (`specialists` or
+   `sweep-first`), and main table severity floor. Preserve option
    provenance in existing ledger reason/evidence fields. Allocate private result files outside the reviewed
    tree; workers write reports, never the loop ledger. A sweep is part of the
    counted review, not a free preliminary round.
-3. Check the evidence handback, adopting independent coordinator validation
-   of specialist findings rather than repeating every investigation. Validate
-   coordinator-originated findings under the shared caller-validation role;
+3. Check assignment, worker, and instruction-set identities in the evidence
+   handback. Adopt the separate adjudicator's assessments rather than repeating
+   every investigation. Schedule fresh validation of adjudicator-originated
+   findings under the shared caller-validation role;
    a scripted owner schedules independent reasoning rather than judging evidence
    mechanically. Record each candidate, duplicate observation, decision, reason,
    and evidence through the protocol.

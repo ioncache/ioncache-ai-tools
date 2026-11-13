@@ -13,6 +13,13 @@ precondition. Defaults now attempt bounded automatic selection where the host
 permits it; explicit role choices and fallback are supported. Native acceptance
 and comparative quality still require evidence, not just changed instructions.
 
+The current orchestration contract also supersedes this proposal's inline
+and small-check exceptions, multi-purpose workers, and coordinator-owned
+integration/adjudication. Every review task now requires a fresh single-purpose
+worker and its own instruction set. `auto` resolves to `specialists`;
+`sweep-first` changes order only. The historical proposal below is not an
+alternative execution policy.
+
 ## Implementation record: 2026-11-06
 
 The shared implementation is present in this checkout. This record distinguishes

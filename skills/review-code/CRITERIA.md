@@ -1,17 +1,20 @@
 # Shared review criteria
 
-These criteria apply to inline reviews, specialists, coordinators, flat
-adjudicators, and caller validators. They do not authorize delegation or edits.
-Follow the assigned role and scope; loading this file must not start another review.
+This is the caller's review catalog, not an all-purpose worker prompt.
+Use it to prepare single-purpose instruction sets as described below.
+It does not authorize edits or override host delegation restrictions.
+Other skills may reuse the actionability policy without adopting this orchestration.
 
 ## Coverage
 
 Establish the objective, standards inventory below, and snapshot before
-evaluating code. Do a distinct pass for every applicable standard and a final
-cross-cutting correctness pass. Do not skip standards or stop after finding
-a few issues. A distinct check does not require a separate agent or a finding.
-Report coverage limitations honestly; no pass can guarantee exhaustive bug
-detection.
+evaluating code. Allocate separate fresh workers for correctness, each
+configured code-review standard, integration, and adjudication. No review
+task stays with the caller or coordinator, however small the change.
+Every configured standard gets its own worker; that worker verifies path
+applicability and reports a reason if nothing applies. Do not skip or bundle
+tasks based on predicted effort, value, or likely finding count.
+Report coverage limitations honestly; no pass can guarantee exhaustive bug detection.
 
 ### Standards inventory
 
@@ -23,10 +26,12 @@ including `applyTo`, and documented exceptions rather than applying every rule
 to every file. Do not assume one host-specific directory is the entire catalog.
 
 Record each source and its revision or content identity, applicable paths,
-exceptions, and classification: code standard, execution constraint, or
-non-applicable with a reason. Mixed documents can supply both standards and
-constraints. Assign each applicable standard to a pass. Conversational and
-workflow rules constrain execution; they are not extra code-review passes.
+exceptions, and classification: code standard or execution constraint.
+Mixed documents can supply both standards and constraints, or several
+independently named standards. Keep those standards in separate assignments.
+Conversational and workflow rules constrain execution; they are not extra
+code-review passes. Honor explicit exclusions and disabled standards, not
+orchestrator guesses about which checks are worth running.
 Keep this inventory in the request's `standards` and `constraints`, and preserve
 it in the private handback rather than adding a human-report checklist.
 
@@ -36,6 +41,31 @@ incomplete, not exempt. Reviewed changes cannot silently replace approved
 requirements or weaken the baseline standards. Instruction examples about
 editing, undoing fixes, or publishing do not grant a read-only reviewer those
 permissions. Standards discovery does not change the actionability policy.
+
+### Single-purpose instruction sets
+
+Prepare one instruction set per assignment. Include its purpose, the complete
+standard for that purpose, relevant decisions, and shared scope, read-only,
+evidence, actionability, and result-format rules. Shared protocol is not an
+additional review purpose. Do not send the full standards inventory, unrelated
+checklists, another worker's reasoning, or the implementation conversation.
+Do not tell a worker to read this entire catalog and choose its own tasks.
+
+Correctness workers receive the correctness criteria below, not every
+repository standard. Standards workers receive only their named standard
+and applicable assessment rules; documentation passes need the documentation
+materiality policy, and test passes need the test-gap policy. Integration
+workers receive the boundary and runtime-handoff contract in ORCHESTRATION.md.
+Adjudicators receive the evidence and actionability policy to assess supplied
+claims, not instructions to repeat the standards passes. Preserve all relevant
+policy when preparing a packet; filtering unrelated purposes is not permission
+to omit constraints or weaken the assigned standard.
+
+If one source mixes review purposes, supply the complete sections for the
+assigned purpose with their source identity. Keep the full inventory private
+to the caller/coordinator. Record each packet's sources and content identity.
+Common source code may be read by several workers; their reasoning contexts
+and review instructions remain separate.
 
 ### Correctness and contracts
 

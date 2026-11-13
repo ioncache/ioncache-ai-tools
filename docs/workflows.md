@@ -55,23 +55,30 @@ These rules apply to `review-code`, including reviews invoked by
 `review-validate-fix-loop`. The separate `review-triage-loop` requires a fresh
 reviewer each round and forbids using `review-code` for that role.
 
-Small reviews stay inline when the evidence fits one direct read and no
-substantial independent pass or explicit role override is needed. Explicit independence requests take
-precedence. Substantial reviews use nested coordination where supported or
-flat worker collection with a separate adjudicator. Missing required
-independence blocks the review.
+Every review task requires a fresh subagent with one review purpose and
+only that purpose's review instructions. There is no inline or small-check
+exception. The caller/coordinator schedules and collects; correctness, each
+configured standard, integration, and adjudication are separate assignments.
+Nested mode uses a dedicated coordinator; flat mode uses caller-owned
+collection. Both require a separate adjudicator. Missing required independence
+leaves the review incomplete, without blocking other authorized work.
 
 Before allocation, inventory repository standards, path applicability, and
 exceptions. Separate code-checking passes from execution constraints such as
 conversational guidance. Reuse a pinned inventory, not an assumed instruction
-catalog; missing required sources leave coverage incomplete.
+catalog; missing required sources leave coverage incomplete. Every configured
+code-review standard gets a worker, which verifies applicability and reports
+why no paths apply when appropriate. The orchestrator cannot skip a standard
+because it predicts a small or low-value check.
 
-An explicit strategy takes precedence. Otherwise `sweep-first` is preferred
-when the whole correctness scope fits one worker and risk does not require
-specialist-first allocation. Follow-ups address concrete risks, evidence gaps,
-and remaining standards/docs coverage. Small standards checks can share a
-worker. Both strategies retain integration and independent adjudication;
-finding counts are not an allocation target.
+The options helper resolves `auto` deterministically to `specialists`, which
+dispatches independent review types concurrently where supported.
+`sweep-first` runs correctness first, then every remaining preallocated type
+in its own context. It changes order, not coverage or isolation.
+Do not bundle tasks, invent an agent budget, or reuse a worker for another
+purpose or review round. An actual host concurrency limit queues tasks;
+it never justifies combining them. Explicit total-work limits remain binding
+and leave coverage incomplete if the required roster cannot finish.
 
 Both strategies require whole-file reads and propagate caller read/tool
 constraints. Reviewers responsible for consumers also read shared
@@ -81,18 +88,21 @@ dependency limits. Changed enumeration and batching need checks for successful
 but partial results, not just thrown errors.
 Specialists write complete pass records to assigned files in caller-owned
 private scratch outside the reviewed tree. Adjudicators read those files
-directly rather than relying on retyped summaries. Only caller-owned private
-request/option records and assigned reports may be written; they do not
+directly rather than relying on retyped summaries. Only caller/coordinator-owned
+private request, option, instruction records, and assigned reports may be written; they do not
 authorize code edits or worker ledger writes.
 
 If permitted file handoff is unavailable, explicitly agree an in-context
 handoff of complete pass records or report the review as blocked.
 
-Unchanged request material can be shared through a private immutable record
-with explicit field references and a content identity. Each recipient reads
-it, and each dispatch still states its assignment, scope, snapshot, and hard
-limits. Pass results remain complete; shared context never substitutes for
-evidence or establishes another worker's actual model.
+Common scope, snapshot, and execution constraints can be shared through a
+private immutable record. Each worker receives its own purpose-specific
+instruction packet with source and content identities, not the full standards
+catalog or another discovery worker's conclusions. Each dispatch states its
+assignment, purpose, scope, snapshot, and hard limits. Adjudicators receive
+the reports needed for evidence assessment, not extra standards-review tasks.
+Pass results remain complete; shared records never substitute for fresh
+reasoning contexts or establish another worker's actual model.
 
 Give reviewers explicit assignments and permitted report paths. These are
 instructions, not plugin-maintained permissions. Questions and handbacks do
@@ -161,11 +171,16 @@ and [../skills/review-code/CONTRACTS.md](../skills/review-code/CONTRACTS.md).
 The outer review/fix loop owns ledger writes, fixes, and limits.
 
 An explicitly approved scripted controller may consume these contracts. It
-schedules independent validation of coordinator-originated findings; mechanical
+schedules fresh independent validation of adjudicator-originated findings; mechanical
 record checks are not code-review judgments. Autonomous development keeps
 review contexts separate from implementation even for small tasks, and retains
 task reviews, full-PR reviews, and full-scope confirmation after corrections.
 This contract does not implement a controller or authorize commits or publication.
+On resume, recheck worker and instruction-set identities. Older bundled or
+inline-review records cannot count as independent coverage; replace affected
+assignments within the same run limits or report the gap. This policy is part
+of the existing review skills and uses their opt-outs, not a separate mode
+that permits worker bundling.
 
 Supervised launch-to-handback trials remain pending. Nested/flat execution and
 automatic model selection are not acceptance-verified on any host. See
