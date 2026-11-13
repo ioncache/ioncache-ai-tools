@@ -148,6 +148,12 @@ capability evidence allow it, otherwise configured models are used.
 Explicit choices are not silently replaced. The lead is the review coordinator
 or adjudicator, not your conversation's model.
 
+Reviews require a fresh subagent for each review purpose, including each
+configured standard. Small changes do not permit inline or bundled checks.
+Coordination, integration review, and adjudication stay separate.
+The default strategy uses isolated specialists; `sweep-first` changes their
+order, not the required tasks or context isolation.
+
 Role effort, validator, fallback, and strategy options are listed in
 [skills/review-code/OPTIONS.md](skills/review-code/OPTIONS.md). The review/fix loop
 accepts the same review options; they do not change its fixing model.

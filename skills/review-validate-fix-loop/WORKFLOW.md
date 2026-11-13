@@ -39,12 +39,14 @@ base and current ledger snapshot; do not create a second run or snapshot.
 Follow the [shared orchestration instructions](../review-code/ORCHESTRATION.md):
 the dedicated review coordinator owns specialist launches in nested mode;
 the loop owns launches and collection in flat mode, then uses a separate
-adjudicator. Keep the small-review shortcut only where caller independence
-requirements permit it; autonomous development always separates review from
-implementation. Retain the cross-cutting correctness pass. The outer loop
+adjudicator. Every review task uses a fresh single-purpose worker, regardless
+of change size. Keep integration separate from coordination and adjudication.
+Neither the loop owner nor review coordinator may perform review passes inline.
+Retain the cross-cutting correctness pass. The outer loop
 remains the sole ledger writer and owns limits and fixes.
-Pass the chosen strategy separately from topology, following the shared
-capacity and risk rules for `sweep-first` or `specialists`. Count the sweep
+Pass the helper's `effective_strategy` separately from topology. `auto` resolves
+to `specialists`; `sweep-first` changes order without changing the roster or
+combining review types. Count the sweep
 and its follow-ups inside the same review.
 Forward `review_options` unchanged to full reviews, focused review-fixes, and
 caller validators. Apply each role's fallback without resetting loop allowances.
@@ -66,14 +68,14 @@ worker, coverage evidence, and verification checks. If a worker fails or a
 required check cannot be performed, record `stop` with an incomplete outcome.
 Do not fabricate a successful pass or label an unavailable check unnecessary.
 
-Coordinator/adjudicator assessment supplies independent validation of
+The separately assigned adjudicator supplies independent validation of
 specialist findings. Check the handback for evidence completeness, matching
-assignments and snapshots, and unresolved contradictions. Investigate gaps,
-not every completed investigation again. Independently validate findings
-originating from the coordinator/adjudicator. Inline review must not claim
-independent validation that did not happen. Follow the shared
+assignments, instruction sets, distinct worker contexts, and snapshots.
+Schedule investigation of unresolved contradictions and gaps, not every
+completed investigation again. Schedule fresh validation for findings
+originating from the adjudicator. Follow the shared
 [caller-validation role](../review-code/ORCHESTRATION.md#independent-caller-validation)
-when the owner is scripted or cannot provide the required independence.
+for both agent and scripted owners, never an inline fallback.
 Mechanical checks cannot replace those assessments.
 
 Record a `decision` for every pending finding after `review_done`, following
@@ -125,7 +127,7 @@ correction, affected callers, regression risk, weakened checks, and unrelated
 changes. All outstanding inner-cycle findings remain relevant, not only the
 latest changed lines. Do not silently expand this into a full review. Record
 candidates and `fixes_reviewed`, then validate the new candidates in this same
-cycle using the same specialist/coordinator ownership rules.
+cycle using the same single-purpose assignments and separate adjudication.
 
 For each applied fix, record `fixed` only with passing relevant verification
 and completed review-fixes, or record `fix_failed` when it is not resolved.
@@ -159,6 +161,10 @@ Recover saved review options and pass them, with any resolved conversational
 choices, to the options helper's context input under OPTIONS.md. Use its merged
 output, including recomputed fallback and effective selection. Recheck host
 authority before launch.
+Recheck saved assignment and instruction-set identities too. Do not adopt
+bundled-worker or inline-review coverage from an older plan as independent;
+replace affected assignments within existing counts and limits, or report
+the remaining coverage gap. Never relabel the old worker as several reviewers.
 Put the merged request in the `resume` reason, or the next phase event's
 reason/evidence when continuing a running run. Never replace saved role choices
 with the parser's omitted-option defaults.

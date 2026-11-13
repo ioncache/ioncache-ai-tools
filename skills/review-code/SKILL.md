@@ -9,9 +9,19 @@ argument-hint: "[target] [--help] [--lead-model MODEL] [--reviewer-model MODEL] 
 Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
-The caller may write private request/option records; workers may write only
-assigned result files. All belong in private scratch outside the reviewed tree.
+The caller/coordinator may write private request, option, and instruction
+records; leaf workers may write only assigned result files.
+All belong in private scratch outside the reviewed tree.
 They never authorize code or ledger edits.
+
+## Assigned roles
+
+If already assigned a bounded review or validation pass, perform only that
+assignment using its supplied instruction set and return its evidence.
+Do not normalize another invocation, discover a new target, load the complete
+review catalog, start another review, or spawn agents. An assigned coordinator
+follows its role in [ORCHESTRATION.md](ORCHESTRATION.md), not this entry point.
+The remaining sections are for an unassigned invocation.
 
 ## Invocation
 
@@ -42,38 +52,36 @@ to the change. Out-of-scope does not mean invalid.
 
 ## Review method
 
-Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md). They define
-the shared review standards, actionability policy, human report, and evidence
-handback. Establish the standards inventory before allocating passes. Apply
-the actionability policy to recommendations as well as presentation.
+Every review task requires a fresh subagent with one review purpose and only
+that purpose's review instructions. There is no inline or small-check exception.
+Do not combine standards, reuse a worker for another purpose, or treat separate
+pass records as separate contexts. This applies to full and focused reviews.
 
-If assigned a bounded specialist pass, perform only that pass and return its
-evidence. Do not start another review or spawn agents. An assigned coordinator
-or flat adjudicator, or an assigned caller validator, follows its role in
-[ORCHESTRATION.md](ORCHESTRATION.md), not this entry point again.
+Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md).
+They define the review catalog, actionability
+policy, human report, and evidence handback. Establish the standards inventory
+before allocating passes. Apply the actionability policy to recommendations
+as well as presentation.
 
-Otherwise the caller owns scope, permissions, and the execution-mode decision.
+The caller owns scope, permissions, and the nested-versus-flat mode decision.
 The caller may be an invoking agent or an explicitly approved scripted
-controller, following [ORCHESTRATION.md](ORCHESTRATION.md). Handle a review
-inline only when all required evidence fits a single direct read and no
-substantial independent pass or explicit role override is needed. Explicit independence requirements
-override this shortcut. Autonomous development requires fresh review contexts
-separate from implementation, even for small tasks.
+controller, following [ORCHESTRATION.md](ORCHESTRATION.md). The caller and
+coordinator schedule and collect work; neither performs review passes.
+Reviewers must also be separate from implementation.
 
-For substantial reviews, use [ORCHESTRATION.md](ORCHESTRATION.md) to launch a
-dedicated coordinator in fresh context when the host can deliver all child
-results to it. Otherwise the caller launches and collects specialists,
-then sends their result-file paths to a separate flat adjudicator. Keep continuous
-call-chain investigations together. Do not create an external runner to
-work around missing native capabilities.
+Use nested mode when a dedicated coordinator can launch and collect every
+required worker, including a separate adjudicator. Otherwise the caller
+launches and collects the same assignments in flat mode. Integration review
+has its own specialist; it is not extra work for the coordinator or adjudicator.
+Keep continuous call-chain investigations together within a single purpose.
+Missing delegation leaves the review incomplete, not permission to review
+inline or create an external runner.
 
-Honor an explicit strategy. Otherwise prefer `sweep-first` when one worker can
-read the whole correctness scope and risk does not require specialist-first
-allocation. Use `specialists` when capacity or independent risk areas require
-it. A sweep precedes targeted follow-ups; small standards checks can share a
-worker. Both strategies retain integration and independent adjudication.
-Use ORCHESTRATION.md's capacity and independence rules; strategy is separate
-from inline, nested, or flat topology.
+Use the normalized `effective_strategy`: `auto` resolves to `specialists`,
+without a size or risk heuristic. `sweep-first` changes order only: correctness
+runs first, then the remaining preallocated review types still run separately.
+Neither strategy can omit, merge, or absorb a required task. Follow
+ORCHESTRATION.md's allocation rules independently of nested or flat topology.
 
 The caller selects the lead and any caller validator before launch.
 The coordinator selects workers using the same normalized options and
@@ -104,9 +112,9 @@ text rather than target content, and reject submodules and special files.
 Non-Git or required excluded inputs need an explicit alternative identity
 and coverage limitation; never present them as protected by this fingerprint.
 
-Check the returned handback against the request, all required assignments,
-and the final snapshot. Independently validate coordinator-originated
-findings, investigate gaps or contradictions, and preserve rejected candidates
-for a calling loop. A scripted caller schedules independent reasoning rather
-than treating mechanical checks as validation. Do not repeat completed specialist
-investigations merely because their adjudicated results returned to the caller.
+Check the returned handback against the request, required assignments, worker
+identities, instruction-set identities, and final snapshot. Schedule fresh
+validation for adjudicator-originated findings, gaps, or contradictions.
+Preserve rejected candidates for a calling loop. Mechanical checks are not
+semantic validation. Do not repeat completed specialist investigations merely
+because their adjudicated results returned to the caller.

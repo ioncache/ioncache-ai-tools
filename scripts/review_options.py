@@ -55,7 +55,7 @@ def parser_for(skill):
     parser.add_argument("--fallback", choices=("configured", "fail"), action=Once,
                         help="launch fallback (default: fail for explicit overrides, configured otherwise)")
     parser.add_argument("--strategy", choices=("auto", "sweep-first", "specialists"), default="auto",
-                        action=Once, help="review allocation (default: auto)")
+                        action=Once, help="review order; auto uses isolated specialists, sweep-first changes order only")
     for role in ROLES:
         parser.add_argument(f"--{role}-model", type=nonempty, action=Once, metavar="MODEL",
                             help=f"explicit {role} model; omitted roles use the selection policy")
@@ -91,6 +91,7 @@ def parse_options(skill, argv):
 
 def apply_values(options, values):
     result = {**options, **{name: values[name] for name in ("model_selection", "fallback", "strategy")}}
+    result["effective_strategy"] = "specialists" if values["strategy"] == "auto" else values["strategy"]
     result["roles"] = {}
     for role in ROLES:
         model, effort = values[f"{role}_model"], values[f"{role}_effort"]

@@ -84,6 +84,47 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(options["strategy"], "specialists")
         self.assertIn("fallback", options["specified"])
 
+    def test_strategy_resolution_is_deterministic_without_losing_requested_values(self):
+        for skill in review_options.SKILLS:
+            for requested in (None, "auto", "specialists", "sweep-first"):
+                with self.subTest(skill=skill, strategy=requested):
+                    args = [] if requested is None else ["--strategy", requested]
+                    result = self.run_options(skill, *args)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    options = json.loads(result.stdout)
+                    self.assertEqual(options["strategy"], requested or "auto")
+                    expected = "sweep-first" if requested == "sweep-first" else "specialists"
+                    self.assertEqual(options["effective_strategy"], expected)
+                    self.assertEqual(options["option_sources"]["strategy"],
+                                     "default" if requested is None else "invocation")
+
+    def test_resume_recomputes_strategy_after_context_and_invocation_overrides(self):
+        saved = review_options.parse_options("review-validate-fix-loop", [
+            "--strategy", "sweep-first", "--lead-model", "chosen",
+        ])
+        saved["effective_strategy"] = "obsolete-allocation"
+        context = self.write_context({"saved": saved, "choices": {
+            "strategy": {"value": "auto", "source": "User selected the default strategy"},
+        }})
+        args = ("--context", context, "review-validate-fix-loop", "--resume", "saved-ledger")
+        result = self.run_options(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        options = json.loads(result.stdout)
+        self.assertEqual((options["strategy"], options["effective_strategy"]), ("auto", "specialists"))
+        self.assertEqual(options["option_sources"]["strategy"], "User selected the default strategy")
+        self.assertEqual(options["roles"]["lead"]["model"], "chosen")
+        result = self.run_options(*args, "--strategy", "sweep-first")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        options = json.loads(result.stdout)
+        self.assertEqual((options["strategy"], options["effective_strategy"]), ("sweep-first", "sweep-first"))
+        self.assertEqual(options["option_sources"]["strategy"], "invocation")
+        saved.pop("effective_strategy")
+        context = self.write_context({"saved": saved})
+        options = json.loads(self.run_options(
+            "--context", context, "review-validate-fix-loop", "--resume", "old-ledger",
+        ).stdout)
+        self.assertEqual(options["effective_strategy"], "sweep-first")
+
     def test_invalid_arguments_do_not_start_work_and_help_remains_reachable(self):
         cases = [
             ["--non-interactive"], ["--main-model", "chosen"], ["--lead-m", "chosen"],
@@ -132,6 +173,7 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         options = json.loads(result.stdout)
         self.assertEqual(options["effective_model_selection"], "configured")
+        self.assertEqual(options["effective_strategy"], "specialists")
         self.assertTrue(options["configuration"]["skill_enabled"])
         self.assertEqual(options["roles"]["lead"]["model"], "chosen")
         self.assertEqual(path.read_bytes(), original)

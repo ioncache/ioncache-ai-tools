@@ -8,6 +8,13 @@ are grouped under [Delivery phases](#delivery-phases).
 
 Related: [../skills/review-code/SKILL.md](../skills/review-code/SKILL.md).
 
+Current review isolation is defined by
+[../skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md).
+It supersedes this design's inline-review allowances and combined coordinator
+review duties. Full and focused reviews require fresh single-purpose workers,
+separate integration and adjudication, and fresh caller validation when needed.
+The outer loop still owns fixes, limits, and schema-1 ledger writes.
+
 ## Purpose
 
 Review a defined body of code, validate the findings, fix actionable issues,
