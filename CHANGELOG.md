@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.11.1 (2026-11-13)
+
+### New
+
+* None.
+
+### Updated
+
+* **review:** streamline review setup and caller validation ([#50](https://github.com/ioncache/ioncache-ai-tools/issues/50)) ([dbf5bcc](https://github.com/ioncache/ioncache-ai-tools/commit/dbf5bccd3ee506331a84dbde999adebfb7e69c96))
+
+### Fixed
+
+* None.
+
 ## 1.11.0 (2026-11-13)
 
 ### New
