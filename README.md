@@ -1,7 +1,7 @@
 # ioncache-ai-tools
 
 A plugin for Claude Code, GitHub Copilot CLI, and Codex CLI. It provides
-19 directly invocable skills for code review, PR work, investigation, writing,
+20 directly invocable skills for code review, PR work, investigation, writing,
 and implementation, plus automatic guardrails for common tool actions.
 
 ## Install
@@ -114,6 +114,7 @@ may require clarification before the skill can proceed.
 | `/ioncache-ai-tools:investigate` | Traces a feature or workflow and explains its behavior without editing files | The feature, workflow, or system to investigate |
 | `/ioncache-ai-tools:triage-errors` | Groups failing checks by root cause and fixes each group | The failing command and relevant error context |
 | `/ioncache-ai-tools:create-worktree` | Creates a git worktree and applies the repository's setup configuration | Worktree arguments, such as `-b feature-name ../feature-name` |
+| `/ioncache-ai-tools:autonomous-development` | Prepares approved plans and coordinates bounded implementation toward review-ready PRs | An idea, artifact references, an approved manifest, or a private run directory |
 
 ### Writing and engineering guidance
 
@@ -133,6 +134,25 @@ provide standards for the requested work, not standalone test or audit tools.
 | `/ioncache-ai-tools:answer-questions` | Inspect question-answering guidance; not required before asking ordinary questions |
 
 Full skill instructions are in [skills/](skills/).
+
+## Autonomous development
+
+Invoke `/ioncache-ai-tools:autonomous-development` in Claude/Copilot, or
+`$ioncache-ai-tools:autonomous-development` in Codex. Choose planning, design,
+and execution destinations independently. Review and approve the plan, content
+snapshots, permissions, and finite limits before execution.
+
+The initial execution adapter is the Claude Workflow
+`/ioncache-ai-tools:autonomous-development-run`. It uses fresh workers, private
+durable state, per-task and full-PR reviews, and human-controlled PR merging.
+Copilot and Codex currently support preparation and state inspection only.
+The adapter is **not yet live-host qualified**; offline checks do not establish
+unattended permissions, cloud operation, or shared team controls.
+
+Usage and recovery: [skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
+Manifest fields: [skills/autonomous-development/CONTRACT.md](skills/autonomous-development/CONTRACT.md).
+Set `autonomous-development` to `false` in the feature configuration to disable
+execution while retaining status and interruption commands.
 
 ## Review-loop arguments
 

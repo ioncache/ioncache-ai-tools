@@ -79,6 +79,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   instructions own conditional nested coordination or flat adjudication.
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
+- `scripts/development_manifest.py` validates approved inputs, and
+  `scripts/development_run.py` owns private development-run bookkeeping outside
+  the repository. It does not launch models or publish. The Claude script in
+  `workflows/` dispatches fresh workers and flat review roles; keep offline
+  lifecycle checks distinct from live-host qualification.
 - The `create-worktree` skill invokes `scripts/create-worktree.py`, which requires
   Node.js 22.12.0+ and checks its version before launching the sibling
   `create-worktree.js` helper.
@@ -106,6 +111,8 @@ python3 hooks/scripts/docs_cache_self_check.py < /dev/null
 python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
+python3 scripts/development_run_self_check.py
+node scripts/development_workflow_self_check.js
 python3 scripts/release_self_check.py
 npm run release:check
 ```
