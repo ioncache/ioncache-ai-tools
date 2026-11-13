@@ -33,21 +33,25 @@ to the change. Out-of-scope does not mean invalid.
 
 Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md). They define
 the shared review standards, actionability policy, human report, and evidence
-handback. Apply that policy to recommendations as well as presentation.
+handback. Establish the standards inventory before allocating passes. Apply
+the actionability policy to recommendations as well as presentation.
 
 If assigned a bounded specialist pass, perform only that pass and return its
 evidence. Do not start another review or spawn agents. An assigned coordinator
-or flat adjudicator follows its role in [ORCHESTRATION.md](ORCHESTRATION.md),
-not this entry point again.
+or flat adjudicator, or an assigned caller validator, follows its role in
+[ORCHESTRATION.md](ORCHESTRATION.md), not this entry point again.
 
-Otherwise the invoking agent owns scope, permissions, and the execution-mode
-decision. Handle a review inline only when all required evidence fits a single
-direct read and no substantial independent pass is needed. Explicit requests
-for independent agents override this shortcut.
+Otherwise the caller owns scope, permissions, and the execution-mode decision.
+The caller may be an invoking agent or an explicitly approved scripted
+controller, following [ORCHESTRATION.md](ORCHESTRATION.md). Handle a review
+inline only when all required evidence fits a single direct read and no
+substantial independent pass is needed. Explicit independence requirements
+override this shortcut. Autonomous development requires fresh review contexts
+separate from implementation, even for small tasks.
 
 For substantial reviews, use [ORCHESTRATION.md](ORCHESTRATION.md) to launch a
 dedicated coordinator in fresh context when the host can deliver all child
-results to it. Otherwise the invoking agent launches and collects specialists,
+results to it. Otherwise the caller launches and collects specialists,
 then sends their result-file paths to a separate flat adjudicator. Keep continuous
 call-chain investigations together. Do not create an external runner to
 work around missing native capabilities.
@@ -60,10 +64,12 @@ worker. Both strategies retain integration and independent adjudication.
 Use ORCHESTRATION.md's capacity and independence rules; strategy is separate
 from inline, nested, or flat topology.
 
-The invoking agent selects the coordinator/adjudicator model before launch.
+The caller selects the coordinator/adjudicator model before launch.
 The coordinator selects worker models under the shared runtime-selection
-policy. Preserve configured defaults when discovery, suitability evidence,
-or permission to override is unavailable. Never ship or invent a model ranking.
+policy. Check permission to override before selection research; reuse applicable
+evidence within the review. Preserve configured defaults when discovery,
+suitability evidence, or permission to override is unavailable. Never ship or
+invent a model ranking.
 
 Reuse the caller's snapshot. For a standalone Git review, resolve
 `../../scripts/review_ledger.py` relative to this installed skill and run:
@@ -89,5 +95,6 @@ and coverage limitation; never present them as protected by this fingerprint.
 Check the returned handback against the request, all required assignments,
 and the final snapshot. Independently validate coordinator-originated
 findings, investigate gaps or contradictions, and preserve rejected candidates
-for a calling loop. Do not repeat completed specialist investigations merely
-because their adjudicated results returned to the invoking agent.
+for a calling loop. A scripted caller schedules independent reasoning rather
+than treating mechanical checks as validation. Do not repeat completed specialist
+investigations merely because their adjudicated results returned to the caller.

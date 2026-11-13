@@ -44,8 +44,10 @@ Git worktree. Read its `--help` if invocation details are unclear.
    counted review, not a free preliminary round.
 3. Check the evidence handback, adopting independent coordinator validation
    of specialist findings rather than repeating every investigation. Validate
-   coordinator-originated findings separately. Record each candidate,
-   duplicate observation, decision, reason, and evidence through the protocol.
+   coordinator-originated findings under the shared caller-validation role;
+   a scripted owner schedules independent reasoning rather than judging evidence
+   mechanically. Record each candidate, duplicate observation, decision, reason,
+   and evidence through the protocol.
    Apply the shared actionability policy, not just the report's severity floor.
 4. Declare an authorized batch of files and valid, in-scope `Act` findings
    before fixing. Do not automatically fix style observations, decisions, or
@@ -75,13 +77,22 @@ outcome rather than bypassing them or claiming complete coverage.
 
 Use the host's native delegation tools and the
 [shared orchestration instructions](../review-code/ORCHESTRATION.md).
-Resolve permitted review-role selections from current evidence; otherwise
-preserve configured defaults and disclose the limitation. Supply the
-[review contract](../review-code/CONTRACTS.md), including relevant ledger
-history and explicit completion conditions. Failed or partial workers are
-not clean reviews.
+Check override authority before model research and reuse applicable selection
+evidence within a review; otherwise preserve configured defaults and disclose
+the limitation. Supply the [review contract](../review-code/CONTRACTS.md),
+including relevant ledger history and explicit completion conditions.
+Failed or partial workers are not clean reviews.
 
 Only the outer loop updates the ledger through its helper. Never hand-edit
 state, reset counters, or create a replacement run to evade a limit. Use
 snapshot checks before trusting evidence, especially on resumption.
 These are best-effort agent instructions, not a hard workflow boundary.
+
+A surrounding autonomous-development controller does not inherit commit or
+publication authority from this skill. Its reviewers remain separate from
+implementation, including small reviews. Task reviews do not replace full-PR
+review, and focused correction reviews do not replace full-scope confirmation.
+Finish the active cycle with stable HEAD/index before separately authorized
+commits. The review/fix owner retains the ledger; the controller keeps references.
+Loop completion does not waive the caller's acceptance requirements or establish
+PR readiness. Exceptions must stay within the approved decision authority.

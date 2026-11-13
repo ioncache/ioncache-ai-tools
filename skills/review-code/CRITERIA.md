@@ -1,17 +1,43 @@
 # Shared review criteria
 
-These criteria apply to inline reviews, specialists, coordinators, and flat
-adjudicators. They do not authorize delegation or edits. Follow the assigned
-role and scope; loading this file must not start another review.
+These criteria apply to inline reviews, specialists, coordinators, flat
+adjudicators, and caller validators. They do not authorize delegation or edits.
+Follow the assigned role and scope; loading this file must not start another review.
 
 ## Coverage
 
-Establish the objective, applicable project standards, existing exceptions,
-and snapshot before evaluating code. Do a distinct pass for every applicable
-standard and a final cross-cutting correctness pass. Do not skip standards
-or stop after finding a few issues. A distinct check does not require a separate
-agent or a finding. Report coverage limitations honestly; no pass can guarantee
-exhaustive bug detection.
+Establish the objective, standards inventory below, and snapshot before
+evaluating code. Do a distinct pass for every applicable standard and a final
+cross-cutting correctness pass. Do not skip standards or stop after finding
+a few issues. A distinct check does not require a separate agent or a finding.
+Report coverage limitations honestly; no pass can guarantee exhaustive bug
+detection.
+
+### Standards inventory
+
+Read the caller's requirements and applicable repository instructions. Enumerate
+the repository's instruction sources, including `.github/instructions/` when
+present, and follow relevant references and directory-scoped instructions.
+Read each applicable source in full; honor declared path applicability,
+including `applyTo`, and documented exceptions rather than applying every rule
+to every file. Do not assume one host-specific directory is the entire catalog.
+
+Record each source and its revision or content identity, applicable paths,
+exceptions, and classification: code standard, execution constraint, or
+non-applicable with a reason. Mixed documents can supply both standards and
+constraints. Assign each applicable standard to a pass. Conversational and
+workflow rules constrain execution; they are not extra code-review passes.
+Keep this inventory in the request's `standards` and `constraints`, and preserve
+it in the private handback rather than adding a human-report checklist.
+
+Reuse a caller-supplied inventory after checking its identity and coverage.
+Unavailable required sources or unresolved applicability leave coverage
+incomplete, not exempt. Reviewed changes cannot silently replace approved
+requirements or weaken the baseline standards. Instruction examples about
+editing, undoing fixes, or publishing do not grant a read-only reviewer those
+permissions. Standards discovery does not change the actionability policy.
+
+### Correctness and contracts
 
 For non-trivial design or contract decisions, apply
 [engineering judgment](../engineering-judgment/SKILL.md) within the assigned

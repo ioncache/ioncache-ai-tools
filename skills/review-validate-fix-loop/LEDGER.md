@@ -111,10 +111,19 @@ phase; do not record another `start_review`. Checks keep their existing
 A sweep-first worker and its follow-ups belong to that same counted phase.
 Read result files and map their complete evidence, not only file paths or
 grouped human-report rows. Workers never write ledger events.
+Resolve any shared request references and retain the standards inventory,
+source identities, and applicable selection evidence in existing evidence fields.
+Do not make replay depend on an unavailable external request file.
 An assessment awaiting independent caller validation does not make its
 completed pass partial. Record the completed passes, then resolve and record
 that assessment; never use the handback's overall outcome alone to decide
 whether coverage finished.
+
+For a separately scheduled caller validator, retain its assignment, report
+identity, snapshot, coverage, and assessments in decision evidence, or in the
+stop reason when incomplete. Do not emit a second `review_done` or
+`fixes_reviewed` for validation. Record any newly discovered candidates through
+`finding`; they still require independent assessment.
 
 Map non-reportable underlying issues to `ignored` with a reason, without falsely
 marking a valid style observation invalid. Duplicate observations use the
@@ -140,7 +149,9 @@ diagnostics to shorten the human report.
 Coordinator/adjudicator assessment validates specialist findings. The loop
 checks completeness and contradictions, then records the disposition.
 Coordinator-originated findings require independent loop validation.
-Mechanical replay validates structure and ordering, not those judgments.
+A scripted owner schedules the shared caller-validation role and records the
+actual validator's identity, assessments, and evidence. Mechanical replay
+validates structure and ordering, not those judgments.
 
 ## Snapshots and reports
 
