@@ -75,6 +75,11 @@ jobs:
       - name: Run review-ledger self-check
         run: python3 scripts/review_ledger_self_check.py
 
+      - name: Run autonomous development offline self-checks
+        run: |
+          python3 scripts/development_run_self_check.py
+          node scripts/development_workflow_self_check.js
+
       - name: Run release self-check
         run: python3 scripts/release_self_check.py
 

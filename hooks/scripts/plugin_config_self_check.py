@@ -318,14 +318,15 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual({name.removeprefix('skill:') for name in config.defaults()
                           if name.startswith('skill:')}, skills)
         path = config.paths(self.project)['claude'][0]
-        self.write(path, {'features': {'skill:review-code': False}})
-        output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
-        self.assertIn('Disabled plugin skills: review-code', str(output))
-        for name in ('review-code', 'ioncache-ai-tools:review-code'):
-            denied = guidance.run_hook('PreToolUse', {
-                **self.data, 'tool_name': 'Skill', 'tool_input': {'skill': name},
-            })
-            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+        for skill in ('review-code', 'autonomous-development'):
+            self.write(path, {'features': {'skill:' + skill: False}})
+            output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
+            self.assertIn('Disabled plugin skills: ' + skill, str(output))
+            for name in (skill, 'ioncache-ai-tools:' + skill):
+                denied = guidance.run_hook('PreToolUse', {
+                    **self.data, 'tool_name': 'Skill', 'tool_input': {'skill': name},
+                })
+                self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
         self.assertIsNone(guidance.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'skill', 'tool_input': {'skill': 'security'},
         }))

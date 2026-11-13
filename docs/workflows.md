@@ -19,11 +19,46 @@ Each skill's file defines its scope, inputs, and stopping conditions.
 | [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within limits |
 | [../skills/triage-errors/SKILL.md](../skills/triage-errors/SKILL.md) | Fix related failures by root cause |
 | [../skills/create-worktree/SKILL.md](../skills/create-worktree/SKILL.md) | Create a worktree with repository setup applied |
+| [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | Prepare approved inputs and coordinate bounded development toward review-ready PRs |
 
 Writing and implementation guidance lives in [../skills/](../skills/):
 `answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
 `documentation-writing`, `prompt-output`, `unit-tests`, `jsdoc`, and `security`.
 The testing and JSDoc skills target Vitest and JavaScript/TypeScript.
+
+## Autonomous development
+
+Planning, design documentation, and execution are independent settings. Existing
+issues, designs, and plans are supported preparation inputs, not automatic
+approval. The manifest pins reviewed content and separates task boundaries from
+PR boundaries. GitHub issues and Notion pages can be selected without coupling
+either to the execution provider.
+
+The Python controller persists assignments before dispatch, rejects stale
+results, retains allowances on interruption, and validates local Git and existing
+review-ledger evidence. Claude's packaged Workflow dispatches fresh workers and
+flat review roles. The script itself performs no filesystem or shell operations.
+Publication remains an assigned worker operation under native permissions.
+The helper does not independently verify the truth of remote receipts.
+
+Independent increments can be handed over early. Dependent PRs wait for observed
+human merges; this adapter does not implement stacked-branch maintenance.
+Completed reviews precede commits, and a full-PR review precedes readiness.
+Accepted exceptions remain visible. Neither the controller nor its workers may
+approve or merge PRs, force-push, deploy, or silently expand approved scope.
+
+The adapter has offline lifecycle checks, not live-host qualification. Test
+native permissions, worker identities, result delivery, cancellation, and resume
+in an explicitly approved disposable trial before relying on unattended use.
+Hosting, shared storage, team controls, notification services, and browser/upload
+capabilities are consuming-environment requirements, not provisioned services.
+
+Contracts and recovery:
+[../skills/autonomous-development/CONTRACT.md](../skills/autonomous-development/CONTRACT.md).
+Worker boundaries:
+[../skills/autonomous-development/WORKERS.md](../skills/autonomous-development/WORKERS.md).
+Claude API and packaging reference:
+https://code.claude.com/docs/en/workflows.
 
 ## Review loops
 

@@ -650,6 +650,76 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(list((self.root / ".review-loop").iterdir()),
                          [self.root / ".review-loop" / ".lock"])
 
+    def interrupt_init(self, boundary):
+        script = """
+import os
+import sys
+import review_ledger
+
+boundary = sys.argv[1]
+write = review_ledger.atomic_write
+def interrupted_write(path, data):
+    write(path, data)
+    if (boundary == "object" and path.parent.name == "objects" or
+            boundary == "ledger" and path.name == "REVIEW_LEDGER.json"):
+        os._exit(75)
+
+rename = review_ledger.os.rename
+def interrupted_rename(source, destination):
+    rename(source, destination)
+    if boundary == "published":
+        os._exit(75)
+
+review_ledger.atomic_write = interrupted_write
+review_ledger.os.rename = interrupted_rename
+sys.argv = ["review_ledger.py", "init", "--objective", "Interrupted fixture",
+            "--scope", "repository"]
+sys.exit(review_ledger.main())
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script, boundary], cwd=self.root,
+            env={**self.env, "PYTHONPATH": str(HELPER.parent)}, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+    def test_interrupted_initial_snapshot_allows_retry(self):
+        self.interrupt_init("object")
+        self.assertTrue(list((self.root / ".review-loop").glob("*/objects/*")))
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual((self.root / "app.txt").read_text(), "before\n")
+
+    def test_interrupted_unpublished_ledger_allows_retry(self):
+        self.interrupt_init("ledger")
+        self.init()
+        self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.send("start_review")
+        self.send("stop", outcome="interrupted")
+        self.send("resume")
+        self.assertEqual(len(self.state["loops"]), 1)
+
+    def test_interruption_after_publication_preserves_the_run(self):
+        self.interrupt_init("published")
+        ledgers = list((self.root / ".review-loop").glob("*/REVIEW_LEDGER.json"))
+        self.assertEqual(len(ledgers), 1)
+        self.ledger = str(ledgers[0])
+        self.state = self.cli(["status", self.ledger])
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_missing_published_ledger_is_not_an_unpublished_initialization(self):
+        self.init()
+        path = Path(self.ledger)
+        path.unlink()
+        self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.assertTrue(path.parent.is_dir())
+
     def test_lock_blocks_concurrent_updates(self):
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()
