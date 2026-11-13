@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.11.0 (2026-11-13)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* replace stateful scope gates with autonomous guidance ([#49](https://github.com/ioncache/ioncache-ai-tools/issues/49)) ([b7ad6ce](https://github.com/ioncache/ioncache-ai-tools/commit/b7ad6ce7d1f7dafec89ee1d005379a40931959c9)), references [github/copilot-cli#5441](https://github.com/github/copilot-cli/issues/5441)
+
 ## 1.10.0 (2026-11-12)
 
 ### New
