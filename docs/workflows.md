@@ -61,6 +61,11 @@ precedence. Substantial reviews use nested coordination where supported or
 flat worker collection with a separate adjudicator. Missing required
 independence blocks the review.
 
+Before allocation, inventory repository standards, path applicability, and
+exceptions. Separate code-checking passes from execution constraints such as
+conversational guidance. Reuse a pinned inventory, not an assumed instruction
+catalog; missing required sources leave coverage incomplete.
+
 An explicit strategy takes precedence. Otherwise `sweep-first` is preferred
 when the whole correctness scope fits one worker and risk does not require
 specialist-first allocation. Follow-ups address concrete risks, evidence gaps,
@@ -78,6 +83,12 @@ review write exception; they do not authorize code edits or worker ledger writes
 
 If permitted file handoff is unavailable, explicitly agree an in-context
 handoff of complete pass records or report the review as blocked.
+
+Unchanged request material can be shared through a private immutable record
+with explicit field references and a content identity. Each recipient reads
+it, and each dispatch still states its assignment, scope, snapshot, and hard
+limits. Pass results remain complete; shared context never substitutes for
+evidence or establishes another worker's actual model.
 
 Give reviewers explicit assignments and permitted report paths. These are
 instructions, not plugin-maintained permissions. Questions and handbacks do
@@ -112,15 +123,25 @@ changing its minimal fresh-reviewer assignments. Unresolved-PR-comment triage
 also uses the policy but accounts for every supplied comment, including
 no-change responses, without treating those responses as actionable defects.
 
-Review-role model choices depend on current availability, suitability evidence,
-and host permissions. When those are missing, preserve configured defaults and
-disclose the limitation. This is not automatic runtime model selection.
+Check model-override authority before selection research. Default-only execution
+skips catalog research that cannot affect the choice, not capability or
+independence checks. Authorized choices require current availability and
+suitability evidence, reusable within the review while applicable. Otherwise
+preserve configured defaults and disclose the limitation. This is not automatic
+runtime model selection.
 
 Shared criteria and handback contracts:
 [../skills/review-code/CRITERIA.md](../skills/review-code/CRITERIA.md),
 [../skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md),
 and [../skills/review-code/CONTRACTS.md](../skills/review-code/CONTRACTS.md).
 The outer review/fix loop owns ledger writes, fixes, and limits.
+
+An explicitly approved scripted controller may consume these contracts. It
+schedules independent validation of coordinator-originated findings; mechanical
+record checks are not code-review judgments. Autonomous development keeps
+review contexts separate from implementation even for small tasks, and retains
+task reviews, full-PR reviews, and full-scope confirmation after corrections.
+This contract does not implement a controller or authorize commits or publication.
 
 Supervised launch-to-handback trials remain pending. Nested/flat execution and
 automatic model selection are not acceptance-verified on any host. See

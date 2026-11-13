@@ -31,8 +31,10 @@ base and current ledger snapshot; do not create a second run or snapshot.
 Follow the [shared orchestration instructions](../review-code/ORCHESTRATION.md):
 the dedicated review coordinator owns specialist launches in nested mode;
 the loop owns launches and collection in flat mode, then uses a separate
-adjudicator. Keep the small-review shortcut and cross-cutting correctness
-pass. The outer loop remains the sole ledger writer and owns limits and fixes.
+adjudicator. Keep the small-review shortcut only where caller independence
+requirements permit it; autonomous development always separates review from
+implementation. Retain the cross-cutting correctness pass. The outer loop
+remains the sole ledger writer and owns limits and fixes.
 Pass the chosen strategy separately from topology, following the shared
 capacity and risk rules for `sweep-first` or `specialists`. Count the sweep
 and its follow-ups inside the same review.
@@ -59,7 +61,10 @@ specialist findings. Check the handback for evidence completeness, matching
 assignments and snapshots, and unresolved contradictions. Investigate gaps,
 not every completed investigation again. Independently validate findings
 originating from the coordinator/adjudicator. Inline review must not claim
-independent validation that did not happen.
+independent validation that did not happen. Follow the shared
+[caller-validation role](../review-code/ORCHESTRATION.md#independent-caller-validation)
+when the owner is scripted or cannot provide the required independence.
+Mechanical checks cannot replace those assessments.
 
 Record a `decision` for every pending finding after `review_done`, following
 the [handback mapping](LEDGER.md#review-handback-mapping). A reachable failure,
