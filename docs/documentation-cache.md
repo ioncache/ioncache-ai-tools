@@ -13,6 +13,8 @@ A cache hit supplies facts, source URL, and fetch date instead of downloading
 the page again. Repeating the identical call bypasses the hit once and fetches
 live. Verified conversation facts or fresh cached facts can be reused only
 when they cover the required detail and version. Summaries are not full pages.
+Retry-state updates are serialized. A concurrent call that cannot acquire the
+cache lock proceeds to the live fetch without changing another call's allowance.
 
 Copilot requests need an explicit positive `max_length`. Cached chunks must
 start at the same offset and cover at least the requested length. Claude

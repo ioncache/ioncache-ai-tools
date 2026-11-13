@@ -2,20 +2,14 @@
 """Translate Copilot CLI events to the existing hooks and their results back."""
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
-import time
 
 import docs_cache
-from classify_question import set_marker
 from docs_cache import DISTILLER_ENV
-from hook_adapter_common import PATCH_REWRITE_REASON, run_shared_hooks
-from plugin_config import enabled, synchronize
-from scope_guard import prompt_pending
-
-TRANSCRIPT_WAIT_SECONDS = 2
+from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, InvocationDeadline, invocation_deadline, run_shared_hooks, unavailable
+from plugin_config import synchronize
 
 
 def docs_cache_hook(handler, data):
@@ -37,6 +31,7 @@ def shared_input(data):
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),
         'agent_id': data.get('agentId'),
+        'parent_agent_id': data.get('parentAgentId'),
         'source': data.get('source'),
         'stop_hook_active': data.get('stop_hook_active', False),
         'transcript_path': data.get('transcriptPath'),
@@ -52,14 +47,13 @@ def user_warning(output):
 
 def transform_prompt(data):
     hook_input = shared_input(data)
-    hook_input['_prompt_was_pending'] = prompt_pending(hook_input)
-    set_marker(hook_input, True, 'prompt')
+    synchronize(hook_input['cwd'], 'copilot')
     messages = []
     for output in run_shared_hooks('UserPromptSubmit', hook_input):
+        user_warning(output)
         context = output.get('hookSpecificOutput', {}).get('additionalContext')
         if context:
             messages.append(context)
-    set_marker(hook_input, False, 'prompt')
     if not messages:
         return None
     return {
@@ -103,13 +97,15 @@ def normalized_tools(data):
     return [(name, args)]
 
 
-def pre_tool_use(data):
+def pre_tool_use(data, completed_outputs=None):
     hook_input = shared_input(data)
     rewrite = None
     for name, args in normalized_tools(data):
-        for output in run_shared_hooks('PreToolUse', {
+        outputs = run_shared_hooks('PreToolUse', {
             **hook_input, 'tool_name': name, 'tool_input': args,
-        }):
+        }) if completed_outputs is None else completed_outputs
+        for output in outputs:
+            user_warning(output)
             decision = output.get('hookSpecificOutput', {})
             if decision.get('permissionDecision') == 'deny':
                 return {
@@ -119,7 +115,7 @@ def pre_tool_use(data):
             if 'updatedInput' in decision:
                 rewrite = decision['updatedInput']
     if rewrite is None:
-        return docs_cache_hook(docs_cache.copilot_pre, data)
+        return docs_cache_hook(docs_cache.copilot_pre, data) if completed_outputs is None else None
     if data['toolName'] == 'apply_patch':
         return {
             'permissionDecision': 'deny',
@@ -137,56 +133,25 @@ def pre_tool_use(data):
     return {'modifiedArgs': modified}
 
 
-def response_context(data):
-    """Wait for this stop invocation to be flushed, never inspect a stale turn."""
-    deadline = time.monotonic() + TRANSCRIPT_WAIT_SECONDS
-    response = {'text': None, 'stop': data}
-    with Path(data['transcriptPath']).open(encoding='utf-8') as transcript:
-        while time.monotonic() < deadline:
-            position = transcript.tell()
-            line = transcript.readline()
-            if not line or not line.endswith('\n'):
-                transcript.seek(position)
-                time.sleep(0.05)
-                continue
-            output = consume_response_event(response, json.loads(line))
-            if output:
-                return output
-    raise TimeoutError('current Copilot stop invocation was not flushed to the transcript')
-
-
-def consume_response_event(response, event):
-    payload = event.get('data', {})
-    if event.get('agentId') or payload.get('parentToolCallId'):
-        return None
-    kind = event.get('type')
-    if kind in ('user.message', 'assistant.turn_start'):
-        response['text'] = None
-    elif kind == 'assistant.message':
-        response['text'] = None if payload.get('toolRequests') else payload.get('content')
-    elif kind == 'session.task_complete':
-        summary = payload.get('summary')
-        response['text'] = summary if isinstance(summary, str) and summary.strip() else None
-    elif kind == 'hook.start' and payload.get('hookType') == 'agentStop':
-        invocation = payload.get('input') or {}
-        if (invocation.get('sessionId') == response['stop']['sessionId']
-                and invocation.get('timestamp') == response['stop']['timestamp']):
-            available = isinstance(response['text'], str)
-            return {
-                'last_assistant_message': response['text'] if available else None,
-            }
-    return None
-
-
-def final_response(data):
-    return response_context(data)['last_assistant_message']
-
-
 def run_hook(event, data):
+    try:
+        with invocation_deadline(4 if event == 'sessionEnd' else ADAPTER_TIMEOUT_SECONDS):
+            return dispatch(event, data)
+    except InvocationDeadline as error:
+        user_warning(unavailable('copilot-adapter', error))
+        if event == 'preToolUse' and error.outputs:
+            return pre_tool_use(data, error.outputs)
+        return next((item for item in error.outputs if item.get('decision') == 'block'), None)
+    except Exception as error:
+        user_warning(unavailable('copilot-adapter', error))
+        return None
+
+
+def dispatch(event, data):
     hook_input = shared_input(data)
-    synchronize(hook_input['cwd'], 'copilot')
     if event == 'userPromptTransformed':
         return transform_prompt(data)
+    synchronize(hook_input['cwd'], 'copilot')
     if event == 'preToolUse':
         return pre_tool_use(data)
     if event in ('postToolUse', 'postToolUseFailure'):
@@ -206,26 +171,15 @@ def run_hook(event, data):
         user_warning(notice)
         return {'additionalContext': '\n\n'.join(messages)} if messages else None
     if event == 'agentStop':
-        if not enabled('fix_emdash', hook_input):
-            user_warning(docs_cache_hook(docs_cache.copilot_stop, data))
-            return None
-        response = response_context(data)
-        if response['last_assistant_message'] is None:
-            user_warning({'systemMessage': 'Final punctuation check unavailable: the current response text is missing.'})
-        outputs = run_shared_hooks('Stop', {
-            **hook_input, **response,
-        })
+        outputs = run_shared_hooks('Stop', hook_input)
         for output in outputs:
             user_warning(output)
         decision = next((output for output in outputs if output.get('decision') == 'block'), None)
         if decision:
             return decision
-        user_warning(docs_cache_hook(docs_cache.copilot_stop, {
-            **data, 'last_assistant_message': response['last_assistant_message'],
-        }))
+        user_warning(docs_cache_hook(docs_cache.copilot_stop, data))
         return None
     if event == 'sessionEnd':
-        Path(f'/tmp/.ioncache-pending-question-{hook_input["session_id"]}').unlink(missing_ok=True)
         run_shared_hooks('SessionEnd', hook_input)
         return None
     if event in ('sessionStart', 'preCompact', 'subagentStart'):
@@ -254,8 +208,7 @@ def main():
         if output:
             print(json.dumps(output))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as err:
-        print(f'copilot-adapter: {err}', file=sys.stderr)
-        sys.exit(1)
+        user_warning(unavailable('copilot-adapter', err))
 
 
 if __name__ == '__main__':

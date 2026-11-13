@@ -6,15 +6,18 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import uuid
 
 import plugin_config as config
-import scope_guard
+import guidance
 from classify_question import marker_path
 from hook_adapter_common import run_shared_hooks
 
@@ -42,6 +45,26 @@ class ConfigurationTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
+
+    def test_guidance_deadline_reports_unavailability_and_next_call_recovers(self):
+        def slow_settings(*args, **kwargs):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+
+        with (
+            mock.patch.object(guidance, 'feature_settings', side_effect=slow_settings),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertNotIn('hookSpecificOutput', output)
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'continued'},
+        }))
+        self.assertIn('additionalContext', guidance.run_hook('UserPromptSubmit', {
+            **self.data, 'prompt': 'Implement the fix',
+        })['hookSpecificOutput'])
+
     def test_install_update_adds_preserves_and_removes_settings(self):
         path = self.root / 'config.json'
         old = {'features': {'retained': True, 'disabled': True, 'removed': True}}
@@ -58,15 +81,15 @@ class ConfigurationTests(unittest.TestCase):
     def test_legacy_settings_migrate_and_retired_claim_settings_disappear(self):
         for host, (path, project_path) in config.paths(self.project).items():
             with self.subTest(host=host):
-                self.write(path, {'disabledRules': ['never_kill_without_asking', 'claim-evidence', 'graphify'],
+                self.write(path, {'disabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify'],
                                   'enabledRules': ['verify-state-before-claiming']})
-                self.write(project_path, {'enabledRules': ['never_kill_without_asking', 'claim-evidence', 'graphify']})
+                self.write(project_path, {'enabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify']})
                 config.synchronize(str(self.project), host)
                 stored = json.loads(path.read_text())
                 self.assertEqual(set(stored['features']), set(config.defaults()))
-                self.assertFalse(stored['features']['never_kill_without_asking'])
+                self.assertFalse(stored['features']['no_broad_process_kill'])
                 self.assertEqual(json.loads(project_path.read_text()), {
-                    'features': {'never_kill_without_asking': True},
+                    'features': {'no_broad_process_kill': True},
                 })
                 self.assertNotIn('disabledRules', stored)
                 self.assertNotIn('claim-evidence', path.read_text())
@@ -79,19 +102,19 @@ class ConfigurationTests(unittest.TestCase):
         toml.parent.mkdir(parents=True)
         original = (
             'model = "configured-model"\n[ioncache-ai-tools]\n'
-            'disabled_rules = ["never_kill_without_asking", "claim-evidence"]\n'
+            'disabled_rules = ["no_broad_process_kill", "claim-evidence"]\n'
             f'[projects.{json.dumps(str(self.project))}.ioncache-ai-tools]\n'
-            'enabled_rules = ["never_kill_without_asking"]\n'
+            'enabled_rules = ["no_broad_process_kill"]\n'
         )
         toml.write_text(original)
-        self.assertNotIn('never_kill_without_asking', config.synchronize(str(self.project), 'codex'))
+        self.assertNotIn('no_broad_process_kill', config.synchronize(str(self.project), 'codex'))
         self.assertEqual(toml.read_text(), original)
         stored = json.loads(global_path.read_text())
-        self.assertFalse(stored['features']['never_kill_without_asking'])
+        self.assertFalse(stored['features']['no_broad_process_kill'])
         self.assertNotIn('claim-evidence', global_path.read_text())
-        stored['features']['never_kill_without_asking'] = True
+        stored['features']['no_broad_process_kill'] = True
         self.write(global_path, stored)
-        self.assertNotIn('never_kill_without_asking', config.synchronize(str(self.root), 'codex'))
+        self.assertNotIn('no_broad_process_kill', config.synchronize(str(self.root), 'codex'))
 
     def test_project_overrides_inherit_defaults_and_cross_host_disables(self):
         paths = config.paths(self.project)
@@ -206,6 +229,22 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(config.sync_file(path, catalog), stored)
         lock.assert_not_called()
 
+    def test_contended_configuration_lock_is_bounded_and_preserves_preferences(self):
+        path = self.root / 'settings.json'
+        self.write(path, {'features': {'fix_emdash': False}})
+        original = path.read_text()
+        lock_path = path.with_name('.' + path.name + '.lock')
+        with lock_path.open('a') as lock, mock.patch.object(config, 'LOCK_WAIT_SECONDS', 0.02):
+            config.fcntl.flock(lock, config.fcntl.LOCK_EX)
+            with self.assertRaisesRegex(TimeoutError, 'configuration lock'):
+                config.sync_file(path, config.defaults())
+            with mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                stored = config.sync_file(path, config.defaults(), strict=False)
+            self.assertFalse(stored['features']['fix_emdash'])
+            self.assertIn('could not persist', stderr.getvalue())
+            self.assertEqual(path.read_text(), original)
+        self.assertFalse(config.sync_file(path, config.defaults())['features']['fix_emdash'])
+
     def test_sync_rereads_preferences_after_acquiring_the_writer_lock(self):
         path = self.root / 'settings.json'
         self.write(path, {'features': {'fix_emdash': True}})
@@ -222,28 +261,28 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_feature_lookup_reads_the_catalog_once(self):
         with mock.patch.object(config, 'defaults', wraps=config.defaults) as catalog:
-            self.assertTrue(config.enabled('never_kill_without_asking', self.data))
+            self.assertTrue(config.enabled('no_broad_process_kill', self.data))
         self.assertEqual(catalog.call_count, 1)
 
     def test_deterministic_guard_resolves_settings_once(self):
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
+        guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
         with mock.patch.object(config, 'sync_file', wraps=config.sync_file) as reads:
-            self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+            self.assertIsNone(guidance.run_hook('PreToolUse', {
                 **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'},
             }))
         self.assertEqual(reads.call_count, 1)
 
     def test_question_guard_observes_configuration_changes_between_calls(self):
         path = config.paths(self.project)['claude'][0]
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did that change?'})
+        prompt = {**self.data, 'prompt': 'Why did that change?'}
+        self.assertIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
         data = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'}}
-        self.assertIn('classified as a question', str(scope_guard.run_hook('PreToolUse', data)))
+        self.assertIsNone(guidance.run_hook('PreToolUse', data))
         self.write(path, {'features': {'answer-questions': False}})
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', data))
+        self.assertNotIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
         self.write(path, {'features': {'answer-questions': True}})
-        self.assertIn('classified as a question', str(scope_guard.run_hook('PreToolUse', data)))
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the requested fix'})
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', data))
+        self.assertIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
+        self.assertIsNone(guidance.run_hook('PreToolUse', data))
 
     def test_all_features_off_prevents_policy_and_tool_denials(self):
         global_path = config.paths(self.project)['claude'][0]
@@ -252,10 +291,26 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('Disabled plugin skills:', str(output))
         self.assertNotIn('answer-only', str(output))
         self.assertEqual(run_shared_hooks('PreToolUse', {
-            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'kill 123'},
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
         }), [])
         self.assertEqual(run_shared_hooks('Stop', {
             **self.data, 'last_assistant_message': chr(0x2014),
+        }), [])
+
+
+    def test_response_punctuation_does_not_gate_completion_or_disable_file_checks(self):
+        dash = chr(0x2014)
+        self.assertEqual(run_shared_hooks('Stop', {
+            **self.data, 'last_assistant_message': f'Already visible{dash}text',
+        }), [])
+        output = run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': dash},
+        })
+        self.assertIn('updatedInput', str(output))
+        path = config.paths(self.project)['claude'][0]
+        self.write(path, {'features': {'fix_emdash': False}})
+        self.assertEqual(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': dash},
         }), [])
 
     def test_skill_catalog_and_independent_opt_out(self):
@@ -264,19 +319,41 @@ class ConfigurationTests(unittest.TestCase):
                           if name.startswith('skill:')}, skills)
         path = config.paths(self.project)['claude'][0]
         self.write(path, {'features': {'skill:review-code': False}})
-        output = scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
+        output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
         self.assertIn('Disabled plugin skills: review-code', str(output))
         for name in ('review-code', 'ioncache-ai-tools:review-code'):
-            denied = scope_guard.run_hook('PreToolUse', {
+            denied = guidance.run_hook('PreToolUse', {
                 **self.data, 'tool_name': 'Skill', 'tool_input': {'skill': name},
             })
             self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'skill', 'tool_input': {'skill': 'security'},
         }))
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'skill', 'tool_input': {'skill': 'another-plugin:review-code'},
         }))
+
+    def test_retired_question_entrypoint_cannot_reactivate_stale_markers(self):
+        legacy = self.root / 'legacy-registration'
+        self.write(legacy / 'hooks/hooks.json', {'hooks': {'PreToolUse': [{
+            'hooks': [{'command': shlex.join([
+                sys.executable, str(ROOT / 'hooks/scripts/block_pending_question.py'),
+            ])}],
+        }]}})
+        for actor in (None, 'worker'):
+            data = {**self.data, 'agent_id': actor, 'tool_name': 'Write',
+                    'tool_input': {'file_path': 'target.py', 'content': 'requested'}}
+            marker = marker_path(data)
+            marker.touch()
+            self.addCleanup(lambda path=marker: path.unlink(missing_ok=True))
+            with self.subTest(actor=actor):
+                with mock.patch('hook_adapter_common.PLUGIN_ROOT', legacy):
+                    self.assertEqual(run_shared_hooks('PreToolUse', data), [])
+                self.assertEqual(run_shared_hooks('PreToolUse', data), [])
+                denial = run_shared_hooks('PreToolUse', {
+                    **data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
+                })
+                self.assertEqual(denial[0]['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_corrupt_config_allows_repair_then_restores_opt_out(self):
         path = config.paths(self.project)['claude'][0]
@@ -289,14 +366,16 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash'})
 
     def test_question_and_scope_opt_out_do_not_disable_process_guard(self):
-        scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})
+        guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})
         path = config.paths(self.project)['claude'][0]
-        self.write(path, {'features': {'answer-questions': False, 'scope-exactly-what-asked': False}})
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+        self.write(path, {'features': {
+            'answer-questions': False, 'scope-exactly-what-asked': False,
+        }})
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'requested'},
         }))
         result = run_shared_hooks('PreToolUse', {
-            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'kill 123'},
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
         })
         self.assertEqual(result[0]['hookSpecificOutput']['permissionDecision'], 'deny')
 
@@ -305,16 +384,16 @@ class ConfigurationTests(unittest.TestCase):
             'import importlib.abc,json,sys\n'
             'class NoClaims(importlib.abc.MetaPathFinder):\n'
             ' def find_spec(self,name,*args):\n'
-            '  if name in {"turn_guard","turn_review","scope_review","copilot_history","claim_evidence","evidence_review","evidence_source"}:\n'
+            '  if name in {"scope_guard","task_authorization","block_pending_question","turn_guard","turn_review","scope_review","copilot_history","claim_evidence","evidence_review","evidence_source","block_emdash_turn"}:\n'
             '   raise AssertionError("Retired module loaded: "+name)\n'
             'sys.meta_path.insert(0,NoClaims())\n'
-            'import copilot_adapter,codex_adapter,scope_guard,docs_cache\n'
+            'import copilot_adapter,codex_adapter,guidance,docs_cache\n'
             'from hook_adapter_common import run_shared_hooks\n'
             'data=json.loads(sys.argv[1])\n'
-            'scope_guard.run_hook("SessionStart",data)\n'
-            'scope_guard.run_hook("UserPromptSubmit",{**data,"prompt":"Implement the change"})\n'
-            'scope_guard.run_hook("PreToolUse",{**data,"tool_name":"Write","tool_input":{"file_path":"x","content":"claim"}})\n'
-            'scope_guard.run_hook("PostToolUse",{**data,"tool_name":"Read","tool_input":{},"tool_response":"output"})\n'
+            'guidance.run_hook("SessionStart",data)\n'
+            'guidance.run_hook("UserPromptSubmit",{**data,"prompt":"Implement the change"})\n'
+            'guidance.run_hook("PreToolUse",{**data,"tool_name":"Write","tool_input":{"file_path":"x","content":"claim"}})\n'
+            'guidance.run_hook("PostToolUse",{**data,"tool_name":"Read","tool_input":{},"tool_response":"output"})\n'
             'run_shared_hooks("Stop",{**data,"last_assistant_message":"The tests passed."})\n'
             'url="https://example.com/api"\n'
             'docs_cache.store_fact(docs_cache.cache_key(url,None),url,"fact","copilot",length=20000)\n'
@@ -326,7 +405,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_each_tool_rule_has_an_effective_independent_opt_out(self):
         cases = (
-            ('never_kill_without_asking', 'Bash', {'command': 'kill 123'}),
+            ('no_broad_process_kill', 'Bash', {'command': 'pkill worker'}),
             ('block_raw_worktree_add', 'Bash', {'command': 'git worktree add ../feature -b feature'}),
             ('no-manual-lockfile-edit', 'Write', {'file_path': 'yarn.lock', 'content': 'edited'}),
             ('no_manual_lockfile_edit_bash', 'Bash', {'command': 'echo edited > yarn.lock'}),
@@ -365,10 +444,10 @@ class ConfigurationTests(unittest.TestCase):
         self.write(config.paths(self.project)['claude'][0], {
             'features': {'documentation-first': False},
         })
-        output = scope_guard.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the code'})
+        output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Explain the code'})
         self.assertNotIn('documentation-backed', str(output))
         self.assertIn('Scope includes', str(output))
-        self.assertIsNone(scope_guard.run_hook('PreToolUse', {
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
             **self.data, 'tool_name': 'Grep', 'tool_input': {'pattern': 'entry'},
         }))
 
@@ -376,7 +455,9 @@ class ConfigurationTests(unittest.TestCase):
         for host, (path, project_path) in config.paths(self.project).items():
             with self.subTest(host=host):
                 self.write(path, {
-                    'features': {'graphify': True, 'approval-recovery': True, 'answer-questions': False},
+                    'features': {'graphify': True, 'approval-recovery': True, 'answer-questions': False,
+                                 'task-authorization': True, 'skill:task-authorization': True,
+                                 'never_kill_without_asking': True, 'display-emdash': True},
                     'projects': {str(self.project): {'features': {'graphify': False, 'fix_emdash': False}}},
                 })
                 self.write(project_path, {'features': {'graphify': True, 'docs-cache': False}})
@@ -384,54 +465,13 @@ class ConfigurationTests(unittest.TestCase):
                 stored = json.loads(path.read_text())
                 self.assertNotIn('graphify', path.read_text())
                 self.assertNotIn('approval-recovery', stored['features'])
+                for retired in ('task-authorization', 'skill:task-authorization', 'never_kill_without_asking',
+                                'display-emdash'):
+                    self.assertNotIn(retired, stored['features'])
                 self.assertFalse(stored['features']['answer-questions'])
                 self.assertTrue(stored['features']['fix_emdash'])
                 self.assertEqual(stored['projects'][str(self.project)], {'features': {'fix_emdash': False}})
                 self.assertEqual(json.loads(project_path.read_text()), {'features': {'docs-cache': False}})
-
-    def test_graph_files_and_stale_state_do_not_gate_shared_hooks(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
-        (self.project / 'source.py').write_text('entry = 1\n')
-        output = run_shared_hooks('UserPromptSubmit', {**self.data, 'prompt': 'Why does this fail?'})
-        self.assertNotIn('graphify', str(output).lower())
-        with scope_guard.store_for(self.data) as store:
-            state = store.get(scope_guard.CATEGORY, 'state')
-            state.update(graph={'identity': None}, pending_graph=[str(graph), 0, 0])
-            store.put(scope_guard.CATEGORY, ('state', state))
-        for event, fields in (('PreCompact', {}), ('SessionStart', {'source': 'resume'})):
-            self.assertNotIn('graphify', str(run_shared_hooks(event, {**self.data, **fields})).lower())
-        for agent in (None, 'child'):
-            data = {**self.data, 'agent_id': agent}
-            for name, args in (('Read', {'file_path': 'source.py'}), ('Grep', {'pattern': 'entry'}),
-                               ('Glob', {'pattern': '*.py'}), ('Bash', {'command': 'cat source.py'})):
-                self.assertEqual(run_shared_hooks('PreToolUse', {
-                    **data, 'tool_name': name, 'tool_input': args,
-                }), [])
-            if agent:
-                with scope_guard.store_for(data) as store:
-                    child = store.get(scope_guard.CATEGORY, 'state')
-                self.assertEqual(child['parent_turn'], state['id'])
-                self.assertTrue(child['question'])
-                output = run_shared_hooks('PostToolUseFailure', {
-                    **data, 'tool_name': 'Read', 'tool_input': {'file_path': 'source.py'},
-                    'error': 'Read interrupted',
-                })
-                self.assertIn('Question turn:', str(output))
-                self.assertNotIn('graphify', str(output).lower())
-            denied = run_shared_hooks('PreToolUse', {
-                **data, 'tool_name': 'Write', 'tool_input': {'file_path': 'source.py', 'content': 'edited'},
-            })
-            self.assertEqual(denied[0]['hookSpecificOutput']['permissionDecision'], 'deny')
-        run_shared_hooks('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
-        run_shared_hooks('SubagentStart', {**self.data, 'agent_id': 'child'})
-        for agent in (None, 'child'):
-            self.assertEqual(run_shared_hooks('PreToolUse', {
-                **self.data, 'agent_id': agent, 'tool_name': 'Write',
-                'tool_input': {'file_path': 'source.py', 'content': 'fixed'},
-            }), [])
-        self.assertEqual(graph.read_text(), '{}')
 
 
 if __name__ == '__main__':

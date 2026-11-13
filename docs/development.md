@@ -33,8 +33,16 @@ Claude relative-path plugins from local-directory marketplaces also load in
 place. Reload with `/reload-plugins` or start a new session after changes.
 Remote installs are cached.
 
-Direct Copilot installs use a cached copy. Refresh a local installation with
-`copilot plugin install .`, then start a new session.
+Direct Copilot repository installs use a cached copy. For a persistent local
+source, register a local marketplace and install from it:
+
+```sh
+copilot plugin marketplace add /absolute/path/to/checkout
+copilot plugin install ioncache-ai-tools@ioncache-ai-tools
+```
+
+Start a new session after source changes. `copilot plugin install .` is not a
+supported local-directory installation command.
 
 Codex installs use cached copies too. Update the source referenced by the
 marketplace, reinstall with

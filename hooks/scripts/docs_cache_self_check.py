@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -123,6 +124,30 @@ class DocsCacheTests(unittest.TestCase):
         self.assertEqual(docs_cache.copilot_pre(fetch(max_length=16000))['permissionDecision'], 'deny')
         self.assertIsNone(docs_cache.copilot_pre(fetch()))
         self.assertIsNone(docs_cache.copilot_pre(fetch(max_length=16000)))
+
+    def test_concurrent_cache_recovery_does_not_overwrite_retry_allowances(self):
+        docs_cache.store_fact(self.key, URL, 'fact', 'copilot', length=20000)
+        entered, release = threading.Event(), threading.Event()
+        write_private = docs_cache.write_private
+
+        def delayed_write(path, text):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError('cache test did not release its writer')
+            write_private(path, text)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with mock.patch.object(docs_cache, 'write_private', side_effect=delayed_write):
+                first = pool.submit(docs_cache.copilot_pre, fetch())
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.assertIsNone(docs_cache.copilot_pre(fetch(max_length=16000)),
+                                      'cache contention must leave live fetching available')
+                finally:
+                    release.set()
+                self.assertEqual(first.result()['permissionDecision'], 'deny')
+        self.assertIsNone(docs_cache.copilot_pre(fetch()), 'the first denied call must retain its live retry')
+        self.assertEqual(docs_cache.copilot_pre(fetch())['permissionDecision'], 'deny')
 
     def test_volatile_pages_ignore_existing_entries(self):
         url = 'https://example.com/latest'

@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Deny recognized mutations for the whole question turn, not just its start.
+"""Legacy mutation helpers retained for inactive review implementations.
 
-Read-only research remains available. A new non-question user prompt clears
-the restriction; plugin-generated corrections do not. Shell matching catches
-common accidental actions, not every possible interpreter or shell construct.
+Executing this retired hook emits no decision, including for stale question
+markers. Active question handling lives in guidance.py.
 """
 
-import json
 import os
 import re
 import shlex
@@ -14,8 +12,6 @@ import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plugin_config import enabled  # noqa: E402
-from classify_question import marker_path  # noqa: E402
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
     without_redirections,
@@ -278,44 +274,3 @@ def allows_review_metadata(data):
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
         print(f'pending-question: evidence review validation failed: {error}', file=sys.stderr)
         return False
-
-
-def main():
-    data = json.load(sys.stdin)
-    if not enabled('answer-questions', data):
-        return
-    tool_name = data.get("tool_name", "")
-    tool_input = data.get("tool_input", {})
-
-    flags = (marker_path(data), marker_path({**data, 'agent_id': None}))
-    if not any(flag.exists() for flag in flags):
-        return
-
-    if not is_mutating(tool_name, tool_input):
-        return
-
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    # Names the classifier as the thing that fired, and gives a
-                    # way out, because the classifier is a word match and
-                    # misfires on instructions opening with "when" or "if".
-                    # Asserting the message *was* a question left the user with
-                    # no way to tell a misfire from a real block, and no way
-                    # past it.
-                    "permissionDecisionReason": (
-                        "BLOCKED: classified as a question. This turn is answer-only, "
-                        "not answer-then-act. Read-only research remains available. "
-                        "A new non-question user instruction clears this restriction."
-                    ),
-                }
-            }
-        )
-    )
-
-
-if __name__ == "__main__":
-    main()

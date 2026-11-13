@@ -17,7 +17,7 @@ import shlex
 import signal
 import sys
 
-from hook_adapter_common import AmbiguousPatchHeader, PATCH_REWRITE_REASON, patch_inputs
+from hook_adapter_common import AmbiguousPatchHeader, PATCH_REWRITE_REASON, patch_inputs, unavailable
 from plugin_config import defaults, synchronize
 
 try:
@@ -217,7 +217,7 @@ def split_into_simple_commands(tokens):
 # knowledge, real scope beyond what this covers, and stays a known,
 # accepted gap. env additionally supports ignore-environment/unset options
 # and assignments; split-string and other env options remain uninterpreted.
-NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf'}
+NO_ARG_WRAPPERS = {'nohup', 'command', 'builtin', 'nice', 'time', 'stdbuf', 'exec'}
 DURATION_ARG_WRAPPERS = {'timeout'}
 
 
@@ -261,6 +261,18 @@ def skip_wrappers(simple_command):
             continue
         break
     return simple_command[i:]
+
+
+def command_executable(simple_command):
+    executable = skip_wrappers(without_redirections(simple_command))
+    prefixes = {'if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', '{'}
+    while executable and (
+        executable[0] in prefixes or re.match(r'^[A-Za-z_][A-Za-z_0-9]*=', executable[0])
+    ):
+        executable = skip_wrappers(executable[1:])
+    if not executable:
+        return []
+    return [os.path.basename(executable[0]), *executable[1:]]
 
 
 def match_rule(rule, hook_input):
@@ -355,24 +367,7 @@ def _validated_result(result, rule_name):
     return result
 
 
-def run_rules(rules, event, hook_input):
-    matched = []
-    for rule in rules:
-        try:
-            if match_rule(rule, hook_input):
-                matched.append(rule)
-        except Exception as err:
-            print(f'rule-engine: matcher threw for rule "{rule.get("name", "unknown")}": {err}', file=sys.stderr)
-
-    results = []
-    for rule in matched:
-        try:
-            result = resolve_action(rule, hook_input)
-            results.append(_validated_result(result, rule.get('name', 'unknown')))
-        except Exception as err:
-            print(f'rule-engine: check threw for rule "{rule.get("name", "unknown")}": {err}', file=sys.stderr)
-            results.append(None)
-
+def _merge_results(results, event):
     if event == 'PreToolUse':
         return merge_pre_tool_use(results)
     if event in ('UserPromptSubmit', 'SessionStart'):
@@ -381,6 +376,32 @@ def run_rules(rules, event, hook_input):
             output['hookSpecificOutput']['hookEventName'] = event
         return output
     return None
+
+
+class RuleDeadline(BaseException):
+    """Do not let configuration or per-rule error recovery swallow the deadline."""
+
+    output = None
+
+
+def run_rules(rules, event, hook_input):
+    results = []
+    try:
+        for rule in rules:
+            try:
+                if match_rule(rule, hook_input):
+                    result = _validated_result(resolve_action(rule, hook_input), rule.get('name', 'unknown'))
+                    results.append(result)
+                    if event == 'PreToolUse' and result and result.get('action') == 'deny':
+                        break
+            except RuleDeadline:
+                raise
+            except Exception as err:
+                print(f'rule-engine: check threw for rule "{rule.get("name", "unknown")}": {err}', file=sys.stderr)
+    except RuleDeadline as error:
+        error.output = _merge_results(results, event)
+        raise
+    return _merge_results(results, event)
 
 
 def _load_python_rule(full_path):
@@ -408,6 +429,8 @@ def load_rule_file(rules_dir, name):
         rule = dict(rule)
         rule['name'] = name
         return rule
+    except RuleDeadline:
+        raise
     except Exception as err:
         print(f'rule-engine: skipping rule file "{name}": {err}', file=sys.stderr)
         return None
@@ -547,9 +570,15 @@ def run_patch_rules(rules, hook_input):
     except AmbiguousPatchHeader as error:
         return merge_pre_tool_use([{'action': 'deny', 'message': str(error)}])
     for item in edits:
-        output = run_rules(rules, 'PreToolUse', {
-            **hook_input, 'tool_name': 'Edit', 'tool_input': item,
-        })
+        try:
+            output = run_rules(rules, 'PreToolUse', {
+                **hook_input, 'tool_name': 'Edit', 'tool_input': item,
+            })
+        except RuleDeadline as error:
+            decision = (error.output or {}).get('hookSpecificOutput', {})
+            if rewrite_needed or 'updatedInput' in decision:
+                error.output = merge_pre_tool_use([{'action': 'deny', 'message': PATCH_REWRITE_REASON}])
+            raise
         decision = (output or {}).get('hookSpecificOutput', {})
         if decision.get('permissionDecision') == 'deny':
             return output
@@ -595,8 +624,7 @@ def _handle_alarm(signum, frame):
     # since nothing else forces exit. This fires regardless of what
     # run_hook() is doing, including inside a blocking C call, unlike a
     # single-threaded async watchdog that can't preempt synchronous work.
-    print('rule-engine: evaluation exceeded the five-second deadline', file=sys.stderr)
-    sys.exit(2)
+    raise RuleDeadline('evaluation exceeded the five-second deadline')
 
 
 def main():
@@ -605,9 +633,8 @@ def main():
     Call as ``python3 hooks/scripts/rule_engine.py PreToolUse`` with a
     JSON payload on stdin, or use ``UserPromptSubmit`` for reminders.
     A policy denial is a successful evaluation: exit 0 with a JSON
-    decision. No action produces no stdout. Unhandled engine failures,
-    including rule-discovery failures, and watchdog expiry log to stderr
-    and exit 2 rather than reporting successful evaluation.
+    decision. No action produces no stdout. Engine failures and watchdog
+    expiry report unavailability without blocking or granting host permission.
     """
     signal.signal(signal.SIGALRM, _handle_alarm)
     signal.alarm(HANG_TIMEOUT_SECONDS)
@@ -615,9 +642,10 @@ def main():
         output = run_hook()
         if output:
             print(json.dumps(output))
-    except Exception as err:
-        print(f'rule-engine: evaluation failed: {err}', file=sys.stderr)
-        sys.exit(2)
+    except (Exception, RuleDeadline) as err:
+        output = (err.output or {}) if isinstance(err, RuleDeadline) else {}
+        output.update(unavailable('rule-engine', err))
+        print(json.dumps(output))
     finally:
         signal.alarm(0)
     sys.exit(0)

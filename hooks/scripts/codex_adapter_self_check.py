@@ -8,6 +8,7 @@ from pathlib import Path
 import runpy
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,8 @@ import uuid
 
 import codex_adapter
 import docs_cache
-import scope_guard
+import guidance
+import hook_adapter_common
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +37,9 @@ class CodexAdapterTests(unittest.TestCase):
         self.project.mkdir()
         self.home = self.root / 'home'
         self.home.mkdir()
+        settings = self.home / '.claude/ioncache-ai-tools.local.json'
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({'features': {}}))
         self.env = {
             **os.environ,
             'HOME': str(self.home),
@@ -97,6 +102,21 @@ class CodexAdapterTests(unittest.TestCase):
             if output.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'
         ), {})
 
+    def test_autonomous_work_does_not_need_turn_or_task_permission_state(self):
+        (self.home / '.claude/ioncache-ai-tools.local.json').write_text('{"features": {}}')
+        self.prompt('Implement the requested change')
+        self.marker.write_text('stale question')
+        self.assertEqual(self.tool('spawn_agent', {'message': 'Implement the assigned change'}), {})
+        for identity in (None, 'first', 'second'):
+            self.invoke('UserPromptSubmit', agent_id=identity, prompt='Why did that change?')
+            self.invoke('PreCompact', agent_id=identity)
+            self.invoke('SessionStart', agent_id=identity, source='resume')
+            for worker in (None, 'first', 'second'):
+                self.assertEqual(self.invoke('PreToolUse', agent_id=worker, tool_name='apply_patch',
+                                             tool_input={'command': CLEAN_PATCH}), [{}])
+        self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
+
+
     def test_manifest_serializes_dependent_hooks(self):
         for event in ('UserPromptSubmit', 'PreToolUse', 'PostToolUse'):
             entries = self.entries(event)
@@ -104,18 +124,17 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertIn('codex_adapter.py', entries[0]['command'])
             self.assertTrue(entries[0]['command'].endswith(event))
 
-    def test_lifecycle_and_stop_correction_preserve_original_question(self):
+    def test_lifecycle_and_stop_do_not_create_question_permission_state(self):
         self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='startup')))
-        self.assertEqual(self.prompt('Why does this happen?').count('Question turn:'), 1)
+        self.assertEqual(self.prompt('Why does this happen?').count('Question guidance:'), 1)
         output = self.invoke('Stop', last_assistant_message=f'Bad{EM_DASH}punctuation.')[0]
-        self.assertEqual(output['decision'], 'block')
-        self.assertEqual(self.prompt(output['reason']), '')
-        self.assertTrue(self.marker.exists())
+        self.assertEqual(output, {})
+        self.assertFalse(self.marker.exists())
         self.invoke('PreCompact')
-        self.assertIn('Question turn:', str(self.invoke('SessionStart', source='compact')))
+        self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='compact')))
         output = self.invoke('Stop', last_assistant_message='Corrected punctuation.', stop_hook_active=True)[0]
         self.assertEqual(output, {})
-        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH})['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
 
     def test_scope_and_reply_checks_do_not_launch_a_reviewer(self):
         capture = self.root / 'unexpected-review.txt'
@@ -125,6 +144,95 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('task', {'prompt': 'Inspect the requested code'}), {})
         self.assertEqual(self.invoke('Stop', last_assistant_message='The change is ready.'), [{}])
         self.assertFalse(capture.exists())
+
+
+    def test_configuration_deadline_reports_failure_without_blocking_work(self):
+        self.prompt('Implement the requested change')
+        self.payload['turn_id'] = 'turn-2'
+        data = {**self.payload, 'prompt': 'Implement the revised change'}
+        with (
+            mock.patch.object(codex_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
+            mock.patch.object(codex_adapter, 'synchronize', side_effect=lambda *_: time.sleep(1)),
+            mock.patch.object(sys, 'argv', ['codex_adapter.py', 'UserPromptSubmit']),
+            mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(data))),
+            mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
+            mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
+        ):
+            codex_adapter.main()
+        self.assertNotIn('permissionDecision', notices.getvalue())
+        self.assertIn('invocation deadline', stderr.getvalue())
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+        self.assertEqual(self.tool('request_user_input', {}), {})
+        self.prompt('Implement the revised change')
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+
+    def test_session_end_reports_deadline_before_host_timeout_and_recovers(self):
+        settings = Path(self.env['CODEX_HOME']) / 'ioncache-ai-tools.local.json'
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        # A FIFO without a writer stalls the real adapter's configuration read.
+        os.mkfifo(settings)
+        try:
+            output, = self.invoke('SessionEnd')
+        finally:
+            settings.unlink()
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertEqual(set(output), {'systemMessage'})
+        self.assertEqual(self.invoke('SessionEnd'), [{}])
+        command = 'printf continued > shutdown-recovery.txt'
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': command}), [{}])
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / 'shutdown-recovery.txt').read_text(), 'continued')
+        self.assertEqual(self.tool('Bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
+
+    def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
+        rewrite = {'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'updatedInput': {'content': 'a, b'},
+        }}
+        for completed in ({}, rewrite):
+            with self.subTest(completed=completed):
+                def handler(*args, **kwargs):
+                    if run.call_count == 1:
+                        return subprocess.CompletedProcess(args[0], 0, json.dumps(completed), '')
+                    signal.setitimer(signal.ITIMER_REAL, 0.01)
+                    time.sleep(1)
+                    return subprocess.CompletedProcess(args[0], 0, '', '')
+
+                with (
+                    mock.patch.object(hook_adapter_common.subprocess, 'run', side_effect=handler) as run,
+                    mock.patch.object(docs_cache, 'native_hook') as cache,
+                    mock.patch.object(sys, 'stderr', io.StringIO()),
+                ):
+                    output = codex_adapter.run_hook('PreToolUse', {
+                        **self.payload, 'tool_name': 'Write',
+                        'tool_input': {'file_path': 'x', 'content': f'a{EM_DASH}b'},
+                    })
+                self.assertEqual(run.call_count, 2, 'No handler may start after invocation expiry')
+                cache.assert_not_called()
+                self.assertIn('invocation deadline', output.pop('systemMessage'))
+                expected = {'hookSpecificOutput': {
+                    **rewrite['hookSpecificOutput'], 'permissionDecision': 'allow',
+                }} if completed else {}
+                self.assertEqual(output, expected)
+        self.assertEqual(self.invoke('PreToolUse', tool_name='apply_patch',
+                                     tool_input={'command': CLEAN_PATCH}), [{}])
+        self.assertEqual(self.tool('Bash', {'command': 'pkill worker'})['permissionDecision'], 'deny')
+
+    def test_invocation_deadline_escapes_native_cache_failure_recovery(self):
+        def slow_cache(data):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+
+        with (
+            mock.patch.object(codex_adapter, 'run_shared_hooks', return_value=[]),
+            mock.patch.object(docs_cache, 'codex_pre', side_effect=slow_cache),
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            output = codex_adapter.run_hook('PreToolUse', {
+                **self.payload, 'tool_name': 'Read', 'tool_input': {'file_path': 'x'},
+            })
+        self.assertIn('invocation deadline', output['systemMessage'])
+        self.assertNotIn('hookSpecificOutput', output)
 
     def test_native_web_open_uses_shared_cache_without_granting_permission(self):
         args = {'open': [{'ref_id': 'https://git-scm.com/docs/git-commit'}], 'response_length': 'long'}
@@ -160,21 +268,6 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
-    def test_native_shell_results_are_not_collected_as_claim_evidence(self):
-        self.prompt('Inspect the command output')
-        fields = {'tool_name': 'Bash', 'tool_input': {'command': 'printf fixture'}}
-        for result, expected in (
-            ('exit code: 1', None), ('Process exited with code 0', None),
-            ({'exit_code': 1, 'stdout': 'exit code: 0'}, False),
-            ({'exit_code': 0, 'stdout': 'exit code: 1'}, True),
-        ):
-            with self.subTest(result=result):
-                self.invoke('PreToolUse', **fields)
-                self.invoke('PostToolUse', **fields, tool_response=result)
-                with scope_guard.store_for(self.payload) as store:
-                    state = store.get(scope_guard.CATEGORY, 'state')
-                self.assertNotIn('observations', state)
-                self.assertNotIn('command_history', state)
 
     def test_null_stop_response_does_not_require_a_cache_notice_in_prose(self):
         with mock.patch.dict(os.environ, self.env):
@@ -188,9 +281,9 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         text = self.prompt('why is this different')
-        self.assertIn('Question turn: answer and reasoning only', text)
-        self.assertTrue(self.marker.exists())
-        self.assertEqual(self.prompt('Implement the change'), '')
+        self.assertIn('Question guidance:', text)
+        self.assertFalse(self.marker.exists())
+        self.assertNotIn('Question guidance:', self.prompt('Implement the change'))
         self.assertFalse(self.marker.exists())
 
     def test_prompt_preserves_all_reminders_and_consumer_cwd(self):
@@ -199,34 +292,8 @@ class CodexAdapterTests(unittest.TestCase):
         for name in ('engineering-judgment', 'scope-exactly-what-asked'):
             rule = json.loads((ROOT / f'hooks/rules/{name}.json').read_text())
             self.assertIn(rule['message'], text)
-        self.assertEqual(self.prompt('Continue the implementation'), '')
+        self.assertIn('documentation-backed', self.prompt('Continue the implementation'))
 
-    def test_graph_files_do_not_gate_discovery_or_weaken_question_recovery(self):
-        graph = self.project / 'graphify-out/graph.json'
-        graph.parent.mkdir()
-        graph.write_text('{}')
-        (self.project / 'source.py').write_text('entry = 1\n')
-        config = self.home / '.codex/ioncache-ai-tools.local.json'
-        config.parent.mkdir(parents=True)
-        config.write_text(json.dumps({'features': {'graphify': True}}))
-        self.assertNotIn('graphify', self.prompt('Why does this fail?').lower())
-        self.invoke('PreCompact')
-        for event, fields in (('SessionStart', {'source': 'resume'}), ('SubagentStart', {'agent_id': 'child'})):
-            self.assertNotIn('graphify', str(self.invoke(event, **fields)).lower())
-        for child in ({}, {'agent_id': 'child'}):
-            for name, args in (('Read', {'file_path': 'source.py'}), ('Grep', {'pattern': 'entry'}),
-                               ('Glob', {'pattern': '*.py'}), ('Bash', {'command': 'cat source.py'})):
-                self.assertEqual(self.invoke('PreToolUse', **child, tool_name=name, tool_input=args), [{}])
-            denied = self.invoke('PreToolUse', **child, tool_name='apply_patch',
-                                 tool_input={'command': CLEAN_PATCH})[0]
-            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
-        self.prompt('Implement the fix')
-        self.invoke('SubagentStart', agent_id='child')
-        for child in ({}, {'agent_id': 'child'}):
-            self.assertEqual(self.invoke('PreToolUse', **child, tool_name='apply_patch',
-                                         tool_input={'command': CLEAN_PATCH}), [{}])
-        self.assertEqual(self.tool('Bash', {'command': 'kill 123'})['permissionDecision'], 'deny')
-        self.assertEqual(graph.read_text(), '{}')
 
     def test_engineering_reminder_can_be_disabled_and_reenabled(self):
         name = 'engineering-judgment'
@@ -244,23 +311,8 @@ class CodexAdapterTests(unittest.TestCase):
         project_config.write_text(json.dumps({'features': {name: True}}))
         self.invoke('PreCompact')
         self.assertIn(rule['message'], self.prompt('Implement the feature'))
-        self.assertEqual(self.prompt('Continue the feature'), '')
+        self.assertIn(rule['message'], self.prompt('Continue the feature'))
 
-    def test_question_blocks_patch_until_non_question_prompt(self):
-        self.prompt('why is this different')
-        output = self.tool('apply_patch', {'command': CLEAN_PATCH})
-        self.assertEqual(output.get('permissionDecision'), 'deny', output)
-        self.assertIn('classified as a question', output['permissionDecisionReason'])
-        self.assertEqual(self.tool('Bash', {'command': 'git status --short'}), {})
-        self.assertEqual(self.tool('Bash', {'command': "echo '>' output.txt"}), {})
-        selected = "gh api graphql -f 'query=query Read { q } mutation Change { m }' -f operationName=Change"
-        self.assertEqual(self.tool('Bash', {'command': selected})['permissionDecision'], 'deny')
-        self.assertEqual(self.tool('mcp__files__read', {'path': 'safe.txt'}), {})
-        self.invoke('Stop', last_assistant_message='Here is the answer.')
-        self.assertTrue(self.marker.exists())
-        self.prompt('Implement the change')
-        self.assertFalse(self.marker.exists())
-        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
 
     def test_patch_checks_all_targets_and_move_destinations(self):
         targets = (
@@ -342,7 +394,7 @@ class CodexAdapterTests(unittest.TestCase):
             subprocess.run(git + args, cwd=self.project, env=env, check=True, capture_output=True)
         config = self.project / '.claude/ioncache-ai-tools.local.json'
         config.parent.mkdir()
-        config.write_text('{"enabledRules":["never_kill_without_asking"]}\n')
+        config.write_text('{"enabledRules":["no_broad_process_kill"]}\n')
         runtime = self.root / 'runtime with spaces'
         runtime.mkdir()
         (runtime / 'python3').symlink_to(sys.executable)
@@ -528,21 +580,72 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(output['hookSpecificOutput']['updatedInput'], {'command': 'echo rewritten'})
 
     def test_native_shell_rules(self):
-        for command in ('kill 123', 'git worktree add /tmp/new', 'printf x > package-lock.json',
-                        f'echo a{EM_DASH}b', 'echo ready # status\nkill 123',
-                        "echo ready; kill 123\nprintf 'unfinished"):
+        for command in ('pkill worker', 'git worktree add /tmp/new', 'printf x > package-lock.json',
+                        'kill -TERM 00', 'kill -TERM +0',
+                        'exec pkill worker', 'exec kill -TERM +0', "exec sed -i 's/a/b/' package-lock.json",
+                        'MODE=review pkill worker', "if true; then sed -i 's/a/b/' package-lock.json; fi",
+                        f'echo a{EM_DASH}b', 'echo ready # status\npkill worker',
+                        "echo ready; pkill worker\nprintf 'unfinished"):
             with self.subTest(command=command):
                 output = self.tool('Bash', {'command': command})
                 self.assertEqual(output.get('permissionDecision'), 'deny', output)
         self.assertEqual(self.tool('Bash', {'command': 'echo kill'}), {})
-        self.assertEqual(self.tool('Bash', {'command': "echo ';' kill 123"}), {})
+        self.assertEqual(self.tool('Bash', {'command': "echo ';' pkill worker"}), {})
         self.assertEqual(self.tool('Bash', {'command': "echo '>' package-lock.json"}), {})
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'exec echo pkill worker'}), [{}])
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'exec npm install --package-lock-only --ignore-scripts'}), [{}])
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': 'kill -TERM 12345'}), [{}])
 
-    def test_graphql_template_cannot_hide_mutation(self):
-        self.prompt('why is this different')
-        command = "gh api graphql -f 'query=mutation { m }' --template '-fquery=query { q }'"
-        self.assertEqual(self.tool('Bash', {'command': command}).get('permissionDecision'), 'deny')
-        self.assertEqual(self.tool('Bash', {'command': command.replace('mutation { m }', 'query { q }')}), {})
+    def test_literal_data_recovers_without_rewriting_paths_or_content(self):
+        original = f"printf 'a{EM_DASH}b' > 'literal{EM_DASH}.txt'"
+        denied = self.tool('Bash', {'command': original})
+        self.assertEqual(denied['permissionDecision'], 'deny')
+        script = (
+            'from pathlib import Path; '
+            'Path("literal" + chr(0x2014) + ".txt").write_text('
+            '"a" + chr(0x2014) + "b", encoding="utf-8")'
+        )
+        command = shlex.join([sys.executable, '-c', script])
+        self.assertNotIn(EM_DASH, command)
+        self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                     tool_input={'command': command}), [{}])
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / f'literal{EM_DASH}.txt').read_bytes(),
+                         f'a{EM_DASH}b'.encode('utf-8'))
+        self.assertEqual(self.tool('Bash', {'command': original})['permissionDecision'], 'deny')
+        self.assertIn('chr(0x2014)', denied['permissionDecisionReason'])
+
+    def test_process_denial_recovers_with_owned_pid_and_continued_work(self):
+        self.prompt('Stop the disposable worker and continue writing the report')
+        for prefix in ('', 'exec '):
+            with self.subTest(prefix=prefix):
+                worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=self.env)
+                try:
+                    self.assertIsNone(worker.poll())
+                    broad = prefix + 'pkill fixture-worker'
+                    denied = self.tool('Bash', {'command': broad})
+                    self.assertEqual(denied['permissionDecision'], 'deny')
+                    self.assertIn('exact positive PID', denied['permissionDecisionReason'])
+                    self.assertIsNone(worker.poll())
+                    command = f'{prefix}kill {worker.pid}'
+                    self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                                 tool_input={'command': command}), [{}])
+                    subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+                    self.assertLess(worker.wait(timeout=5), 0)
+                    command = 'printf continued > cleanup-report.txt'
+                    self.assertEqual(self.invoke('PreToolUse', tool_name='Bash',
+                                                 tool_input={'command': command}), [{}])
+                    subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+                    self.assertEqual((self.project / 'cleanup-report.txt').read_text(), 'continued')
+                    self.assertEqual(self.tool('Bash', {'command': broad})['permissionDecision'], 'deny')
+                finally:
+                    if worker.poll() is None:
+                        worker.terminate()
+                        worker.wait(timeout=5)
+
 
     def test_patch_header_whitespace_is_denied(self):
         for target in ('Add File: yarn.lock\f\n+x', 'Update File: yarn.lock\f\n@@\n-old\n+new',
@@ -577,13 +680,13 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(output.get('permissionDecision'), 'deny', output)
         self.assertIn('lockfile', output['permissionDecisionReason'])
 
-    def test_stop_uses_supplied_response(self):
+    def test_stop_does_not_retry_already_visible_responses(self):
         self.assertEqual(self.invoke('Stop', last_assistant_message='clean response'), [{}])
         outputs = self.invoke('Stop', last_assistant_message=f'bad{EM_DASH}text')
-        self.assertEqual(outputs[0]['decision'], 'block')
+        self.assertEqual(outputs, [{}])
         self.assertEqual(self.invoke('Stop', last_assistant_message='corrected', stop_hook_active=True), [{}])
 
-    def test_invalid_payloads_block_visibly(self):
+    def test_invalid_payloads_report_unavailability_without_granting_permission(self):
         valid = {**self.payload, 'tool_name': 'apply_patch', 'tool_input': {'command': CLEAN_PATCH}}
         cases = (
             ('PreToolUse', [], 'must be an object'),
@@ -600,12 +703,12 @@ class CodexAdapterTests(unittest.TestCase):
                     input=json.dumps(data), text=True, capture_output=True,
                     env=self.env, cwd=self.root, timeout=10,
                 )
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertEqual(result.stdout, '')
-                self.assertIn('codex-adapter:', result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('permissionDecision', result.stdout)
+                self.assertIn('checks unavailable', result.stderr)
                 self.assertIn(message, result.stderr)
 
-    def test_shared_hook_errors_block_instead_of_failing_open(self):
+    def test_shared_hook_errors_report_unavailability_without_blocking(self):
         data = {**self.payload, 'tool_name': 'Bash', 'tool_input': {'command': 'git status'}}
         for error in (RuntimeError('fixture failure'), subprocess.TimeoutExpired('fixture', 5)):
             with (
@@ -614,11 +717,11 @@ class CodexAdapterTests(unittest.TestCase):
                 mock.patch.object(sys, 'argv', ['codex_adapter.py', 'PreToolUse']),
                 mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(data))),
                 mock.patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr,
-                self.assertRaises(SystemExit) as stopped,
+                mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout,
             ):
                 codex_adapter.main()
-            self.assertEqual(stopped.exception.code, 2)
-            self.assertIn('codex-adapter:', stderr.getvalue())
+            self.assertIn('checks unavailable', stderr.getvalue())
+            self.assertNotIn('permissionDecision', stdout.getvalue())
 
 
 if __name__ == '__main__':

@@ -54,7 +54,7 @@ jobs:
       - name: Run turn-guard self-check
         run: python3 hooks/scripts/turn_guard_self_check.py < /dev/null
 
-      - name: Run configuration and active scope self-check
+      - name: Run configuration and stateless guidance self-check
         run: python3 hooks/scripts/plugin_config_self_check.py < /dev/null
 
       - name: Run Copilot adapter self-check

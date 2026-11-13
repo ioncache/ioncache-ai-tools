@@ -507,7 +507,6 @@ class ClaimEvidenceTests(unittest.TestCase):
     def test_copilot_reports_unverified_stop_completion(self):
         warning = 'Claim evidence: final prose is not mechanically verified.'
         with (
-            mock.patch.object(copilot_adapter, 'response_context', return_value={'last_assistant_message': 'Unchecked'}),
             mock.patch.object(copilot_adapter, 'run_shared_hooks', return_value=[{'systemMessage': warning}]),
             mock.patch.object(copilot_adapter.sys, 'stdout', new_callable=io.StringIO) as stdout,
         ):

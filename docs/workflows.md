@@ -79,10 +79,10 @@ review write exception; they do not authorize code edits or worker ledger writes
 If permitted file handoff is unavailable, explicitly agree an in-context
 handoff of complete pass records or report the review as blocked.
 
-Scope hooks check authorization, not report evidence. Ordinary background
-tool output does not invalidate scope verdicts; review snapshot checks still
-reject target drift. Background handback limitations and the foreground
-fallback are covered in [guardrails.md#host-coverage-and-limits](guardrails.md#host-coverage-and-limits).
+Give reviewers explicit assignments and permitted report paths. These are
+instructions, not plugin-maintained permissions. Questions and handbacks do
+not block other workers. Native host permissions and the review's snapshot
+checks still apply; the plugin does not judge semantic purpose or report evidence.
 
 The shared actionability policy reports worthwhile corrections (`Act`),
 consequential choices (`Decide`), and credible evidence gaps (`Investigate`).

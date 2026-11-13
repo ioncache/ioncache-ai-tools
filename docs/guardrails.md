@@ -3,113 +3,98 @@
 Installation and basic usage: [../README.md](../README.md).
 Opt-outs: [configuration.md](configuration.md).
 
-## What is checked
+## Guidance and permission
 
-| Guard | Behavior |
-| --- | --- |
-| Answer-only questions | Blocks recognized mutations for the whole question turn and supplies answer-only guidance |
-| Scope | Supplies scope guidance and rejects mutations or delegation with stale native request or child-assignment context |
-| Documentation first | Supplies documentation-backed research guidance, not factual verification |
-| Engineering judgment | Directs non-trivial work to coherent solutions within the authorized scope |
-| Process termination | Blocks recognized process-kill commands while enabled; chat approval does not override it |
-| Lockfiles | Blocks direct file and shell edits; use the package manager |
-| Worktrees | Routes creation through the setup-aware `create-worktree` skill |
-| Punctuation | Fixes or rejects em-dashes |
+The plugin guides continuous autonomous workers. Scope and question handling
+are instructions, not task approvals, read allowlists, turn fences, or
+root/child permission registries. A side question does not cancel an existing
+assignment or block another agent. Compaction, resume, and background
+handbacks do not create authorization requirements.
 
-These checks cover common actions, not every shell construct or tool.
-While a question is pending, GraphQL calls must use one inline query without
-`operationName`, body files, duplicate queries, or unrecognized options.
-Patches with ambiguous file-header whitespace are rejected.
+The assistant must still honor the user's scope and explicit pause or
+cancellation instructions. Hooks do not determine semantic intent or review
+answer content. Native host permissions remain authoritative.
 
-## Questions, scope, and recovery
+## Action checks and autonomous recovery
 
-A question mixed with an instruction still blocks recognized mutations.
-Explicitly requested drafts or code may appear in the answer, but that does
-not authorize file edits. A subsequent direct, non-question instruction clears
-the question gate.
+| Check | Denied action | Available alternative |
+| --- | --- | --- |
+| Lockfiles | Direct edits through file tools or recognized shell commands | Edit the dependency manifest and run the package manager |
+| Broad process termination | Name-based commands and recognized process-group signals | Use an exact positive PID or native stop control for an owned or explicitly assigned process |
+| Worktrees | Raw `git worktree add` or `gwta` | Run the setup launcher at the path supplied in the denial; no skill load is required |
+| File punctuation | Shell input or added patch text containing em-dashes | Correct the command or added text; preserve patch context and literal filenames/data |
+| Skill opt-outs | Explicitly loading a disabled plugin skill | Continue the task with other available tools |
 
-Scope and answer content remain instructions for the assistant. Hooks do not
-judge whether a proposed action fits a request, whether an ambiguous approval
-authorizes it, or whether prose offers unsolicited work. Passing a deterministic
-check does not grant host permission or authorize work outside the user's request.
+Structured file edits containing em-dashes are rewritten without bypassing
+normal host permissions. For literal paths or search patterns containing that
+character, use structured file/search tools instead of changing the literal.
+For literal data writes or shell paths, use an ASCII-only command that constructs
+the character, for example Python `chr(0x2014)`. Write/Edit/MultiEdit content
+rewrites do not preserve literal em-dashes.
+Ambiguous patch-header whitespace is rejected; resubmit unpadded headers.
 
-Compaction and resume preserve the active request and question gate. A clear
-discards the active request. Copilot fences failed prompt updates so stale
-question state cannot permit mutations or delegation. Resubmit a complete
-direct instruction to recover. An identified child whose parent request has
-changed needs a fresh assignment before it can mutate or delegate.
+These checks recognize common actions, not every shell construct or tool.
+The process rule does not verify ownership of positive PIDs. Do not terminate
+another worker's processes merely because a command passes the check.
+The setup launcher requires Node.js 22.12.0+; runtime/setup failures leave that
+operation pending, not the entire worker. Correct the prerequisite through
+an authorized setup path or continue other assigned work.
 
-Read-only investigation and genuine user-input tools remain available during
-these denials. Repeating a blocked mutation does not clear a question or refresh
-a child assignment.
+A violating action remains denied when retried unchanged. No retry count
+turns it into an approved action. Recovery changes the action, uses supplied
+information, or selects an allowed tool; it does not require another plugin
+approval exchange.
 
-## Model usage
+Documentation-cache hits supply cached facts instead of fetching again.
+Repeating the identical fetch once requests a live-fetch bypass. Busy or
+unavailable cache checking leaves normal fetching available.
+See [documentation-cache.md](documentation-cache.md).
 
-Scope, question, and punctuation guards do not launch model reviews.
+## Checker failures
+
+Engine and adapter failures report unavailable checking, not a successful
+policy check or a policy violation. They do not grant native permissions or
+create a persistent denial. Independent completed decisions remain effective.
+Handler, adapter, and configuration-lock waits are bounded.
+
+Malformed settings remain untouched. Plugin features pause while native
+permissions continue to apply, allowing configuration repair or other work.
+An unavailable check is not a reason to repeat the same failing tool loop.
+Neither disabling the plugin nor restarting a session is the only recovery
+from a plugin-owned action denial.
+
+## Model usage and stored data
+
+Scope, question, and punctuation checks do not launch model reviews. Guidance
+is supplied at supported lifecycle and prompt events without retaining user
+requests, task approvals, assignments, or question markers.
+
 Documentation-cache distillation is separate and consumes additional model
 usage when enabled. Disable `docs-cache` to prevent those calls. Explicitly
 invoked review skills can also use model agents.
 
-## Context and privacy
-
-Startup policy is delivered at initialization, context recovery, and supported
-subagent startup, with a first-prompt fallback. Ordinary prompts do not repeat
-the bootstrap. Question turns carry a compact answer-only contract.
-
-Scope records live under `~/.cache/ioncache-ai-tools/claim-evidence/` in the
-`scope-policy` namespace. They retain the current request, question
-classification, request identity, and bounded punctuation
-correction messages. They do not collect proposal histories or user answers
-for authorization reviews. Session end clears question markers; resume restores
-them from retained turn state.
-
-Documentation-cache storage and usage are separate:
-[documentation-cache.md](documentation-cache.md).
-
 ## Host coverage and limits
 
-| Host | Final punctuation input |
-| --- | --- |
-| Claude Code | The native `last_assistant_message` field |
-| Copilot CLI | The latest root assistant text at the exact current Stop event, including root task-completion summaries |
-| Codex | The native `last_assistant_message` field; its unstable transcript format is not parsed |
+Assistant display and final-response text are not rewritten or blocked on any
+host. Stop hooks deliver cache notices, not punctuation correction loops.
+The `fix_emdash` file protections remain independent of assistant output.
 
-Missing Copilot final text is reported as an unavailable punctuation check,
-not a clean response. Checks cannot retract streamed prose or undo completed
-actions. Other plugins' synthetic prompts cannot always be distinguished from
-genuine user messages.
+Copilot general-purpose workers can refuse `/tmp` writes before invoking tools,
+even with allow-all and without the plugin. This is tracked separately at
+https://github.com/github/copilot-cli/issues/5441; repository-local continuation
+does not establish that this host-level limitation is resolved.
 
-Copilot mid-turn steering does not trigger either prompt hook. The question
-gate can therefore retain its previous classification. Resend a complete
-instruction when the agent is idle to refresh it.
+Some native events and hosted tools bypass local hooks. Missing prompt or
+child-start events therefore must not be prerequisites for continued work.
+Existing sessions can retain old hook registrations after an installation
+change; start a fresh session when switching plugin versions or source paths.
 
-Background subagent handbacks have the same provenance limitation. Claude
-Code runs `UserPromptSubmit` for background handbacks, but its documented
-input has no origin field:
-https://code.claude.com/docs/en/hooks#userpromptsubmit.
-Copilot's `userPromptTransformed` excludes system notifications:
-https://docs.github.com/en/copilot/reference/hooks-reference.
-Codex documents no origin discriminator in `UserPromptSubmit`:
-https://learn.chatgpt.com/docs/hooks#userpromptsubmit.
-Use supported foreground collection when separation is unverified. Message
-text is not trusted provenance, so notification-shaped prompts are not exempt
-from classification and the question gate is not weakened. Synthetic prompt
-misclassification is not fixed on every host.
-
-Codex hosted search bypasses local tool hooks. Copilot's built-in general-purpose
-agent lacks subagent start/stop events. Identified child tool events can
-initialize child state.
-
-These are not security boundaries. Host failures can prevent hooks from
-running, and an agent with settings access can disable guards. Keep host
-permissions in place for security-critical restrictions.
+These checks are not security boundaries or a guarantee of agent obedience.
+Host failures can prevent hooks from running, and settings access permits
+disabling guards. Keep native permissions for security-critical restrictions.
 
 ## Host references
 
 - https://code.claude.com/docs/en/hooks
-- https://code.claude.com/docs/en/cli-reference
 - https://learn.chatgpt.com/docs/hooks
-- https://learn.chatgpt.com/docs/non-interactive-mode
 - https://docs.github.com/en/copilot/reference/hooks-reference
-- https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
-- https://github.com/github/copilot-sdk/blob/main/docs/features/streaming-events.md

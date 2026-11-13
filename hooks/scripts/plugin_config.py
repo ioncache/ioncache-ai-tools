@@ -7,11 +7,13 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import tomllib
 
 DEFAULTS = Path(__file__).resolve().parents[2] / 'config/defaults.json'
 FILENAME = 'ioncache-ai-tools.local.json'
 HOSTS = ('claude', 'copilot', 'codex')
+LOCK_WAIT_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,19 @@ def read_settings(path, catalog, complete, legacy):
     return original, result, json.dumps(result, indent=2) + '\n'
 
 
+def acquire_lock(lock):
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('configuration lock is busy; retry synchronization') from None
+            time.sleep(min(0.02, remaining))
+
+
 def sync_file(path, catalog, complete=True, legacy=None, *, strict=True):
     # Worktree-local settings may intentionally symlink to the main worktree.
     path = path.resolve()
@@ -127,7 +142,7 @@ def sync_file(path, catalog, complete=True, legacy=None, *, strict=True):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with (path.parent / ('.' + path.name + '.lock')).open('a', encoding='utf-8') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            acquire_lock(lock)
             original, result, text = read_settings(path, catalog, complete, legacy)
             if text != original:
                 write_atomic(path, text)

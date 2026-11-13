@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook: blocks finishing a turn if the assistant wrote an em-dash in it.
+"""Legacy Stop checker, not registered by current host manifests.
 
 Reads last_assistant_message from the hook input instead of parsing
 transcript_path by hand. Both Claude Code and Codex document this field as
@@ -43,7 +43,7 @@ def main():
 
     if EM_DASH in text:
         idx = text.index(EM_DASH)
-        snippet = text[max(0, idx - 40) : idx + 20]
+        snippet = text[max(0, idx - 40) : idx + 20].replace(EM_DASH, '[em-dash]')
         reason = (
             "This turn's response contains an em-dash, which is "
             "banned in all output per project/user instructions. "
@@ -51,12 +51,6 @@ def main():
             "Rewrite the response using a comma, period, "
             "parentheses, or colon instead, then stop again."
         )
-        if input_data.get('cwd') and input_data.get('session_id'):
-            try:
-                from scope_guard import remember_continuation
-                remember_continuation(input_data, reason)
-            except Exception as error:
-                print(f'block-emdash: continuation recording failed ({type(error).__name__})', file=sys.stderr)
         print(
             json.dumps(
                 {

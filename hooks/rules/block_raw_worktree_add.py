@@ -11,7 +11,9 @@ hook only sees the command text, so wrappers like that have to be removed
 from the shell, not denied by name.
 """
 import os
+from pathlib import Path
 import re
+import shlex
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
@@ -29,9 +31,11 @@ TOOL_NAMES = ['Bash']
 ACTION = 'deny'
 MESSAGE = (
     'Creating a worktree with raw git or `gwta` is not allowed: it skips '
-    'the per-project worktree setup. Load this plugin\'s `create-worktree` '
-    "skill and pass the same arguments to its helper; it applies the repo's "
-    '.worktree-setup.json, writing a default one first if the repo has none.'
+    'the per-project worktree setup. Run python3 '
+    + shlex.quote(str(Path(__file__).resolve().parents[2] / 'scripts/create-worktree.py'))
+    + " with the same worktree-add arguments. It applies the repo's "
+    '.worktree-setup.json. This helper does not require loading a skill. '
+    'Do not retry the raw command unchanged.'
 )
 
 

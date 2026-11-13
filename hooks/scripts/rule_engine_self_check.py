@@ -38,8 +38,8 @@ fix_emdash = _load_module(os.path.join(RULES_DIR, 'fix_emdash.py'), 'fix_emdash'
 no_manual_lockfile_edit_bash = _load_module(
     os.path.join(RULES_DIR, 'no_manual_lockfile_edit_bash.py'), 'no_manual_lockfile_edit_bash'
 )
-never_kill_without_asking = _load_module(
-    os.path.join(RULES_DIR, 'never_kill_without_asking.py'), 'never_kill_without_asking'
+no_broad_process_kill = _load_module(
+    os.path.join(RULES_DIR, 'no_broad_process_kill.py'), 'no_broad_process_kill'
 )
 
 
@@ -82,9 +82,10 @@ def check_discovery_failures(rules_dir):
         for event, payload in requests:
             with mock.patch.object(rule_engine, 'RULES_DIRNAME', path), failure:
                 code, stdout, stderr = invoke_engine(event, payload)
-            assert code == 2, f'{event}: unavailable rules at {path} must fail, got exit {code}'
-            assert stdout == '', 'discovery failures must not emit a successful hook result'
-            assert 'evaluation failed' in stderr and path in stderr, stderr
+            assert code == 0, f'{event}: checker unavailability must not block the worker, got exit {code}'
+            assert 'checks unavailable' in json.loads(stdout)['systemMessage']
+            assert 'permissionDecision' not in stdout, 'checker failure must not grant native permission'
+            assert 'checks unavailable' in stderr and path in stderr, stderr
 
 
 def check_discovery_results(rules_dir):
@@ -132,6 +133,13 @@ def check_rule_discovery():
 
 
 def check_shell_tokens():
+    for prefix in ('MODE=review ', 'if true; then ', '2>/dev/null ', '/usr/bin/'):
+        for module, command in (
+            (no_broad_process_kill, 'kill 0'),
+            (no_manual_lockfile_edit_bash, "sed -i 's/a/b/' package-lock.json"),
+        ):
+            assert module.matches({'tool_input': {'command': prefix + command}}), (prefix, command)
+            assert not module.matches({'tool_input': {'command': f"printf '%s' '{command}'"}}), command
     operators = {';', '&&', '||', '|', '&', '(', ')', '((', '))', '\n',
                  '>', '>>', '<', '<<', '<<<', '<<-', '>&', '<&', '<>', '>|', '&>', '&>>'}
     for operator in operators:
@@ -384,7 +392,7 @@ def main():
 
     # Real pilot rules load correctly for PreToolUse
     real_pre_tool_use_rules = [r['name'] for r in load_rules_for_event(RULES_DIR, 'PreToolUse')]
-    assert 'never_kill_without_asking.py' in real_pre_tool_use_rules
+    assert 'no_broad_process_kill.py' in real_pre_tool_use_rules
     assert 'no-manual-lockfile-edit.json' in real_pre_tool_use_rules
     assert 'no_manual_lockfile_edit_bash.py' in real_pre_tool_use_rules
     assert 'block_raw_worktree_add.py' in real_pre_tool_use_rules
@@ -408,22 +416,39 @@ def main():
     engineering = next(r for r in startup_rules if r['name'] == 'engineering-judgment.json')
     assert engineering['message'] not in filtered_context['hookSpecificOutput']['additionalContext']
 
-    # never_kill_without_asking: exercises the shipped module directly, a
+    # no_broad_process_kill: exercises the shipped module directly, a
     # tokenizing scripted rule (not a regex Pattern rule), since matching
     # "is this word the command being run" reliably needs real command
     # tokenization, not a flat-text pattern.
     kill_cases = [
-        ('kill -9 12345', True, 'a real kill invocation'),
+        ('kill -9 12345', False, 'an exact positive PID remains available for owned-process cleanup'),
+        ('kill -s TERM 12345', False, 'an exact target with a named signal'),
+        ('kill -TERM 0012345', False, 'a positive PID with leading zeroes'),
+        ('kill -TERM +12345', False, 'a positive PID with an explicit sign'),
+        ('kill -0 12345', False, 'signal zero does not make the positive target a process group'),
+        ('kill -- -12345', True, 'a negative process-group target'),
+        ('kill -s TERM -- -12345', True, 'a process-group target after a named signal'),
+        ('kill -TERM 00', True, 'a zero process-group target with leading zeroes'),
+        ('kill -TERM +0', True, 'a zero process-group target with an explicit sign'),
+        ('kill -s TERM -- +000', True, 'a signed zero target after signal options'),
+        ('kill -TERM 12345 00', True, 'a zero group among positive targets'),
+        ('exec pkill worker', True, 'bare exec does not hide name-based termination'),
+        ('exec kill -TERM +0', True, 'bare exec does not hide process-group termination'),
+        ('exec kill -TERM 12345', False, 'bare exec retains exact positive-PID cleanup'),
+        ('exec echo pkill worker', False, 'exec wrapping a harmless command'),
+        ('echo exec pkill worker', False, 'exec mentioned as an argument is not a wrapper'),
+        ('kill -l', False, 'listing signals is read-only'),
+        ('kill -9 0', True, 'a real kill invocation'),
         ('cat hooks/rules/never-kill-without-asking.json', False, 'its own filename substring (hyphen-boundary regression)'),
-        ('/bin/kill -9 12345', True, 'a path-qualified kill invocation (e.g. /bin/kill)'),
-        ('/usr/bin/pkill 12345', True, 'a path-qualified pkill invocation'),
-        ('/sbin/killall 12345', True, 'a path-qualified killall invocation'),
-        ('kill>/tmp/log -9 12345', True, 'redirection attached directly to the command name'),
-        ('\\kill -9 12345', True, 'a backslash-escaped command name (Bash executes it as plain kill)'),
-        ('k\\ill -9 12345', True, 'a mid-word backslash escape'),
-        ("'kill' -9 12345", True, 'a single-quoted command name'),
-        ('"kill" -9 12345', True, 'a double-quoted command name'),
-        ('ki\\\nl\\\nl -9 12345', True, 'a command name split by backslash-newline line continuation'),
+        ('/bin/kill -9 0', True, 'a path-qualified kill invocation (e.g. /bin/kill)'),
+        ('/usr/bin/pkill 0', True, 'a path-qualified pkill invocation'),
+        ('/sbin/killall 0', True, 'a path-qualified killall invocation'),
+        ('kill>/tmp/log -9 0', True, 'redirection attached directly to the command name'),
+        ('\\kill -9 0', True, 'a backslash-escaped command name (Bash executes it as plain kill)'),
+        ('k\\ill -9 0', True, 'a mid-word backslash escape'),
+        ("'kill' -9 0", True, 'a single-quoted command name'),
+        ('"kill" -9 0', True, 'a double-quoted command name'),
+        ('ki\\\nl\\\nl -9 0', True, 'a command name split by backslash-newline line continuation'),
         (
             'git commit -m "note about \'kill\'"',
             False,
@@ -431,41 +456,41 @@ def main():
         ),
         ("echo '\\kill'", False, 'a backslash inside single quotes (Bash treats it as fully literal there), regression check'),
         ('ls /tmp/kill', False, 'a path argument to an unrelated command, not an invocation (prior false-positive regression)'),
-        ('true; /bin/kill -9 12345', True, 'a path-qualified invocation as the second command in a chain'),
-        ('sleep 1 && kill -9 12345', True, 'a bare invocation as the second command in a chain'),
-        ('true &&\nkill 123', True, 'a newline after a control operator'),
-        ('true;\nkill 123', True, 'a newline after a semicolon'),
-        ('true\n\nkill 123', True, 'blank lines between commands'),
-        ('true &&(kill 123)', True, 'adjacent control operators'),
-        ('printf ready # status\nkill 123', True, 'a comment must preserve the following command boundary'),
-        ('# header\nkill 123', True, 'a comment before the first command'),
-        ('echo issue#42\nkill 123', True, 'a hash inside a word is not a comment'),
-        ('echo "quoted # text"\nkill 123', True, 'a quoted hash does not hide the next command'),
-        ("echo ready; kill 123\nprintf 'unfinished", True, 'a malformed suffix cannot hide an earlier command'),
-        ('echo ready&&kill 123\nprintf "unfinished', True, 'adjacent operators survive a malformed suffix'),
-        ("echo ';' kill 123\nprintf 'unfinished", False, 'malformed suffixes cannot turn literal separators into operators'),
-        ('echo ready # kill 123', False, 'a guarded word inside a comment'),
-        ("echo ';' kill 123", False, 'a quoted standalone separator is an argument'),
-        (r'echo \; kill 123', False, 'an escaped standalone separator is an argument'),
-        ('echo "&""&" kill 123', False, 'adjacent quoted fragments form one literal argument'),
-        ('echo "\n" kill 123', False, 'a quoted standalone newline is an argument'),
-        ("echo ';'; kill 123", True, 'a literal separator followed by a real separator'),
-        ('echo "&&\nkill 123"', False, 'quoted multiline text is not a command'),
-        ("echo '&&\n' kill 123", False, 'a quoted operator is not a separator'),
-        ('echo "(kill -9 12345)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
-        ('timeout 5 kill -9 12345', True, 'a timeout wrapper around the invocation'),
-        ('nohup kill -9 12345', True, 'a no-argument wrapper around the invocation'),
-        ('nice kill -9 12345', True, 'a bare (no-flag) nice wrapper around the invocation'),
+        ('true; /bin/kill -9 0', True, 'a path-qualified invocation as the second command in a chain'),
+        ('sleep 1 && kill -9 0', True, 'a bare invocation as the second command in a chain'),
+        ('true &&\nkill 0', True, 'a newline after a control operator'),
+        ('true;\nkill 0', True, 'a newline after a semicolon'),
+        ('true\n\nkill 0', True, 'blank lines between commands'),
+        ('true &&(kill 0)', True, 'adjacent control operators'),
+        ('printf ready # status\nkill 0', True, 'a comment must preserve the following command boundary'),
+        ('# header\nkill 0', True, 'a comment before the first command'),
+        ('echo issue#42\nkill 0', True, 'a hash inside a word is not a comment'),
+        ('echo "quoted # text"\nkill 0', True, 'a quoted hash does not hide the next command'),
+        ("echo ready; kill 0\nprintf 'unfinished", True, 'a malformed suffix cannot hide an earlier command'),
+        ('echo ready&&kill 0\nprintf "unfinished', True, 'adjacent operators survive a malformed suffix'),
+        ("echo ';' kill 0\nprintf 'unfinished", False, 'malformed suffixes cannot turn literal separators into operators'),
+        ('echo ready # kill 0', False, 'a guarded word inside a comment'),
+        ("echo ';' kill 0", False, 'a quoted standalone separator is an argument'),
+        (r'echo \; kill 0', False, 'an escaped standalone separator is an argument'),
+        ('echo "&""&" kill 0', False, 'adjacent quoted fragments form one literal argument'),
+        ('echo "\n" kill 0', False, 'a quoted standalone newline is an argument'),
+        ("echo ';'; kill 0", True, 'a literal separator followed by a real separator'),
+        ('echo "&&\nkill 0"', False, 'quoted multiline text is not a command'),
+        ("echo '&&\n' kill 0", False, 'a quoted operator is not a separator'),
+        ('echo "(kill -9 0)"', False, 'the guarded word mentioned inside an echoed string, never invoked'),
+        ('timeout 5 kill -9 0', True, 'a timeout wrapper around the invocation'),
+        ('nohup kill -9 0', True, 'a no-argument wrapper around the invocation'),
+        ('nice kill -9 0', True, 'a bare (no-flag) nice wrapper around the invocation'),
         ('timeout 5 ls /tmp/kill', False, 'a wrapper around an unrelated command should still not match'),
         (
-            'nice -n 10 kill -9 12345',
+            'nice -n 10 kill -9 0',
             False,
             'a wrapper invoked with its own value-taking flag, a documented accepted gap, not a regression',
         ),
     ]
     for command, expected, label in kill_cases:
-        got = never_kill_without_asking.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
-        assert got is expected, f'never_kill_without_asking should {"" if expected else "not "}match {label}: {command!r}'
+        got = no_broad_process_kill.matches({'tool_name': 'Bash', 'tool_input': {'command': command}})
+        assert got is expected, f'no_broad_process_kill should {"" if expected else "not "}match {label}: {command!r}'
 
     # Real no-manual-lockfile-edit rule file, matched via match_rule directly
     with open(os.path.join(RULES_DIR, 'no-manual-lockfile-edit.json'), 'r', encoding='utf-8') as f:
@@ -479,7 +504,7 @@ def main():
 
     # no_manual_lockfile_edit_bash: catches Bash mutations the Edit/Write/
     # MultiEdit-only rule above can't see. Tokenization-based, same as
-    # never_kill_without_asking: binds the mutation operation, its
+    # no_broad_process_kill: binds the mutation operation, its
     # options, and its target together per simple command, instead of
     # matching a lockfile name and a mutation pattern independently
     # anywhere in the whole command.
@@ -499,7 +524,7 @@ def main():
         (
             f's\\ed -i s/a/b/ {lockfile_name}',
             True,
-            'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for never_kill_without_asking)',
+            'a backslash-escaped sed -i targeting a lockfile (same escape bypass closed for no_broad_process_kill)',
         ),
         ('npm install', False, 'an unrelated Bash command'),
         (f'true &&\nsed -i s/a/b/ {lockfile_name}', True, 'multiline in-place edit'),
@@ -819,24 +844,63 @@ def main():
     assert os.path.exists(sentinel_path), 'an enabled .py rule should still be imported normally'
     shutil.rmtree(sentinel_rules_dir, ignore_errors=True)
 
-    for action, expected_message in (
-        (lambda: rule_engine._handle_alarm(None, None), 'deadline'),
-        (rule_engine.main, 'evaluation failed'),
+    for failure, expected_message in (
+        (rule_engine.RuleDeadline('evaluation exceeded the five-second deadline'), 'deadline'),
+        (RuntimeError('fixture failure'), 'fixture failure'),
     ):
         stderr = io.StringIO()
+        stdout = io.StringIO()
         with (
-            mock.patch.object(rule_engine, 'run_hook', side_effect=RuntimeError('fixture failure')),
+            mock.patch.object(rule_engine, 'run_hook', side_effect=failure),
             mock.patch.object(rule_engine.signal, 'signal'),
             mock.patch.object(rule_engine.signal, 'alarm'),
             contextlib.redirect_stderr(stderr),
+            contextlib.redirect_stdout(stdout),
         ):
             try:
-                action()
+                rule_engine.main()
             except SystemExit as stopped:
-                assert stopped.code == 2
+                assert stopped.code == 0
             else:
-                raise AssertionError('engine-wide failures must block rather than return success')
+                raise AssertionError('engine-wide failures must terminate the checker')
         assert expected_message in stderr.getvalue()
+        assert 'checks unavailable' in json.loads(stdout.getvalue())['systemMessage']
+        assert 'permissionDecision' not in stdout.getvalue()
+
+    timeout_rule = {'matches': lambda _: rule_engine._handle_alarm(None, None)}
+    for action in ('deny', 'rewrite'):
+        first = {'matcher': {'type': 'always'}, 'check': lambda _, action=action: {
+            'action': action, 'message': 'known violation', 'updatedInput': {'content': 'corrected'},
+        }}
+        with mock.patch.object(rule_engine, 'run_hook', side_effect=lambda: run_rules(
+            [first, timeout_rule], 'PreToolUse', {'tool_name': 'Write', 'tool_input': {}},
+        )):
+            code, stdout, stderr = invoke_engine('PreToolUse', {})
+        assert code == 0
+        output = json.loads(stdout)
+        decision = output['hookSpecificOutput']
+        if action == 'deny':
+            assert decision['permissionDecision'] == 'deny'
+            assert stderr == '', 'a known denial should stop before a later checker can hang'
+        else:
+            assert decision['updatedInput'] == {'content': 'corrected'}
+            assert 'checks unavailable' in output['systemMessage']
+
+    with tempfile.TemporaryDirectory(prefix='rule-deadline-config-') as home:
+        for directory in ('.claude', '.copilot', '.codex'):
+            path = pathlib.Path(home) / directory / 'ioncache-ai-tools.local.json'
+            path.parent.mkdir()
+            os.mkfifo(path)
+        result = subprocess.run(
+            [sys.executable, '-B', '-c',
+             'import rule_engine; rule_engine.HANG_TIMEOUT_SECONDS = 1; rule_engine.main()', 'PreToolUse'],
+            cwd=SCRIPT_DIR, input=json.dumps({'cwd': home, 'tool_name': 'Read', 'tool_input': {}}),
+            env={**os.environ, 'HOME': home, 'COPILOT_HOME': home + '/.copilot', 'CODEX_HOME': home + '/.codex'},
+            text=True, capture_output=True, timeout=3,
+        )
+        assert result.returncode == 0, result.stderr
+        assert 'deadline' in json.loads(result.stdout)['systemMessage']
+        assert 'permissionDecision' not in result.stdout
 
     print('All rule-engine self-checks passed.')
 

@@ -450,17 +450,14 @@ def main():
         if got is not expected:
             failures.append(f'is_mutating mismatch ({note}): got {got}, expected {expected}')
 
-    # End-to-end: classify_question.py's real stdout, not just has_question()
-    # in isolation, catches a bare top-level additionalContext field (the
-    # real bug found here) that a unit-level check on has_question() alone
-    # would never see, since has_question() itself was never wrong about
-    # that. Uses a random, unambiguously-synthetic session id so this can
-    # never collide with a real session's marker file, and always cleans
-    # up the flag file classify_question.py writes as a side effect.
+    # Exercise the actual protocol and verify classification has no permission state.
     session_id = f'self-check-{uuid.uuid4()}'
     flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
     with tempfile.TemporaryDirectory(prefix='question-check-') as home:
         try:
+            settings = pathlib.Path(home) / '.claude/ioncache-ai-tools.local.json'
+            settings.parent.mkdir()
+            settings.write_text(json.dumps({'features': {}}))
             result = subprocess.run(
                 [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
                 input=json.dumps({'session_id': session_id, 'cwd': home, 'prompt': 'why is this broken'}),
@@ -473,8 +470,10 @@ def main():
             hook_output = output.get('hookSpecificOutput') or {}
             if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
                 failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
-            if QUESTION_CONTRACT not in hook_output.get('additionalContext', ''):
-                failures.append('classification must emit the answer-only contract without another racing hook')
+            if 'Question guidance:' not in hook_output.get('additionalContext', ''):
+                failures.append('classification must emit advisory question guidance')
+            if flag_path.exists():
+                failures.append('classification must not create a question permission marker')
             manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
             manifest = json.loads(manifest_path.read_text())
             commands = [hook['command'] for group in manifest['hooks']['UserPromptSubmit'] for hook in group['hooks']]

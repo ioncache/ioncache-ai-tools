@@ -130,7 +130,7 @@ provide standards for the requested work, not standalone test or audit tools.
 | `/ioncache-ai-tools:unit-tests` | Write or review JavaScript/TypeScript tests using Vitest conventions |
 | `/ioncache-ai-tools:jsdoc` | Write or review JSDoc using the plugin's JS/TS documentation conventions |
 | `/ioncache-ai-tools:security` | Apply input-validation, authentication, and secret-handling standards |
-| `/ioncache-ai-tools:answer-questions` | Inspect the answer-only question policy; not required before asking ordinary questions |
+| `/ioncache-ai-tools:answer-questions` | Inspect question-answering guidance; not required before asking ordinary questions |
 
 Full skill instructions are in [skills/](skills/).
 
@@ -190,14 +190,20 @@ for configuration examples.
 
 ## Automatic guardrails
 
-Hooks run without a skill invocation. They block recognized mutations during
-question turns, reject stale request context, block direct lockfile edits and
-recognized process-kill commands, route worktree creation through the setup
-skill, and fix or reject em-dashes.
+Hooks run without a skill invocation. Scope and questions supply guidance,
+not task approvals or turn-wide permission gates. Questions and messages do
+not create blocking state for the receiving worker or other agents. Native
+host permissions still apply.
 
-Startup guidance covers scope, answer-only replies, documentation-backed
+Action checks block direct lockfile edits, broad process termination, and raw
+worktree creation. Recovery uses the package manager, an exact owned process
+target, or the setup helper respectively, without a plugin approval exchange.
+Checks also fix or reject em-dashes in file edits and shell input.
+
+Guidance covers scope, direct answers, documentation-backed
 research, and engineering judgment. Hooks do not use model reviews to judge
-authorization or reply content.
+authorization or reply content. Checker failures report unavailability rather
+than stopping the worker or granting host permission.
 The documentation cache reuses facts from supported documentation fetches.
 **Cache distillation makes additional model calls and consumes the host's
 usage.** Disable `docs-cache` to opt out.
@@ -238,13 +244,12 @@ Precedence and synchronization: [docs/configuration.md](docs/configuration.md).
 | Situation | What to know or do |
 | --- | --- |
 | A skill is missing | Confirm the plugin is installed and enabled, then start a fresh session or thread. Use the host's skill picker shown above. |
-| A question blocks edits | A mixed question/instruction prompt remains answer-only. Send a separate direct instruction to authorize edits. |
-| Request context is stale or a prompt update fails | Resubmit a complete direct instruction. A child agent needs a fresh assignment after its parent's request changes. |
-| Copilot mid-turn steering | Steering messages do not trigger prompt hooks, so question classification can remain stale. Resend the instruction when the agent is idle. |
+| An action is denied | Use the alternative in the denial rather than repeating the command. Plugin recovery does not require per-turn approval. |
+| A checker is unavailable | The plugin reports the problem without creating a persistent tool gate. Native permissions still apply. |
 | Sensitive documentation questions | The shared cache can replay Claude's original `WebFetch` question across projects and hosts. Disable `docs-cache` before submitting sensitive questions. |
-| Background review results block continued work | Some hosts mistake reviewer results for new user requests, triggering question checks. Ask the assistant to run reviews in the foreground where supported, waiting for reviewers to finish instead of relying on background notifications. |
 | Review coordination | Supervised cross-host trials remain pending; not every execution mode is acceptance-verified. |
-| Response checking | Automatic final-response checks cover punctuation, not scope or factual accuracy. They cannot retract streamed prose or undo completed actions. |
+| Response punctuation | Assistant text is not rewritten or blocked. File-edit punctuation checks remain independent. |
+| Copilot child `/tmp` writes | Some general-purpose workers refuse these writes even with allow-all. This also occurs without the plugin; see https://github.com/github/copilot-cli/issues/5441. |
 
 These are guardrails, not a security boundary. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.
