@@ -49,6 +49,7 @@ remain after synchronization finishes.
 | `no_broad_process_kill` | Name-based and process-group termination commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
+| `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
 
@@ -67,6 +68,11 @@ the `create-worktree` skill.
 Disabling `skill:engineering-judgment` also suppresses the reminder to load
 that skill. Apart from these dependencies, guard and skill settings are
 independent.
+
+`review-code` and review/fix options read these settings without rewriting them.
+Disabling `review-auto-model-selection` selects configured defaults for
+unspecified roles without disabling reviews, explicit role choices, or other
+safeguards. See [../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md).
 
 ## Synchronization and recovery
 

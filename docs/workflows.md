@@ -56,7 +56,7 @@ These rules apply to `review-code`, including reviews invoked by
 reviewer each round and forbids using `review-code` for that role.
 
 Small reviews stay inline when the evidence fits one direct read and no
-substantial independent pass is needed. Explicit independence requests take
+substantial independent pass or explicit role override is needed. Explicit independence requests take
 precedence. Substantial reviews use nested coordination where supported or
 flat worker collection with a separate adjudicator. Missing required
 independence blocks the review.
@@ -76,10 +76,14 @@ finding counts are not an allocation target.
 Both strategies require whole-file reads and propagate caller read/tool
 constraints. Reviewers responsible for consumers also read shared
 implementations; integration checks cross-boundary symbols against consumers.
+The same map includes runtime handoffs, readiness prerequisites, and relevant
+dependency limits. Changed enumeration and batching need checks for successful
+but partial results, not just thrown errors.
 Specialists write complete pass records to assigned files in caller-owned
 private scratch outside the reviewed tree. Adjudicators read those files
-directly rather than relying on retyped summaries. These reports are the only
-review write exception; they do not authorize code edits or worker ledger writes.
+directly rather than relying on retyped summaries. Only caller-owned private
+request/option records and assigned reports may be written; they do not
+authorize code edits or worker ledger writes.
 
 If permitted file handoff is unavailable, explicitly agree an in-context
 handoff of complete pass records or report the review as blocked.
@@ -97,11 +101,18 @@ checks still apply; the plugin does not judge semantic purpose or report evidenc
 
 The shared actionability policy reports worthwhile corrections (`Act`),
 consequential choices (`Decide`), and credible evidence gaps (`Investigate`).
-Incorrect documentation warrants correction without an observed runtime
-failure; accurate documentation in a nonpreferred style does not. Missing
+Incorrect documentation warrants correction when it causes a concrete mistaken
+action, consequential misunderstanding, or maintenance risk; an observed runtime
+failure is unnecessary. Harmless wording and accurate documentation in a
+nonpreferred style do not. Missing
 coverage of new or changed code is actionable by default, with a 100% coverage
 goal and meaningful assertions. Coverage exceptions need concrete justification,
 not an assumption that simple code needs no test.
+Investigate production failures described as test gaps before classifying them.
+Verify consequential premises in both accepted findings and rejections; PR
+comments and unsupported "known issue" labels cannot establish another
+component's behavior. Match findings by trigger, incorrect behavior, and
+consequence, not shared labels or symbols.
 
 Extreme, speculative edge cases are excluded unless evidence supports a
 credible trigger and meaningful performance, security, privacy, or correctness
@@ -123,12 +134,25 @@ changing its minimal fresh-reviewer assignments. Unresolved-PR-comment triage
 also uses the policy but accounts for every supplied comment, including
 no-change responses, without treating those responses as actionable defects.
 
-Check model-override authority before selection research. Default-only execution
-skips catalog research that cannot affect the choice, not capability or
-independence checks. Authorized choices require current availability and
-suitability evidence, reusable within the review while applicable. Otherwise
-preserve configured defaults and disclose the limitation. This is not automatic
-runtime model selection.
+Review options and defaults are in
+[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md). Bare invocation
+runs immediately; help launches no review. Role model/effort overrides and
+fallbacks pass through review/fix phases without changing the parent or fixing
+model. `review-auto-model-selection` independently disables automatic choices.
+
+Check host authority first. Default `auto` attempts an evidence-backed suitable
+native choice where permitted, otherwise uses configured defaults. Explicit
+choices do not require suitability research or a separate account-catalog
+precondition. Neither a supported identifier nor a public catalog proves
+entitlement; native rejection follows the declared fallback, without repeated
+probes or an external CLI workaround. Record requested, selected, and actual
+models separately; the last remains unknown when not observable.
+Invoking the skill cannot override a host rule requiring specific user model
+choices. Default-only execution is not verified automatic selection.
+
+Checks cannot mutate the shared reviewed worktree. A mutation experiment needs
+an explicitly authorized isolated copy. Before/after fingerprints cannot detect
+intervening writes and do not make temporary shared-tree mutation safe.
 
 Shared criteria and handback contracts:
 [../skills/review-code/CRITERIA.md](../skills/review-code/CRITERIA.md),
@@ -146,6 +170,8 @@ This contract does not implement a controller or authorize commits or publicatio
 Supervised launch-to-handback trials remain pending. Nested/flat execution and
 automatic model selection are not acceptance-verified on any host. See
 [review-orchestration-plan.md](review-orchestration-plan.md) for the trial gate.
+Synthetic finding-quality checks and their limits are described in
+[review-evaluation.md](review-evaluation.md).
 
 ## Worktree setup
 

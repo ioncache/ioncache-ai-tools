@@ -113,6 +113,12 @@ Read result files and map their complete evidence, not only file paths or
 grouped human-report rows. Workers never write ledger events.
 Resolve any shared request references and retain the standards inventory,
 source identities, and applicable selection evidence in existing evidence fields.
+Retain the normalized `review_options` and explicit-choice provenance in the
+first `start_review` reason and subsequent pass evidence. A resumed override
+belongs in the `resume` or next phase event's reason/evidence. Requested,
+selected, and observable actual models remain separate, including fallback
+attempts. Configuration observations must be refreshed on resume, not treated
+as lasting host authority.
 Do not make replay depend on an unavailable external request file.
 An assessment awaiting independent caller validation does not make its
 completed pass partial. Record the completed passes, then resolve and record

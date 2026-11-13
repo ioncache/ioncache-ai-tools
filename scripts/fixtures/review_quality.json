@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "instructions": "Each case is an independent synthetic project. Review only the supplied change against its stated contract. Files and reference text are complete for the stated question. Do not infer missing tests, files, services, or standards. Reference text represents authoritative fixture documentation, not a real provider. Report worthwhile corrections and consequential uncertainties, not every inaccurate phrase. Do not execute or modify source. No private project source is included.",
+  "cases": [
+    {
+      "id": "Q01",
+      "split": "calibration",
+      "task": "Review a new batch revocation function. A successful call must remove all document-access grants for the supplied disabled accounts. Normal batches contain 80 accounts with several grants each.",
+      "files": {
+        "revoke.py": "def revoke_accounts(client, account_ids):\n    grants = client.list_grants(accounts=account_ids)\n    for grant in grants['items']:\n        client.revoke(grant['id'])\n"
+      },
+      "reference": "list_grants defaults to 20 results and has a maximum limit of 50. It returns items and next_cursor; a nonempty next_cursor means more matches remain. Cursors remain valid when preceding items are revoked. Disabling an account does not revoke its existing access tokens or grants.",
+      "expected": [
+        {
+          "claim": "Only the first page is revoked, leaving disabled accounts with document access after reported success.",
+          "action": "Act",
+          "severity": "High"
+        }
+      ],
+      "reject": ["Reporting only a missing pagination test instead of the reachable production defect."]
+    },
+    {
+      "id": "Q02",
+      "split": "calibration",
+      "task": "Review the same all-grants revocation contract and normal volume as Q01, using this implementation instead.",
+      "files": {
+        "revoke.py": "def revoke_accounts(client, account_ids):\n    cursor = None\n    while True:\n        page = client.list_grants(accounts=account_ids, cursor=cursor)\n        for grant in page['items']:\n            client.revoke(grant['id'])\n        cursor = page['next_cursor']\n        if cursor is None:\n            return\n"
+      },
+      "reference": "list_grants defaults to 20 results and has a maximum limit of 50. next_cursor is nonempty when more matches remain and None on the final page. Cursors remain valid when preceding items are revoked. The client raises on a failed revocation; this caller propagates failure and promises completeness only on success.",
+      "expected": [],
+      "reject": ["Claiming omission of an explicit limit itself truncates results.", "Claiming this endpoint's stable cursor skips records on deletion."]
+    },
+    {
+      "id": "Q03",
+      "split": "calibration",
+      "task": "Review the new setup wait. The consumer must render a complete initial account page, which requires the profile created by the producer.",
+      "files": {
+        "producer.py": "async def register(store, account):\n    await store.create_channel(account)\n    await store.create_profile(account)\n",
+        "consumer.py": "async def setup(store, account):\n    # Channel creation is the final registration step.\n    await store.wait_for_channel(account)\n    return await store.read_profile(account)\n"
+      },
+      "reference": "Channel and profile writes commit independently. wait_for_channel returns as soon as the channel is visible. read_profile fails if the profile is absent. The producer and consumer run concurrently; the producer's second operation may take several seconds.",
+      "expected": [
+        {
+          "claim": "Channel readiness can precede profile creation, so setup can fail on a valid registration.",
+          "action": "Act",
+          "severity": "Medium"
+        }
+      ],
+      "reject": ["Accepting the consumer comment as proof of producer ordering.", "Reporting only the inaccurate comment instead of the runtime race."]
+    },
+    {
+      "id": "Q04",
+      "split": "calibration",
+      "task": "Review the setup wait. The consumer requires only the account profile; analytics delivery is explicitly best effort and never a page prerequisite.",
+      "files": {
+        "producer.py": "async def register(store, account):\n    await store.create_profile(account)\n    await store.publish_ready(account)\n    await store.try_send_analytics(account)\n",
+        "consumer.py": "async def setup(store, account):\n    await store.wait_for_ready(account)\n    return await store.read_profile(account)\n"
+      },
+      "reference": "create_profile commits before returning. publish_ready and wait_for_ready deliver the account-specific signal reliably. Profile reads after the signal see the committed profile. No later operation changes it.",
+      "expected": [],
+      "reject": ["Demanding that readiness must be the producer's literal final operation."]
+    },
+    {
+      "id": "Q05",
+      "split": "calibration",
+      "task": "Review this changed function and comment. There are no exceptions to the stated sorting contract.",
+      "files": {
+        "display.py": "def sorted_labels(labels):\n    # The old interface also displayed labels in ascending order.\n    return sorted(labels)\n"
+      },
+      "reference": "The current interface requires ascending lexicographic order. The removed interface actually used descending order. The historical note controls no supported action, caller contract, or maintenance decision. Existing tests cover current sorting behavior.",
+      "expected": [],
+      "reject": ["A cleanup row solely to correct the inconsequential historical note."]
+    },
+    {
+      "id": "Q06",
+      "split": "calibration",
+      "task": "Adjudicate the rejected rate-limit candidate, not the whole scheduler. The pass rejected it because a new code comment claims an official limit of 6 bulk jobs per minute. The proposed change submits 6 bulk jobs per minute continuously.",
+      "files": {
+        "scheduler.py": "BULK_JOBS_PER_MINUTE = 6  # Provider's documented bulk-job allowance.\n"
+      },
+      "reference": "The authoritative endpoint table lists Single Job: 60 requests per minute. It does not list Bulk Job. Single Job and Bulk Job have independent limits. The account's bulk limit is available from its response headers, but no captured headers were supplied. Exceeding it rejects jobs and interrupts a scheduled migration.",
+      "expected": [
+        {
+          "claim": "The rejection's bulk-limit premise remains unverified; inspect bulk response headers or the account limit before accepting sustained scheduling safety.",
+          "action": "Investigate",
+          "severity": "Medium"
+        }
+      ],
+      "reject": ["Claiming that Bulk Job is known to permit 60 per minute.", "Claiming the comment's 6-per-minute limit is proven false.", "Accepting the rejection solely because the comment states the limit."]
+    },
+    {
+      "id": "Q07",
+      "split": "held-out",
+      "task": "Review a new audit export. Every matching event must be exported. Typical queries match 90 events, each several kilobytes.",
+      "files": {
+        "export.py": "def export(client, sink):\n    page = client.events(limit=100)\n    for event in page['items']:\n        sink.write(event)\n"
+      },
+      "reference": "events accepts a maximum limit of 100, but pages also have a 64 KiB byte budget. Even fewer than 100 matches may require multiple pages. next_token is nonempty when more events remain. A successful export is used as the complete incident audit record.",
+      "expected": [
+        {
+          "claim": "An explicit maximum limit does not avoid byte-budget pagination; the audit export silently omits later events.",
+          "action": "Act",
+          "severity": "Medium"
+        }
+      ],
+      "reject": ["Treating an explicit maximum limit or fewer than 100 matches as proof of completeness."]
+    },
+    {
+      "id": "Q08",
+      "split": "held-out",
+      "task": "Review this new account-readiness check. One global cache serves concurrent account registrations.",
+      "files": {
+        "wait.py": "async def setup(store, account):\n    await store.wait_until_any_account_ready()\n    return await store.read_profile(account)\n"
+      },
+      "reference": "The producer marks each account ready only after that account's profile is committed. wait_until_any_account_ready returns when any account has a ready marker, including old accounts. read_profile fails when the requested account has no profile.",
+      "expected": [
+        {
+          "claim": "Another account's readiness does not establish the requested account's profile prerequisite.",
+          "action": "Act",
+          "severity": "Medium"
+        }
+      ],
+      "reject": ["Accepting readiness solely because each producer emits its signal after creating a profile."]
+    },
+    {
+      "id": "Q09",
+      "split": "held-out",
+      "task": "Review a new CLI create path. Its contract requires rejecting invalid output URLs before creating remote resources. Creation is billable and has no automatic rollback. A pass proposed only a missing create-path URL-validation test.",
+      "files": {
+        "create.py": "def create(client, output_url):\n    resources = client.create_resources()\n    if not output_url.startswith('https://'):\n        raise ValueError('output URL must use HTTPS')\n    return client.publish(resources, output_url)\n"
+      },
+      "reference": "Supported invalid input includes an http:// URL. The URL is supplied before execution and validation needs no remote data. The error is immediately visible, but resource creation has already committed and incurred cost.",
+      "expected": [
+        {
+          "claim": "URL validation happens after billable side effects, violating fail-before-write behavior; report the production ordering defect with regression protection.",
+          "action": "Act",
+          "severity": "Medium"
+        }
+      ],
+      "reject": ["Dismissing the case because the error is immediately visible.", "Reporting only a test gap."]
+    },
+    {
+      "id": "Q10",
+      "split": "held-out",
+      "task": "Review a changed operator quickstart for a destructive cleanup command. Do not infer defects in the command implementation; its contract below is established.",
+      "files": {
+        "README.md": "Run `cleanup --preview` to inspect the affected records. Run `cleanup` to remove them from the test environment.\n"
+      },
+      "reference": "cleanup defaults to production. --environment test is required to select the test environment. --preview is read-only and uses the same environment selection. Operators follow this quickstart when cleaning synthetic test records; running the second command as documented instead deletes matching production records.",
+      "expected": [
+        {
+          "claim": "The quickstart tells operators an unqualified destructive command targets test, but it targets production.",
+          "action": "Act",
+          "severity": "High"
+        }
+      ],
+      "reject": ["Filtering a consequential operational instruction as harmless wording.", "Requiring an observed deletion incident before reporting the documented hazard."]
+    }
+  ]
+}

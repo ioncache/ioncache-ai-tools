@@ -9,6 +9,7 @@
     "no_broad_process_kill": true,
     "no-manual-lockfile-edit": true,
     "no_manual_lockfile_edit_bash": true,
+    "review-auto-model-selection": true,
     "scope-exactly-what-asked": true,
     "skill:answer-questions": true,
     "skill:code-complexity": true,

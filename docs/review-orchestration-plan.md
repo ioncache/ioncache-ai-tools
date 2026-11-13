@@ -5,6 +5,14 @@ self-contained; another harness should not need the originating conversation.
 It proposes changes, not a description of shipped behavior or authorization
 to implement them.
 
+Current invocation and selection behavior is defined in
+[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md) and
+[../skills/review-code/ORCHESTRATION.md](../skills/review-code/ORCHESTRATION.md).
+These supersede this proposal's no-model-flags design and account-catalog
+precondition. Defaults now attempt bounded automatic selection where the host
+permits it; explicit role choices and fallback are supported. Native acceptance
+and comparative quality still require evidence, not just changed instructions.
+
 ## Implementation record: 2026-11-06
 
 The shared implementation is present in this checkout. This record distinguishes

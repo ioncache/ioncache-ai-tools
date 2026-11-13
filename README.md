@@ -89,9 +89,9 @@ In Codex:
 $ioncache-ai-tools:review-code branch
 ```
 
-Most skills take task context rather than fixed command-line flags. The
-review-loop options below are explicit skill arguments. Missing information
-may require clarification before the skill can proceed.
+Most skills take task context rather than fixed command-line flags. Review
+options below are explicit skill arguments. Bare `review-code` invocation uses
+defaults without a setup prompt.
 
 ## Skills
 
@@ -133,6 +133,26 @@ provide standards for the requested work, not standalone test or audit tools.
 | `/ioncache-ai-tools:answer-questions` | Inspect question-answering guidance; not required before asking ordinary questions |
 
 Full skill instructions are in [skills/](skills/).
+
+## Review options
+
+```text
+/ioncache-ai-tools:review-code --help
+/ioncache-ai-tools:review-code this PR --model-selection configured
+/ioncache-ai-tools:review-code this PR --lead-model LEAD_ID --reviewer-model REVIEW_ID
+```
+
+Replace model placeholders with identifiers supported by your host. Unspecified
+roles default to attempting automatic selection where host permissions and
+capability evidence allow it, otherwise configured models are used.
+Explicit choices are not silently replaced. The lead is the review coordinator
+or adjudicator, not your conversation's model.
+
+Role effort, validator, fallback, and strategy options are listed in
+[skills/review-code/OPTIONS.md](skills/review-code/OPTIONS.md). The review/fix loop
+accepts the same review options; they do not change its fixing model.
+Use `$ioncache-ai-tools:review-code --help` in Codex. Claude can show argument
+hints; `--help` is the portable option list, not a promised cross-host picker.
 
 ## Review-loop arguments
 

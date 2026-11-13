@@ -1,6 +1,7 @@
 ---
 name: review-validate-fix-loop
 description: Autonomously reviews, validates, fixes, and re-reviews code within finite nested loops, preserving decisions in a per-run ledger. Use when explicitly asked to run a bounded review-and-fix loop or resume one, not for a read-only review.
+argument-hint: "[target] [--help] [--max-loops N] [--max-fix-cycles N] [--lead-model MODEL] [--reviewer-model MODEL]"
 ---
 
 # Review, validate, fix
@@ -15,14 +16,14 @@ Accept a target plus `--max-loops N` and `--max-fix-cycles N` (both default
 to 3), or `--resume .review-loop/<run-id>/REVIEW_LEDGER.json`.
 Examples: `review-validate-fix-loop branch --max-loops 4`,
 `review-validate-fix-loop repository --max-fix-cycles 2`.
-Do not accept model, effort, cost, or persistent-config options in this version.
-Report invalid arguments without starting a run. Do not silently ignore them.
-Conversational review-role model selections and existing harness settings
-are not invocation flags. Apply them through the
-[review selection policy](../review-code/ORCHESTRATION.md), subject to host
-restrictions. Fixing-phase model controls remain outside this interface.
-Review strategy and the main-table severity floor are conversational preferences,
-not new helper CLI flags.
+Also accept the shared role model, effort, selection, fallback, strategy, and
+help options in [../review-code/OPTIONS.md](../review-code/OPTIONS.md).
+Normalize them with the shared options helper before target discovery or ledger
+creation. Bare invocation uses defaults without a configuration prompt;
+`--help` returns without starting a run. Report invalid arguments rather than
+ignoring them. There is no `--non-interactive`, cost, parent-model, fixing-model,
+or persistent-config flag. The main-table severity floor remains a conversational
+preference. Explicit role choices still obey host restrictions.
 
 Resolve `../../scripts/review_ledger.py` relative to this installed skill,
 not the current working directory or an assumed host environment variable.
@@ -31,15 +32,16 @@ Git worktree. Read its `--help` if invocation details are unclear.
 
 ## Coordination
 
-1. Resolve the target, objective, and comparison base using the workflow.
+1. Normalize options, then resolve the target, objective, and comparison base using the workflow.
    Initialize one ledger, or inspect the explicitly selected resumed run.
 2. Record `start_review` before any full-review launch, then invoke
    `review-code` with the pinned request and ledger snapshot. In nested mode
    the review coordinator owns specialist launches. In flat mode the loop
    launches and collects workers, then delegates adjudication. The loop owns
    the request, all ledger writes, and limits in both modes.
-   Pass through the caller's `specialists` or `sweep-first` strategy and main
-   table severity floor. Allocate private result files outside the reviewed
+   Pass through normalized review options, the resolved `specialists` or
+   `sweep-first` strategy, and main table severity floor. Preserve option
+   provenance in existing ledger reason/evidence fields. Allocate private result files outside the reviewed
    tree; workers write reports, never the loop ledger. A sweep is part of the
    counted review, not a free preliminary round.
 3. Check the evidence handback, adopting independent coordinator validation
@@ -53,7 +55,7 @@ Git worktree. Read its `--help` if invocation details are unclear.
    before fixing. Do not automatically fix style observations, decisions, or
    uncertain investigations. Use one code writer. Run relevant checks, then
    delegate an independent focused review of the correction delta and its
-   affected callers.
+   affected callers using the same review-role options.
 5. Validate review-fixes findings inside this cycle. Resolve applied-fix
    outcomes, then advance. If actionable issues remain, fix them in the
    same outer loop. Inner exhaustion stops the entire run.
@@ -78,8 +80,9 @@ outcome rather than bypassing them or claiming complete coverage.
 Use the host's native delegation tools and the
 [shared orchestration instructions](../review-code/ORCHESTRATION.md).
 Check override authority before model research and reuse applicable selection
-evidence within a review; otherwise preserve configured defaults and disclose
-the limitation. Supply the [review contract](../review-code/CONTRACTS.md),
+evidence within a review. Unspecified roles attempt automatic selection by
+default where permitted, otherwise use configured defaults and disclose the
+limitation. Explicit choices follow their declared fallback. Supply the [review contract](../review-code/CONTRACTS.md),
 including relevant ledger history and explicit completion conditions.
 Failed or partial workers are not clean reviews.
 
