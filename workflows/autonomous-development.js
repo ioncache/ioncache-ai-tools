@@ -19,7 +19,7 @@ const stateSchema = {
 }
 const resultSchema = {
   type: 'object', required: ['result_file', 'outcome'],
-  properties: { result_file: { type: 'string' }, outcome: { enum: ['complete', 'blocked'] } }
+  properties: { result_file: { type: 'string' }, outcome: { enum: ['complete', 'blocked', 'waiting'] } }
 }
 
 /**

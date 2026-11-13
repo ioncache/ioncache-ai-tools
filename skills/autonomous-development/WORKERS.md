@@ -23,6 +23,10 @@ Only the assigned result file and explicitly assigned private review records
 are writable outside the approved worktree. Do not edit `RUN.json` directly.
 Reports use [CONTRACT.md](CONTRACT.md).
 
+When handing back a development report, return `result_file` and the same
+`outcome` as the report. Preparation waiting for a prerequisite merge returns
+`waiting`, not `complete`.
+
 ## Control
 
 Read state with the installed `scripts/development_run.py status` command.
