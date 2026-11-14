@@ -109,7 +109,11 @@ them. Run it from the same project `cwd` the host supplies to hooks, not an
 inferred Git root. A package launched as the project inside a monorepo can have
 its own overrides. `review-auto-model-selection: false` changes unspecified roles to
 configured defaults while retaining explicit choices. A disabled skill remains
-disabled independently. Configuration failure reports unavailability; continue
+disabled independently. `configuration.review_features` contains the current
+independent `review-<category>` controls used by packet preparation. Writing
+`skill:*` controls do not disable those categories. There is no category-selection
+prompt or automatic exclusion option.
+Configuration failure reports unavailability; continue
 authorized work without applying this skill, rather than inventing permission.
 If the helper is unavailable, report that limitation. Help can be read here;
 do not silently ignore supplied flags or claim they were validated.

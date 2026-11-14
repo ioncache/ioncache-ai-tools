@@ -146,11 +146,46 @@ def finding(state, event):
     }
 
 
-def decision(state, event):
-    """Record judgment history while keeping validity distinct from disposition.
+def verify_interrupted_applied_fix(state, item, event):
+    retained = next(((loop, cycle) for loop in reversed(state["loops"][:-1])
+                     for cycle in reversed(loop["cycles"]) if event["id"] in cycle["findings"]), None)
+    require(retained is not None, "No retained applied correction")
+    loop, cycle = retained
+    require(loop.get("invalidated") and "review" not in cycle,
+            "No interrupted focused review; settle completed focused outcomes before reconciliation")
+    result = cycle.get("result", {})
+    require(result.get("results", {}).get(event["id"], {}).get("result") == "applied",
+            "No retained applied correction")
+    require(cycle.get("after") == state["snapshot"], "Applied correction snapshot changed")
+    require(checks_pass(result["checks"]), "Retained fix checks did not pass")
+    previous = item["decisions"][-1] if item["decisions"] else {}
+    require(previous.get("sequence", 0) < result["sequence"],
+            "A newer decision must be honored; do not reuse the old applied outcome")
 
-    Verified resolution requires an applied fix in the current reviewed cycle
-    and passing checks. The coordinator remains responsible for evidence truth.
+
+def verify_fix_outcome(state, item, event):
+    require(event["validation"] == "valid", "Fix outcomes require a valid finding")
+    if state["phase"] == "validating" and event["disposition"] == "fixed":
+        require(item["validation"] == "pending" and item["disposition"] == "open",
+                "Only an invalidated pending outcome can be verified")
+        previous = item["decisions"][-1] if item["decisions"] else {}
+        if previous.get("validation") != "valid" or previous.get("disposition") != "fixed":
+            verify_interrupted_applied_fix(state, item, event)
+        require(checks_pass(current_loop(state)["review"]["checks"]),
+                "Current review checks did not pass")
+        return
+    phase(state, "validating_fixes")
+    cycle = current_cycle(state)
+    require(event["id"] in cycle["findings"], "Finding not part of this fix cycle")
+    if event["disposition"] == "fixed":
+        require(item["disposition"] == "fix_applied", "No applied fix to verify")
+        require(checks_pass(cycle["result"]["checks"]), "Fix checks did not pass")
+
+
+def decision(state, event):
+    """Keep resolution history so invalidation need not force an artificial edit.
+
+    The coordinator remains responsible for independent evidence and its truth.
     """
     phase(state, "validating", "validating_fixes")
     require(event["id"] in state["findings"], "Unknown finding")
@@ -162,13 +197,7 @@ def decision(state, event):
             "Invalid disposition")
     require(event["severity"] in ("High", "Medium", "Low"), "Invalid severity")
     if disposition in ("fixed", "fix_failed"):
-        phase(state, "validating_fixes")
-        cycle = current_cycle(state)
-        require(event["id"] in cycle["findings"], "Finding not part of this fix cycle")
-        require(valid == "valid", "Fix outcomes require a valid finding")
-        if disposition == "fixed":
-            require(item["disposition"] == "fix_applied", "No applied fix to verify")
-            require(checks_pass(cycle["result"]["checks"]), "Fix checks did not pass")
+        verify_fix_outcome(state, item, event)
     item["decisions"].append({"previous": {key: item[key] for key in
                                          ("validation", "disposition", "severity")},
                               **copy.deepcopy(event)})

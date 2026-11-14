@@ -54,6 +54,13 @@ Refresh installed copies when testing background reviewers or documentation
 distillers, even if the main session uses a live checkout. Feature settings
 live outside the plugin cache and need no reinstall.
 
+Category-isolation acceptance needs fresh host sessions using this source,
+including child workers. A source self-check does not replace native instruction
+delivery evidence. Do not treat an old cached session as testing the new guidance.
+Refresh catalog writers together: older copies can erase new `review-*` settings.
+See [review-evaluation.md](review-evaluation.md) for the separate offline/native
+acceptance paths and [configuration.md](configuration.md) for rollout limitations.
+
 Host documentation:
 
 - https://code.claude.com/docs/en/plugins/loading

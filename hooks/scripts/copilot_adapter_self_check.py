@@ -243,6 +243,22 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIn(rule['message'], text)
         self.assertIn('documentation-backed', str(self.prompt('Continue the feature')))
 
+    def test_bounded_review_guidance_reaches_native_children_without_fences(self):
+        for identity in ('parent-review', 'child-review'):
+            native = {'sessionId': identity, 'agentId': identity}
+            startup, _ = self.invoke('subagentStart', **native)
+            self.assertIn('Assigned review workers and validators', str(startup))
+            prompt, _ = self.invoke('userPromptTransformed', **native,
+                                    prompt='Why?', transformedPrompt='Review only security')
+            self.assertTrue(prompt['modifiedTransformedPrompt'].startswith('Review only security'))
+            self.assertIn('do not load engineering-judgment, review-code', str(prompt))
+            command = 'printf reviewed'
+            self.assertEqual(self.invoke('preToolUse', **native, toolName='bash',
+                                         toolArgs={'command': command})[0], {})
+            result = subprocess.run(command, shell=True, cwd=self.project, env=self.env,
+                                    check=True, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.stdout, 'reviewed')
+
     def test_tools_and_replies_do_not_launch_scope_reviewers(self):
         capture = self.root / 'unexpected-review.txt'
         self.env.update(REVIEW_FIXTURE_CAPTURE=str(capture), REVIEW_FIXTURE_ERROR='Reviewer unavailable')

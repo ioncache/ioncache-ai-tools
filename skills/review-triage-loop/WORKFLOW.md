@@ -60,7 +60,7 @@ the gap rather than repeatedly relaunching within the same round.
 ## Validate and triage every candidate
 
 The coordinator reads and applies
-[../review-code/CRITERIA.md#actionability](../review-code/CRITERIA.md#actionability), including
+[../review-code/ASSESSMENT.md](../review-code/ASSESSMENT.md) and its policy modules, including
 documentation accuracy, test coverage, edge-case exclusions, and impact-based
 severity. This shares judgment rules, not the review-code orchestration or
 report format. Do not pass this methodology to the fresh reviewer or change

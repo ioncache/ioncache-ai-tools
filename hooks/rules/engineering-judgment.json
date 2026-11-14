@@ -2,5 +2,5 @@
   "event": "SessionStart",
   "matcher": { "type": "always" },
   "action": "inject",
-  "message": "Use the engineering-judgment skill for non-trivial work; prefer system coherence over patch size."
+  "message": "Use the engineering-judgment skill for non-trivial planning and implementation. Assigned review workers and validators use only supplied instructions: do not load engineering-judgment, review-code, other categories or generic review workflows. Reading source does not activate skills. This guidance does not change permissions."
 }

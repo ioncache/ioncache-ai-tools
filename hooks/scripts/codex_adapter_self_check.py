@@ -116,6 +116,21 @@ class CodexAdapterTests(unittest.TestCase):
                                              tool_input={'command': CLEAN_PATCH}), [{}])
         self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
 
+    def test_bounded_review_guidance_reaches_native_children_without_fences(self):
+        for identity in (None, 'category-reviewer'):
+            startup = self.invoke('SessionStart', agent_id=identity, source='resume')
+            self.assertIn('Assigned review workers and validators', str(startup))
+            prompt = self.invoke('UserPromptSubmit', agent_id=identity,
+                                 prompt='Review only the assigned category. Why?')
+            self.assertIn('do not load engineering-judgment, review-code', str(prompt))
+            self.assertNotIn('permissionDecision', str(prompt))
+            command = 'printf reviewed'
+            self.assertEqual(self.invoke('PreToolUse', agent_id=identity, tool_name='Bash',
+                                         tool_input={'command': command}), [{}])
+            result = subprocess.run(command, shell=True, cwd=self.project, env=self.env,
+                                    check=True, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.stdout, 'reviewed')
+
 
     def test_manifest_serializes_dependent_hooks(self):
         for event in ('UserPromptSubmit', 'PreToolUse', 'PostToolUse'):

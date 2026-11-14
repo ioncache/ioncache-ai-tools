@@ -26,7 +26,8 @@ jobs:
           for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
                    .codex-plugin/plugin.json .agents/plugins/marketplace.json \
                    .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
-                   hooks/copilot-hooks.json config/defaults.json scripts/fixtures/review_quality.json; do
+                   hooks/copilot-hooks.json config/defaults.json scripts/fixtures/review_quality.json \
+                   skills/review-code/categories.json; do
             python3 -c "import json; json.load(open('$f')); print('$f OK')"
           done
 
@@ -77,6 +78,9 @@ jobs:
 
       - name: Run review-options self-check
         run: python3 scripts/review_options_self_check.py
+
+      - name: Run review-assignment self-check
+        run: python3 scripts/review_assignments_self_check.py
 
       - name: Run release self-check
         run: python3 scripts/release_self_check.py

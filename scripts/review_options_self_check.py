@@ -193,6 +193,22 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(options["effective_model_selection"], "configured")
         self.assertFalse(options["configuration"]["skill_enabled"])
 
+    def test_review_categories_are_independent_of_writing_skill_opt_outs(self):
+        self.write_settings(".copilot/ioncache-ai-tools.local.json", {
+            "skill:security": False, "skill:documentation-writing": False,
+            "review-comments": False,
+        })
+        options = json.loads(self.run_options("review-code").stdout)
+        features = options["configuration"]["review_features"]
+        self.assertTrue(features["review-security"])
+        self.assertTrue(features["review-documentation"])
+        self.assertFalse(features["review-comments"])
+        self.assertTrue(options["configuration"]["auto_selection_enabled"])
+        self.write_settings("project/.github/copilot/ioncache-ai-tools.local.json",
+                            {"review-comments": True})
+        self.assertTrue(json.loads(self.run_options("review-code").stdout)
+                        ["configuration"]["review_features"]["review-comments"])
+
     def test_malformed_configuration_is_not_overwritten_and_help_still_works(self):
         path = self.write_settings(".codex/ioncache-ai-tools.local.json", {})
         path.write_text("{bad")

@@ -34,7 +34,8 @@ Git worktree. Read its `--help` if invocation details are unclear.
 
 1. Normalize options, then resolve the target, objective, and comparison base using the workflow.
    Initialize one ledger, or inspect the explicitly selected resumed run.
-2. Record `start_review` before any full-review launch, then invoke
+2. Prepare and freeze the complete category plan, storing it and normalized
+   options in `start_review.reason` before any full-review launch, then invoke
    `review-code` with the pinned request and ledger snapshot. In nested mode
    the review coordinator owns specialist launches. In flat mode the loop
    launches and collects workers, then delegates adjudication. Both modes use
@@ -56,8 +57,10 @@ Git worktree. Read its `--help` if invocation details are unclear.
    Apply the shared actionability policy, not just the report's severity floor.
 4. Declare an authorized batch of files and valid, in-scope `Act` findings
    before fixing. Do not automatically fix style observations, decisions, or
-   uncertain investigations. Use one code writer. Run relevant checks, then
-   delegate an independent focused review of the correction delta and its
+   uncertain investigations. Use one code writer. Run relevant checks and record
+   `fix_done` to save the after snapshot. Prepare the focused plan from the saved
+   correction delta, checkpoint it through `stop`/`resume` as described in
+   LEDGER.md, then launch independent focused review of the correction and its
    affected callers using the same review-role options.
 5. Validate review-fixes findings inside this cycle. Resolve applied-fix
    outcomes, then advance. If actionable issues remain, fix them in the
