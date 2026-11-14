@@ -25,9 +25,13 @@ If the PR is not represented by the current worktree, report the mismatch.
 Initialize the helper with the resolved `--objective`, `--scope` description,
 `--base` commit, and limits. Defaults are three outer loops and three inner
 cycles per outer loop. Store effective choices in the ledger before reviewing.
-Include `review_options` as JSON in the first `start_review` reason, using the
-existing string field. Retain it in pass evidence too, so replay and resume do
-not depend on private prompt files. Do not add option fields to ledger events.
+Prepare the complete category plan under
+[../review-code/PACKETS.md](../review-code/PACKETS.md) before `start_review`.
+Include `review_options`, the effective registry, language inventory/evidence,
+technical-applicability decisions, full frozen instructions,
+exclusion provenance and replacement bound as JSON in its existing reason.
+Retain complete pass evidence too; replay and resume must not depend on private
+prompt files. Do not add fields to ledger events.
 The helper allows only one running or resumable run per worktree. Independent
 runs need isolated worktrees or a terminal prior run.
 
@@ -42,7 +46,11 @@ the loop owns launches and collection in flat mode, then uses a separate
 adjudicator. Every review task uses a fresh single-purpose worker, regardless
 of change size. Keep integration separate from coordination and adjudication.
 Neither the loop owner nor review coordinator may perform review passes inline.
-Retain the cross-cutting correctness pass. The outer loop
+Retain every enabled general category across the whole requested scope,
+including functional correctness. Use the plan's evidenced language prerequisites
+for language-specific dispatch; unresolved language facts leave coverage incomplete
+while other work continues. Do not restore a pooled correctness checklist.
+The outer loop
 remains the sole ledger writer and owns limits and fixes.
 Pass the helper's `effective_strategy` separately from topology. `auto` resolves
 to `specialists`; `sweep-first` changes order without changing the roster or
@@ -83,7 +91,7 @@ the [handback mapping](LEDGER.md#review-handback-mapping). A reachable failure,
 caller contract, documented standard, or unmet usage-documentation requirement
 can validate an issue. Model agreement alone cannot. Distinguish truth from
 scope, actionability, and risk acceptance. Apply
-[../review-code/CRITERIA.md#actionability](../review-code/CRITERIA.md#actionability), not a
+[../review-code/ASSESSMENT.md](../review-code/ASSESSMENT.md) and its policy modules, not a
 blanket rule that valid observations on new code require edits. Inaccurate
 documentation needs a concrete mistaken action, consequential misunderstanding,
 or maintenance risk. Missing coverage needs a meaningful regression it would
@@ -116,8 +124,12 @@ or a ledger disposition alone. This records intent and consumes one inner cycle.
 Use one writer and do not stage or commit changes. Preserve pre-existing edits
 in those files.
 
-Run the smallest relevant checks and record `fix_done`, with a per-finding
-applied/failed result and check evidence. An attempted fix is not yet a verified
+Run the smallest relevant checks, then record `fix_done` with a per-finding
+applied/failed result and check evidence. This saves the after snapshot needed by
+`diff`. Prepare the complete focused plan from the actual saved correction delta.
+Persist that plan and options in an internal `stop` (`interrupted`)/`resume`
+checkpoint before launching workers, without consuming another review or fix cycle.
+An attempted fix is not yet a verified
 resolution. The helper rejects changes outside the declared files or changed
 HEAD/index metadata. It never reverts code to resolve such conflicts.
 
@@ -161,6 +173,14 @@ Recover saved review options and pass them, with any resolved conversational
 choices, to the options helper's context input under OPTIONS.md. Use its merged
 output, including recomputed fallback and effective selection. Recheck host
 authority before launch.
+Recover the latest complete phase plan, including any `stop.reason` revision,
+with its frozen instructions, attempts, active map and consumed replacement
+allowances. Recheck current authority and review-category controls. A writing
+skill toggle does not remove review coverage. A category disable cancels only
+its remaining obligations, retaining prior attempts as diagnostics.
+Do not reinterpret cosmetic source updates or rephrased inventory as new
+requirements; reuse the frozen plan until the next full phase unless the owner
+requires changed coverage.
 Recheck saved assignment and instruction-set identities too. Do not adopt
 bundled-worker or inline-review coverage from an older plan as independent;
 replace affected assignments within existing counts and limits, or report
@@ -169,6 +189,36 @@ Put the merged request in the `resume` reason, or the next phase event's
 reason/evidence when continuing a running run. Never replace saved role choices
 with the parser's omitted-option defaults.
 Inspect partially applied edits before doing more work in an interrupted fix.
+
+For an open phase, record added required categories or another legitimate plan
+revision through `stop` with the complete plan, attempts, active map, reason and
+consumed allowances, then `resume` before dispatch. Never refund attempts.
+An abrupt interruption with unrecoverable attempt history leaves spending
+unknown: recover native evidence, use a counted reconciliation within remaining
+limits, or report incomplete. It cannot become another automatic replacement.
+
+Closed coverage or known invalid isolation requires counted reconciliation.
+Before reconciling in `validating_fixes`, independently settle every legitimately
+applied outcome using valid focused evidence or fresh outcome evidence with the
+same snapshot, authority and passing-check prerequisites. These decisions do
+not certify invalid category coverage. If prerequisites cannot support an
+outcome, remain incomplete rather than manufacture a fixed history or extra edit.
+
+After reconciliation, a fresh completed full review can reconfirm a previously
+verified `valid/fixed` finding while its current state is pending/open and
+current checks pass. Supply new independent evidence that resolution still holds.
+
+If a language contradiction or retired plan prevents `reviewing_fixes` from
+closing, preserve the incomplete focused records and reconcile within the
+remaining outer limit instead of fabricating `fixes_reviewed`. Fresh full
+coverage may then supply the first independent verification of a retained
+applied correction. Its latest fix cycle must have been invalidated before
+focused completion, its after snapshot must still match, its fix checks and
+the current full-review checks must pass, and no later decision may supersede
+that applied outcome. Record the new outcome assessment as evidence for `fixed`.
+Application alone, a failed fix, changed snapshot, failed checks, exhausted
+capacity or a reopened finding does not satisfy those prerequisites. No extra
+edit, refunded cycle or new ledger event is needed.
 
 Read-only-phase drift requires `reconcile` with evidence. This invalidates
 old judgments and consumes another outer loop when full review restarts;
@@ -185,6 +235,9 @@ Use `blocked` for recoverable worker/capability failures and `interrupted`
 for interruptions. Use terminal `failed` for unrecoverable errors or
 `stalled` when further progress is abandoned. Do not copy a worker's `failed`
 outcome into the run outcome without deciding whether the run can resume.
+Use at most the recorded replacement rounds per failed category, including
+shards and model fallback. Preserve failed attempts and select active reports
+only in the caller's map. Exhaustion is incomplete coverage, not a tool fence.
 Do not repeatedly relaunch a failing worker within a phase to evade counts.
 The coordinator's ledger reasons record the failure and its consequences.
 Malformed storage, missing evidence, or helper errors must be surfaced.

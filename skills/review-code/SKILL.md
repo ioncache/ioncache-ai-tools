@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Reviews code for correctness, security, performance, and project standards using independent review passes. Use when asked to review files, a branch, a pull request, or a repository; reports findings without applying fixes.
+description: Runs a read-only review of files, branches, pull requests or repositories with independent category workers. Use for an unassigned review request, not an already assigned category, adjudication or validation pass. Reports findings without applying fixes.
 argument-hint: "[target] [--help] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
 ---
 
@@ -57,11 +57,22 @@ that purpose's review instructions. There is no inline or small-check exception.
 Do not combine standards, reuse a worker for another purpose, or treat separate
 pass records as separate contexts. This applies to full and focused reviews.
 
-Read [CRITERIA.md](CRITERIA.md) and [CONTRACTS.md](CONTRACTS.md).
-They define the review catalog, actionability
-policy, human report, and evidence handback. Establish the standards inventory
+Read [CRITERIA.md](CRITERIA.md), [CONTRACTS.md](CONTRACTS.md), and
+[PACKETS.md](PACKETS.md). They define the category inventory, bounded packet
+preparation and evidence handback. Use [ASSESSMENT.md](ASSESSMENT.md) for
+assessment and the human report. Establish the standards inventory
 before allocating passes. Apply the actionability policy to recommendations
 as well as presentation.
+
+Every enabled general category and additional project purpose runs by default.
+Resolve explicit language prerequisites from source evidence before dispatch;
+JSDoc runs only for JavaScript scope, not TypeScript or other languages.
+Missing dedicated language/framework guidance does not remove general coverage.
+No automatic exclusions, suggested exclusions or category-selection question.
+Same-purpose project requirements enter the owning category's packet rather
+than a second competing pass. The caller records technical language facts;
+workers establish remaining file-level and semantic applicability.
+Writing-skill activation settings do not switch off review categories.
 
 The caller owns scope, permissions, and the nested-versus-flat mode decision.
 The caller may be an invoking agent or an explicitly approved scripted
@@ -112,7 +123,8 @@ text rather than target content, and reject submodules and special files.
 Non-Git or required excluded inputs need an explicit alternative identity
 and coverage limitation; never present them as protected by this fingerprint.
 
-Check the returned handback against the request, required assignments, worker
+Run the packet helper's structural check, then check the returned handback
+against the request, required assignments, worker
 identities, instruction-set identities, and final snapshot. Schedule fresh
 validation for adjudicator-originated findings, gaps, or contradictions.
 Preserve rejected candidates for a calling loop. Mechanical checks are not

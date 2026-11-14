@@ -1,9 +1,13 @@
 ---
 name: engineering-judgment
-description: Guides engineering decisions toward coherent behavior across the affected application or services, rather than the shortest patch. Use when implementing non-trivial features or fixes, refactoring, choosing abstractions or dependencies, or reviewing design and contract changes.
+description: Guides non-trivial planning, implementation, refactoring, and unassigned design decisions toward coherent behavior. Generic work may compose other skills. Do not activate for an already assigned review or validation pass; its supplied instructions define its purpose.
 ---
 
 # Engineering judgment
+
+Use [../review-code/categories/design-coherence.md](../review-code/categories/design-coherence.md)
+for the shared design standard, then apply this general planning/implementation
+workflow and relevant enabled specialist guidance.
 
 Prefer the simplest coherent solution, not the fewest changed lines or files.
 Understand broadly enough to make the change sound. Change only what the
@@ -14,6 +18,14 @@ not need an architecture review. This skill does not authorize edits during
 questions, planning, or read-only reviews.
 
 ## Understand the affected system
+
+For general planning and implementation, compose enabled specialist guidance
+where relevant: [../security/SKILL.md](../security/SKILL.md) for trust boundaries,
+[../code-complexity/SKILL.md](../code-complexity/SKILL.md) for function structure,
+and [../documentation-writing/SKILL.md](../documentation-writing/SKILL.md) for
+written contracts.
+An assigned reviewer or validator uses its bounded packet instead of this
+composer. Reading source does not add review purposes.
 
 1. Establish the requested outcome, explicit scope limits, and documented
    requirements. Separate those from assumptions and possible future needs.

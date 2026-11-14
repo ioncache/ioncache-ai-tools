@@ -23,7 +23,10 @@ Each skill's file defines its scope, inputs, and stopping conditions.
 Writing and implementation guidance lives in [../skills/](../skills/):
 `answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
 `documentation-writing`, `prompt-output`, `unit-tests`, `jsdoc`, and `security`.
-The testing and JSDoc skills target Vitest and JavaScript/TypeScript.
+Unit-test guidance adapts to the actual language and runner; Vitest conventions
+apply only to Vitest suites. JSDoc guidance is JavaScript-only, not TypeScript.
+General documentation and contract review remain relevant to other languages,
+including native doc comments and docstrings.
 
 ## Review loops
 
@@ -66,9 +69,11 @@ leaves the review incomplete, without blocking other authorized work.
 Before allocation, inventory repository standards, path applicability, and
 exceptions. Separate code-checking passes from execution constraints such as
 conversational guidance. Reuse a pinned inventory, not an assumed instruction
-catalog; missing required sources leave coverage incomplete. Every configured
-code-review standard gets a worker, which verifies applicability and reports
-why no paths apply when appropriate. The orchestrator cannot skip a standard
+catalog; missing required sources leave coverage incomplete. Enabled general
+standards and evidenced language-specific standards get separate workers.
+Resolve explicit language prerequisites before dispatch; unknown language facts
+leave coverage unresolved while other work continues. Dispatched workers verify
+remaining file-level applicability. The orchestrator cannot skip a standard
 because it predicts a small or low-value check.
 
 The options helper resolves `auto` deterministically to `specialists`, which

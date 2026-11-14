@@ -124,11 +124,11 @@ provide standards for the requested work, not standalone test or audit tools.
 | --- | --- |
 | `/ioncache-ai-tools:engineering-judgment` | Choose coherent solutions across affected code while honoring scope limits |
 | `/ioncache-ai-tools:code-complexity` | Keep functions cohesive; evaluate size, nesting, and parameter counts |
-| `/ioncache-ai-tools:comments` | Decide when code comments are warranted and explain why, not what |
+| `/ioncache-ai-tools:comments` | Keep implementation comments purposeful and preserve native API documentation |
 | `/ioncache-ai-tools:documentation-writing` | Write direct documentation with clear sentences and standard punctuation |
 | `/ioncache-ai-tools:prompt-output` | Format a requested prompt as one copyable Markdown code block |
-| `/ioncache-ai-tools:unit-tests` | Write or review JavaScript/TypeScript tests using Vitest conventions |
-| `/ioncache-ai-tools:jsdoc` | Write or review JSDoc using the plugin's JS/TS documentation conventions |
+| `/ioncache-ai-tools:unit-tests` | Write or review unit tests using the target language and framework |
+| `/ioncache-ai-tools:jsdoc` | Write or review JavaScript JSDoc, not TypeScript or other languages |
 | `/ioncache-ai-tools:security` | Apply input-validation, authentication, and secret-handling standards |
 | `/ioncache-ai-tools:answer-questions` | Inspect question-answering guidance; not required before asking ordinary questions |
 
@@ -148,11 +148,27 @@ capability evidence allow it, otherwise configured models are used.
 Explicit choices are not silently replaced. The lead is the review coordinator
 or adjudicator, not your conversation's model.
 
-Reviews require a fresh subagent for each review purpose, including each
-configured standard. Small changes do not permit inline or bundled checks.
+Reviews provide 12 independently enabled categories across the requested
+scope: security, complexity, comments, JSDoc, unit-test quality, documentation,
+design coherence, correctness, integration, privacy, performance and test coverage.
+Project-specific purposes add workers; same-purpose project requirements override
+defaults within their scope. Small changes do not permit inline or bundled checks.
 Coordination, integration review, and adjudication stay separate.
 The default strategy uses isolated specialists; `sweep-first` changes their
 order, not the required tasks or context isolation.
+
+General categories adapt to the actual stack even without a dedicated guide.
+Language-specific workers require source evidence: JSDoc runs only when
+JavaScript is in scope. TypeScript-only and other JavaScript-free targets retain
+general documentation and contract review without a JSDoc worker.
+Unknown language facts leave coverage unresolved while other work continues.
+Workers verify remaining file-level applicability; predicted usefulness cannot
+remove a category.
+Independent `review-<category>` settings control shipped coverage, separately
+from writing-skill settings. With no extra project categories, a default flat
+phase starts with 12 workers without JavaScript or 13 with it, including
+adjudication, before retries, validators or capacity shards.
+See [docs/configuration.md](docs/configuration.md).
 
 Role effort, validator, fallback, and strategy options are listed in
 [skills/review-code/OPTIONS.md](skills/review-code/OPTIONS.md). The review/fix loop

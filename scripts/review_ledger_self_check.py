@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import review_ledger
 import review_options
+import review_assignments
 
 
 HELPER = Path(__file__).with_name("review_ledger.py")
@@ -127,6 +128,225 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("fix_done", results={"F001": {"result": result, "evidence": "Edited fixture"}},
                   checks=CHECKS)
         self.send("fixes_reviewed", passes=PASSES)
+
+    def test_reconcile_reconfirms_verified_fix_without_another_edit(self):
+        self.init("--max-loops", "2", "--max-fix-cycles", "1")
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        self.decide(disposition="fixed")
+        self.send("advance")
+        before = (self.root / "app.txt").read_bytes()
+        self.send("reconcile", evidence=["Required category coverage changed"])
+        self.review()
+        self.decide(disposition="fixed")
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(self.state["loops"]), 2)
+        self.assertEqual(sum(len(loop["cycles"]) for loop in self.state["loops"]), 1)
+        self.assertEqual((self.root / "app.txt").read_bytes(), before)
+        self.assertEqual(self.cli(["status", self.ledger])["outcome"], "completed")
+
+    def phase_plan(self, kind):
+        features = {row["feature"]: True for row in review_assignments.catalog()["categories"]}
+        request = {
+            "objective": "Correct fixture behavior", "kind": kind, "target": "repository",
+            "base": self.git("rev-parse", "HEAD").decode().strip(),
+            "snapshot": self.cli(["fingerprint"])["snapshot"], "root": str(self.root),
+            "files": ["app.txt"], "constraints": ["Offline fixture; no model launches"],
+            "language_inventory": {
+                "app.txt": {"languages": [], "evidence": "Plain-text transition fixture, no source code"},
+            },
+            "scratch_directory": str(self.root.with_name(self.root.name + "-uncreated-private")),
+            "review_options": {"configuration": {"skill_enabled": True, "review_features": features}},
+        }
+        if kind == "focused":
+            cycle = self.state["loops"][-1]["cycles"][-1]
+            request["correction"] = {
+                "before": cycle["before"], "after": cycle["after"],
+                "delta": self.cli(["diff", self.ledger, "--from", cycle["before"],
+                                  "--to", cycle["after"]]),
+            }
+        return review_assignments.prepare(request)
+
+    def test_full_and_focused_phase_plans_resume_without_private_prompt_files(self):
+        self.init()
+        full = self.phase_plan("full")
+        self.send("start_review", reason=json.dumps({"phase_plan": full}))
+        stopped = {"phase_plan": full, "attempts": [], "active": {},
+                   "consumed_replacements": {}, "history_complete": True}
+        self.send("stop", outcome="interrupted", reason=json.dumps(stopped))
+        self.send("resume")
+        history = self.cli(["status", self.ledger])["history"]
+        self.assertEqual(json.loads(history[-2]["reason"]), stopped)
+        self.assertEqual(len(self.state["loops"]), 1)
+        self.assertFalse(Path(full["request"]["scratch_directory"]).exists())
+        passes = [{"name": key, "worker": f"offline-full-{key}", "result": "complete",
+                   "evidence": "Offline transition fixture, not native review evidence"}
+                  for key in full["required"]]
+        self.send("review_done", passes=passes, checks=CHECKS)
+        self.finding()
+        self.decide()
+        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        (self.root / "app.txt").write_text("corrected before focused preparation\n")
+        after = self.cli(["fingerprint"])["snapshot"]
+        self.assertIn("Unknown snapshot", self.cli(
+            ["diff", self.ledger, "--from", self.state["snapshot"], "--to", after], ok=False))
+        self.send("fix_done", checks=CHECKS,
+                  results={"F001": {"result": "applied", "evidence": "Changed fixture bytes"}})
+        focused = self.phase_plan("focused")
+        self.assertTrue(focused["request"]["correction"]["delta"],
+                        "The focused plan must contain the actual correction, not a before-to-before diff")
+        self.assertEqual(focused["request"]["correction"]["after"], after)
+        self.assertIn("+corrected before focused preparation",
+                      focused["request"]["correction"]["delta"][0]["diff"])
+        stopped["phase_plan"] = focused
+        self.send("stop", outcome="interrupted", reason=json.dumps(stopped))
+        self.send("resume")
+        restored = json.loads(self.cli(["status", self.ledger])["history"][-2]["reason"])
+        self.assertEqual(restored, stopped)
+        self.assertEqual(restored["phase_plan"]["technical_applicability"]["jsdoc"]["status"],
+                         "not_applicable")
+        self.assertNotIn("jsdoc", restored["phase_plan"]["required"])
+        self.assertEqual(self.state["phase"], "reviewing_fixes")
+        self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
+        self.assertFalse(Path(focused["request"]["scratch_directory"]).exists())
+        self.send("stop", outcome="stalled")
+
+    def test_pending_applied_outcome_is_settled_before_reconciliation(self):
+        self.init("--max-loops", "2", "--max-fix-cycles", "1")
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        self.send("stop", outcome="interrupted")
+        self.send("resume")
+        self.assertEqual(self.state["phase"], "validating_fixes")
+        self.decide(disposition="fixed")
+        before = (self.root / "app.txt").read_bytes()
+        self.send("reconcile", evidence=["New required category after focused coverage closed"])
+        self.review()
+        self.decide(disposition="fixed")
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual((self.root / "app.txt").read_bytes(), before)
+
+    def test_open_focused_plan_retirement_verifies_applied_fix_without_another_edit(self):
+        for retirement in ("language", "schema"):
+            with self.subTest(retirement=retirement):
+                self.init("--max-loops", "2", "--max-fix-cycles", "1")
+                self.review()
+                self.finding()
+                self.decide()
+                self.send("start_fix", findings=["F001"], files=["app.txt"])
+                (self.root / "app.txt").write_text(f"module.exports = '{retirement}'\n")
+                self.send("fix_done", checks=CHECKS,
+                          results={"F001": {"result": "applied", "evidence": "Actual fixture edit"}})
+                retained = self.state["loops"][0]["cycles"][0]["result"]
+                plan = self.phase_plan("focused")
+                request = json.loads(json.dumps(plan["request"]))
+                request["language_inventory"]["app.txt"] = {
+                    "languages": ["javascript"], "evidence": "Inspected the fixture's JavaScript source",
+                }
+                if retirement == "schema":
+                    plan.pop("identity")
+                    plan["schema"] = 1
+                    plan = review_assignments.seal(plan)
+                with self.assertRaisesRegex(ValueError, "new phase"):
+                    review_assignments.prepare(request, plan)
+                self.reject("decision", id="F001", validation="valid", disposition="fixed",
+                            severity="High", evidence=["Focused coverage is not complete"])
+                self.reject("fixes_reviewed", passes=[{**PASSES[0], "result": "partial"}])
+                self.send("stop", outcome="interrupted", reason=json.dumps({"phase_plan": plan}))
+                self.send("resume")
+                self.assertEqual(self.state["phase"], "reviewing_fixes")
+                before = (self.root / "app.txt").read_bytes()
+                self.send("reconcile", evidence=["Retired invalid focused applicability", json.dumps(plan)])
+                request["kind"] = "full"
+                request.pop("correction")
+                fresh = review_assignments.prepare(request)
+                self.send("start_review", reason=json.dumps({"phase_plan": fresh}))
+                passes = [{**PASSES[0], "name": key, "worker": f"fresh-full-{key}"}
+                          for key in fresh["required"]]
+                self.send("review_done", passes=passes, checks=CHECKS)
+                self.send("decision", id="F001", validation="valid", disposition="fixed",
+                          severity="High",
+                          evidence=["Fresh full review and independent outcome assessment verify "
+                                    "the retained applied correction at its unchanged after snapshot"])
+                self.send("advance")
+                replayed = self.cli(["status", self.ledger])
+                self.assertEqual(replayed["outcome"], "completed")
+                self.assertEqual(len(replayed["loops"]), 2)
+                self.assertEqual(sum(len(loop["cycles"]) for loop in replayed["loops"]), 1)
+                self.assertEqual(replayed["loops"][0]["cycles"][0]["result"], retained)
+                self.assertNotIn("review", replayed["loops"][0]["cycles"][0])
+                self.assertEqual((self.root / "app.txt").read_bytes(), before)
+            if self.state and self.state["outcome"] in ("running", "interrupted", "blocked"):
+                self.send("stop", outcome="stalled")
+
+    def test_interrupted_applied_verification_keeps_snapshot_checks_and_decision_guards(self):
+        cases = ("failed-fix", "failed-fix-check", "failed-current-check", "drift", "newer-decision",
+                 "outer-limit")
+        for case in cases:
+            with self.subTest(case=case):
+                self.init("--max-loops", "1" if case == "outer-limit" else "3",
+                          "--max-fix-cycles", "1")
+                self.review()
+                self.finding()
+                self.decide()
+                self.send("start_fix", findings=["F001"], files=["app.txt"])
+                (self.root / "app.txt").write_text(f"changed {case}\n")
+                fix_checks = [{**CHECKS[0], "result": "failed"}] if case == "failed-fix-check" else CHECKS
+                self.send("fix_done", checks=fix_checks, results={
+                    "F001": {"result": "failed" if case == "failed-fix" else "applied",
+                             "evidence": "Recorded fixture outcome"},
+                })
+                if case == "drift":
+                    (self.root / "app.txt").write_text("unreviewed intervening source\n")
+                self.send("reconcile", evidence=["Focused language applicability was invalid"])
+                if case == "outer-limit":
+                    self.assertEqual(self.state["outcome"], "limit_reached")
+                    self.assertEqual(len(self.state["loops"]), 1)
+                    self.reject("start_review")
+                    continue
+                self.send("start_review")
+                current_checks = ([{**CHECKS[0], "result": "failed"}]
+                                  if case == "failed-current-check" else CHECKS)
+                self.send("review_done", passes=PASSES, checks=current_checks)
+                if case == "newer-decision":
+                    self.decide()
+                    self.send("reconcile", evidence=["Another full review cannot erase reopening"])
+                    self.review()
+                before = Path(self.ledger).read_bytes()
+                self.reject("decision", id="F001", validation="valid", disposition="fixed",
+                            severity="High", evidence=["Application alone is insufficient"])
+                self.assertEqual(Path(self.ledger).read_bytes(), before)
+                self.send("stop", outcome="stalled")
+
+    def test_reconfirmation_does_not_bless_unverified_or_reopened_findings(self):
+        for case in ("never-fixed", "applied-only", "failed-checks", "recurrence"):
+            with self.subTest(case=case):
+                (self.root / "app.txt").write_text(f"before {case}\n")
+                self.init()
+                self.review()
+                self.finding()
+                self.decide()
+                if case != "never-fixed":
+                    self.fix()
+                    if case != "applied-only":
+                        self.decide(disposition="fixed")
+                self.send("reconcile", evidence=["Required coverage changed"])
+                self.send("start_review")
+                checks = [{**CHECKS[0], "result": "failed"}] if case == "failed-checks" else CHECKS
+                self.send("review_done", passes=PASSES, checks=checks)
+                if case == "recurrence":
+                    self.decide()
+                before = Path(self.ledger).read_bytes()
+                self.reject("decision", id="F001", validation="valid", disposition="fixed",
+                            severity="High", evidence=["A prior application alone is not verification"])
+                self.assertEqual(Path(self.ledger).read_bytes(), before)
+                self.send("stop", outcome="stalled")
 
     def test_fingerprint_is_storeless_and_root_relative(self):
         before = self.git("status", "--porcelain")
@@ -247,6 +467,46 @@ class ReviewLedgerTests(unittest.TestCase):
             self.assertIn("validator=independent-caller-validator",
                           report["findings"]["F002"]["decisions"][0]["evidence"][0])
             self.assertEqual(json.loads(Path(self.ledger).read_text())["schema"], 1)
+
+    def test_ledger_accepts_mapped_workers_and_preserves_original_reports(self):
+        for observed in (True, False):
+            with self.subTest(caller_observes_identity=observed):
+                self.init()
+                self.send("start_review")
+                for kind in ("review_done", "fixes_reviewed"):
+                    original = {"assignment": f"{kind}-correctness", "worker": None,
+                                "snapshot": self.state["snapshot"]}
+                    native_worker = f"fixture-native-{kind}" if observed else None
+                    mapped = {**PASSES[0],
+                              "worker": native_worker or "unobserved (non-identity marker)",
+                              "evidence": json.dumps({
+                                  "original_report": original,
+                                  "caller_observation": {
+                                      "worker": native_worker,
+                                      "source": "Synthetic caller fixture" if observed else "Not exposed",
+                                  },
+                                  "worker_field_kind": "native identity" if observed else "non-identity marker",
+                                  "limitations": [] if observed else ["Native identity is unobserved"],
+                              })}
+                    values = {"checks": CHECKS} if kind == "review_done" else {}
+                    self.assertIn("Expected non-empty text",
+                                  self.reject(kind, passes=[{**mapped, "worker": None}], **values))
+                    self.send(kind, passes=[mapped], **values)
+                    saved = self.cli(["status", self.ledger])["history"][-1]["passes"][0]
+                    self.assertEqual(saved, mapped)
+                    self.assertEqual(json.loads(saved["evidence"])["original_report"], original)
+                    if kind == "review_done":
+                        self.finding()
+                        self.decide()
+                        self.send("start_fix", findings=["F001"], files=["app.txt"])
+                        (self.root / "app.txt").write_text(f"corrected fixture {observed}\n")
+                        self.send("fix_done", checks=CHECKS,
+                                  results={"F001": {"result": "applied", "evidence": "Changed fixture"}})
+                self.decide(disposition="fixed")
+                self.send("advance")
+                self.review()
+                self.send("advance")
+                self.assertEqual(self.state["outcome"], "completed")
 
     def test_incomplete_handbacks_preserve_diagnostics_and_resumability(self):
         for outcome in ("blocked", "interrupted", "failed", "stalled"):

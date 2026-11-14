@@ -42,7 +42,7 @@ adds `snapshot`, `sequence`, and `time`; do not supply them.
 | `advance` | None | Finish validation, enforce limits, or finish the run. |
 | `stop` | `outcome` | Stop as `blocked`, `interrupted`, `failed`, or `stalled`. A blocked/interrupted run may be abandoned as `failed` or `stalled`. |
 | `resume` | None | Reopen a blocked/interrupted run without changing allowances. |
-| `reconcile` | `evidence` | Invalidate evidence after external edits outside a fixing phase. |
+| `reconcile` | `evidence` | Invalidate evidence after drift or required coverage changes outside fixing; settle completed focused outcomes first, or retain interrupted focused outcomes for fresh full verification. |
 
 `locations`, `evidence`, `findings`, and `files` are non-empty string arrays.
 File declarations are exact paths, not globs. `severity` is `High`, `Medium`,
@@ -55,8 +55,25 @@ findings start `pending`. Disposition decisions accept `open`, `ignored`,
 automatically. Preserve truth separately from disposition; explain accepted
 uncertainty and residual risk in the reason/evidence.
 
-`fixed` requires an applied correction in the current cycle, passing checks,
-and completed review-fixes. Resolve every `fix_applied` before `advance`.
+Ordinary `fixed` verification requires an applied correction in the current
+cycle, passing checks, and completed review-fixes.
+In full-review `validating`, it may instead reconfirm an invalidated pending/open
+finding whose latest prior decision was `valid/fixed`, after fresh full coverage
+and passing current checks. The caller supplies new independent resolution
+evidence; ledger bookkeeping cannot establish its truth.
+
+When a focused plan must be retired before `fixes_reviewed`, a fresh full
+review may provide first verification instead. The finding must still be
+pending/open after reconciliation. Its latest retained fix cycle must be in
+an invalidated loop with no completed focused review, an `applied` result,
+passing fix checks, and an after snapshot equal to the current snapshot.
+No decision newer than that fix result may supersede it. Current full coverage
+and checks must pass, and new independent outcome evidence must establish the
+resolution. The ledger checks these recorded prerequisites, not their truth.
+
+Resolve every `fix_applied` before `advance`. Settle completed focused outcomes
+before coverage-change reconciliation; do not invent focused completion to
+retire an invalid open plan.
 Call `advance` before starting a further fix cycle. A failed attempt remains
 actionable unless separately disposed of with justification.
 
@@ -104,12 +121,29 @@ Keep schema 1 and its exact event fields. The outer loop translates it:
 | Assessment | `decision` after `review_done` or `fixes_reviewed`; retain validator identity, reachability, confidence, priority, `report_action`, and reasoning in the reason/evidence fields. Resolve pending caller validation first. Do not add these as event fields. |
 | Incomplete required work | Preserve received candidates, then `stop`; put assignment outcomes, coverage gaps, selection provenance, and diagnostics in its reason. Do not emit `review_done` or `fixes_reviewed` for partial passes. |
 
+Keep an unobserved `report.worker` as JSON `null` in the original report.
+For the ledger pass's required text `worker`, use the caller-observed native
+identity when available and retain its observation source in `evidence`.
+If neither side observes the identity, use `unobserved (non-identity marker)`
+in that ledger field only. Preserve the original report, assignment, null caller
+observation and visibility limitation in `evidence`, and identify the marker as
+non-identity text. Never use the marker or assignment name as a native identity
+in packets, attempt records or context-reuse checks. This mapping does not prove
+independence or remove identity-visibility limitations.
+
 Record `start_review` before the coordinator or full-review workers launch.
-For focused review, `fix_done` already enters the counted correction's review
-phase; do not record another `start_review`. Checks keep their existing
+Prepare first and retain the complete phase plan, normalized options, frozen
+source content, effective registry and replacement bounds in that event's reason.
+For focused review, record `fix_done` after edits/checks to save the correction's
+after snapshot and enter its review phase. Only then can `diff` return the actual
+before/after delta. Prepare the complete focused plan from that delta and persist
+it in `stop.reason` with outcome `interrupted`, then immediately `resume` before
+launching workers. This is an internal checkpoint, not a request for human input.
+It preserves the phase and allowances. Do not record another `start_review` or
+defer plan persistence until `fixes_reviewed`. Checks keep their existing
 `passed`, `failed`, `unavailable`, and `not_applicable` semantics.
-A sweep-first worker and the separately required standards, integration, and
-adjudication workers belong to that same counted phase. Before recording
+Every required category and the separate adjudicator belong to that same
+counted phase. Sweep-first changes order, not their purposes. Before recording
 completion, check that each assignment used a distinct worker context and
 its own purpose-specific instructions. The ledger preserves this evidence;
 it does not prove isolation from different pass names alone.
@@ -124,6 +158,24 @@ selected, and observable actual models remain separate, including fallback
 attempts. Configuration observations must be refreshed on resume, not treated
 as lasting host authority.
 Do not make replay depend on an unavailable external request file.
+An orderly interruption or open-phase plan revision uses the existing
+`stop.reason` for the complete latest plan, chronological attempts, active map,
+available evidence and consumed allowances, then `resume`.
+Restore the latest such plan, not only the initial phase record.
+Unknown lost spending is not refunded. Cosmetic plugin byte changes alone do
+not invalidate frozen instructions.
+
+Before reconciliation in `validating_fixes`, settle any still-applied outcomes
+with valid independent evidence and the same snapshot, authority and check
+prerequisites. If those prerequisites cannot support verification, stop incomplete.
+Do not invent a prior fixed decision or perform an artificial edit to escape.
+Reconciliation keeps decision history, permitting the narrow full-review
+reconfirmation above without another fix cycle. For a plan retired while still
+`reviewing_fixes`, preserve the applied-cycle record and use the guarded first
+verification route after a fresh counted full review. Old partial passes remain
+partial; the new review does not retroactively certify them.
+Event shapes remain schema 1;
+older helpers cannot replay this newly allowed transition.
 An assessment awaiting independent caller validation does not make its
 completed pass partial. Record the completed passes, then resolve and record
 that assessment; never use the handback's overall outcome alone to decide
@@ -156,9 +208,9 @@ Use `interrupted` for interruption, `failed` for unrecoverable errors, and
 Record available evidence without inventing successful assignments or dropping
 diagnostics to shorten the human report.
 
-Coordinator/adjudicator assessment validates specialist findings. The loop
+The separate adjudicator validates specialist findings. The loop
 checks completeness and contradictions, then records the disposition.
-Coordinator-originated findings require independent loop validation.
+Adjudicator-originated findings require a fresh independent validator.
 A scripted owner schedules the shared caller-validation role and records the
 actual validator's identity, assessments, and evidence. Mechanical replay
 validates structure and ordering, not those judgments.

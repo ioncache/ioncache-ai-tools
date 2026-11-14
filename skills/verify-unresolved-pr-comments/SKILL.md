@@ -16,7 +16,7 @@ table and the one-line summary requested below. On failure to retrieve review
 thread data, do not produce a table.
 
 Read and apply
-[../review-code/CRITERIA.md#actionability](../review-code/CRITERIA.md#actionability), not the
+[../review-code/ASSESSMENT.md](../review-code/ASSESSMENT.md) and its policy modules, not the
 review-code orchestration or reporting format. A valid observation is not
 automatically a required fix. Recommend a correction only for a supported,
 in-scope `Act` item; do not implement it. Keep consequential decisions and
