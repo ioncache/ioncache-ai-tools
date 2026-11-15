@@ -314,6 +314,19 @@ def resume(state, event):
     state["stop_reason"] = None
 
 
+def check_reconcile_request(state, event):
+    """Reject new dead ends without making previously accepted histories unreadable."""
+    if (event.get("type") != "reconcile" or state["phase"] != "validating_fixes" or
+            event["snapshot"] != state["snapshot"]):
+        return
+    pending = [key for key in current_cycle(state)["findings"]
+               if state["findings"][key]["disposition"] == "fix_applied"]
+    require(not pending,
+            "Settle completed focused outcomes with an evidenced decision (fixed or fix_failed) "
+            "before reconciliation, or stop incomplete if verification is unavailable: " +
+            ", ".join(pending))
+
+
 def reconcile(state, event):
     """Invalidate old evidence after external edits without refunding loop counts."""
     require(state["phase"] != "fixing", "Reconcile an interrupted fix through fix_done or stop")

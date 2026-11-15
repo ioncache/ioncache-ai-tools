@@ -354,7 +354,8 @@ effort controls, and fallback. Never change the parent/fixing model or settings.
 
 Preparation does not consume review passes. Persist the prepared plan before
 launching workers, using existing ledger schema-1 string fields. Phase plans use
-schema 2 for language applicability; the ledger event schema does not change:
+schema 3 for language applicability, complete frozen policy resources and a
+unique report namespace; the ledger event schema does not change:
 
 | Path | Durable record and ordering |
 | --- | --- |
@@ -370,6 +371,12 @@ that `diff` cannot read the after snapshot before `fix_done` saves it. An earlie
 fixture accidentally supplied a before-to-before empty diff. The corrected
 sequence uses the existing stop/resume checkpoint, preserves the counted cycle,
 and verifies the actual changed content without private prompt files.
+
+Freeze protocol and assessment resources for every registered category before
+dispatch, including categories that are disabled or await language evidence.
+Later packets use those saved contents. Each fresh preparation also generates a
+phase identity for its initial report paths; same-phase revisions retain it.
+This keeps shared scratch directories from overwriting earlier phase reports.
 
 An abrupt interruption may lose unrecorded attempts. Recover only evidence
 whose identity and native completion can be established. If it cannot be
@@ -392,8 +399,10 @@ them. Hashes verify artifact identity, not semantic compatibility.
 Newly classified files may extend language evidence in an open phase, preserving
 existing classifications, packets and consumed attempts. Wrong or deleted
 existing classifications require counted reconciliation, not a quiet rewrite.
-Old schema-1 plans retain their evidence and counts but cannot be reinterpreted
-as satisfying the new applicability contract; use the existing new-phase path.
+Old schema-1 and schema-2 plans retain their evidence and counts but cannot be
+reinterpreted as satisfying the complete instruction and applicability contract;
+use the existing new-phase path. Earlier native acceptance records apply to
+their original plan schema, not schema-3 acceptance.
 
 Adding required coverage during an open review phase permits a revised recorded
 plan within that counted phase: persist it through the existing stop/resume pair
@@ -411,6 +420,10 @@ and passing-check requirements. Record those decisions in the existing fields;
 they do not amend or certify invalid category coverage.
 
 This ordering preserves a legitimate prior fixed decision for reconfirmation.
+Reject new no-drift reconciliation requests with unsettled completed outcomes
+before they invalidate that route. Apply this guard at request time so previously
+accepted histories remain readable. Actual snapshot drift still permits
+reconciliation, but cannot bypass the verification prerequisites.
 When a language contradiction or legacy plan prevents `reviewing_fixes` from
 closing, do not fabricate focused completion to obtain that decision. Retain
 the applied cycle and reconcile within remaining outer capacity. A fresh full
@@ -592,7 +605,7 @@ repetition rules; do not change an oracle after seeing a result.
 | Existing engineering guidance rule and activation descriptions | Mandatory bounded-role wording across current event paths, with adapter checks. |
 | `config/defaults.json`, options and configuration docs/checks | Independent review keys, old-skill migration, explicit rollout limitation, unchanged precedence. |
 | `scripts/review_assignments.py` and focused self-check | Small construction/structural checker; no generation graph or claims of native capture. |
-| `scripts/review_loop_state.py`, ledger checks and protocol docs | Guarded fixed reconfirmation, pre-launch phase-plan persistence, and real CLI regressions. |
+| `scripts/review_loop_state.py`, `scripts/review_ledger.py`, ledger checks and protocol docs | Guarded fixed reconfirmation, request-time reconciliation checks, pre-launch phase-plan persistence, and real CLI regressions. |
 | Four assessment consumers named above | Reference migration only where their methodology is otherwise unchanged. |
 | CI, review fixtures, evaluation and user/developer docs | New checks, exposed-fixture labeling, acceptance matrix, truthful cost and compatibility statements. |
 

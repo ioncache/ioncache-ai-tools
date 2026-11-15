@@ -223,6 +223,11 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("stop", outcome="interrupted")
         self.send("resume")
         self.assertEqual(self.state["phase"], "validating_fixes")
+        ledger_before = Path(self.ledger).read_bytes()
+        error = self.reject("reconcile", evidence=["Coverage changed before outcome settlement"])
+        self.assertIn("Settle", error)
+        self.assertEqual(Path(self.ledger).read_bytes(), ledger_before)
+        self.assertEqual(self.cli(["status", self.ledger])["phase"], "validating_fixes")
         self.decide(disposition="fixed")
         before = (self.root / "app.txt").read_bytes()
         self.send("reconcile", evidence=["New required category after focused coverage closed"])
@@ -231,6 +236,62 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("advance")
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual((self.root / "app.txt").read_bytes(), before)
+
+    def test_unsettled_focused_outcome_does_not_prevent_drift_reconciliation(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        applied = self.state["loops"][0]["cycles"][0]["result"]
+        (self.root / "app.txt").write_text("External source change\n")
+        self.assertIn("Worktree drift", self.reject(
+            "decision", id="F001", validation="valid", disposition="fixed",
+            severity="High", evidence=["Old focused evidence cannot verify changed source"]))
+        self.send("reconcile", evidence=["Actual source drift requires fresh coverage"])
+        self.assertEqual(self.state["phase"], "ready_review")
+        self.assertEqual(self.state["loops"][0]["cycles"][0]["result"], applied)
+        self.review()
+        self.reject("decision", id="F001", validation="valid", disposition="fixed",
+                    severity="High", evidence=["Do not bless the changed snapshot"])
+        self.send("stop", outcome="stalled")
+        self.assertEqual(self.cli(["status", self.ledger])["outcome"], "stalled")
+
+    def test_failed_outcome_settlement_keeps_reconciliation_available(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        self.assertIn("Settle", self.reject("reconcile", evidence=["Unsettled outcome"]))
+        self.decide(disposition="fix_failed")
+        self.send("reconcile", evidence=["Outcome settled without claiming success"])
+        self.assertEqual(self.state["phase"], "ready_review")
+        self.assertEqual(self.state["findings"]["F001"]["decisions"][-1]["disposition"], "fix_failed")
+        self.send("stop", outcome="stalled")
+
+    def test_historical_unsettled_reconciliation_remains_readable(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        path = Path(self.ledger)
+        history = json.loads(path.read_text())
+        event = self.event("reconcile", evidence=["Historically accepted unsettled reconciliation"])
+        event.update(snapshot=self.state["snapshot"], sequence=self.state["revision"] + 1,
+                     time="historical fixture")
+        history["events"].append(event)
+        path.write_text(json.dumps(history))
+        original = path.read_bytes()
+        self.state = self.cli(["status", self.ledger])
+        self.assertEqual(self.state["phase"], "ready_review")
+        self.assertEqual(path.read_bytes(), original)
+        self.review()
+        self.assertIn("No interrupted focused review", self.reject(
+            "decision", id="F001", validation="valid", disposition="fixed",
+            severity="High", evidence=["Historical acceptance does not establish verification"]))
+        self.send("stop", outcome="stalled")
 
     def test_open_focused_plan_retirement_verifies_applied_fix_without_another_edit(self):
         for retirement in ("language", "schema"):
@@ -325,7 +386,7 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.send("stop", outcome="stalled")
 
     def test_reconfirmation_does_not_bless_unverified_or_reopened_findings(self):
-        for case in ("never-fixed", "applied-only", "failed-checks", "recurrence"):
+        for case in ("never-fixed", "failed-checks", "recurrence"):
             with self.subTest(case=case):
                 (self.root / "app.txt").write_text(f"before {case}\n")
                 self.init()
@@ -334,8 +395,7 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.decide()
                 if case != "never-fixed":
                     self.fix()
-                    if case != "applied-only":
-                        self.decide(disposition="fixed")
+                    self.decide(disposition="fixed")
                 self.send("reconcile", evidence=["Required coverage changed"])
                 self.send("start_review")
                 checks = [{**CHECKS[0], "result": "failed"}] if case == "failed-checks" else CHECKS

@@ -276,14 +276,16 @@ class ReviewAssignmentTests(unittest.TestCase):
 
     def test_legacy_plans_require_counted_reconciliation_not_silent_reinterpretation(self):
         plan = assignments.prepare(self.request)
-        legacy = {**plan, "schema": 1}
-        legacy.pop("identity")
-        legacy = assignments.seal(legacy)
-        for action in (lambda: assignments.prepare(self.request, legacy),
-                       lambda: assignments.check(legacy, self.handoff(plan)),
-                       lambda: self.packet(legacy, "legacy-retry")):
-            with self.assertRaisesRegex(ValueError, "retain.*history.*new phase"):
-                action()
+        for schema in (1, 2):
+            with self.subTest(schema=schema):
+                legacy = {**plan, "schema": schema}
+                legacy.pop("identity")
+                legacy = assignments.seal(legacy)
+                for action in (lambda: assignments.prepare(self.request, legacy),
+                               lambda: assignments.check(legacy, self.handoff(plan)),
+                               lambda: self.packet(legacy, "legacy-retry")):
+                    with self.assertRaisesRegex(ValueError, "retain.*history.*new phase"):
+                        action()
 
     def test_partial_and_contaminated_passes_recover_with_one_fresh_replacement(self):
         plan = assignments.prepare(self.request)
@@ -573,6 +575,95 @@ class ReviewAssignmentTests(unittest.TestCase):
                             plan["registry"]["security"]["sources"])
         self.assertNotEqual(fresh["packets"]["security"]["instruction_set"],
                             plan["packets"]["security"]["instruction_set"])
+
+    def test_deferred_categories_keep_frozen_protocol_and_assessment_resources(self):
+        resources = (self.home / "resources").resolve()
+        shutil.copytree(assignments.RESOURCES, resources)
+        self.request["language_inventory"].pop("consumer.py")
+        self.request["review_options"]["configuration"]["review_features"]["review-unit-tests"] = False
+        names = ("PROTOCOL.md", "assessment/COMMON.md", "assessment/DOCUMENTATION.md",
+                 "assessment/TESTS.md")
+        original = {str(resources / name): (resources / name).read_text() for name in names}
+        with patch.object(assignments, "RESOURCES", resources):
+            plan = assignments.prepare(self.request)
+            self.assertNotIn("jsdoc", plan["packets"])
+            self.assertNotIn("unit-tests", plan["packets"])
+            for name in names:
+                path = resources / name
+                path.write_text(original[str(path)] + "\nChanged installed policy fixture.\n")
+            request = copy.deepcopy(self.request)
+            request["language_inventory"]["consumer.py"] = {
+                "languages": ["javascript"], "evidence": "Completed fixture language inspection",
+            }
+            request["review_options"]["configuration"]["review_features"]["review-unit-tests"] = True
+            revised = assignments.prepare(request, json.loads(json.dumps(plan)))
+            fresh = assignments.prepare(request)
+        for category in ("jsdoc", "unit-tests"):
+            for source in revised["packets"][category]["instruction_set"]["sources"]:
+                if source["source"] in original:
+                    self.assertEqual(source["content"], original[source["source"]], source["source"])
+            self.assertNotEqual(revised["packets"][category]["instruction_set"],
+                                fresh["packets"][category]["instruction_set"])
+        for category, packet in plan["packets"].items():
+            self.assertEqual(revised["packets"][category], packet)
+        self.assertTrue(assignments.check(revised, self.handoff(revised))["structurally_complete"])
+
+    def test_new_phases_in_shared_scratch_preserve_previous_reports(self):
+        plan = assignments.prepare(self.request)
+        path = Path(plan["packets"]["security"]["result_file"])
+        path.write_text("Original immutable report\n")
+        revised = assignments.prepare(self.request, json.loads(json.dumps(plan)))
+        self.assertEqual(revised["packets"], plan["packets"])
+        paths = {packet["result_file"] for packet in plan["packets"].values()}
+        for snapshot in (self.request["snapshot"], "after-correction"):
+            with self.subTest(snapshot=snapshot):
+                fresh = assignments.prepare({**self.request, "snapshot": snapshot})
+                Path(fresh["packets"]["security"]["result_file"]).write_text("New phase report\n")
+                self.assertEqual(path.read_text(), "Original immutable report\n")
+                fresh_paths = {packet["result_file"] for packet in fresh["packets"].values()}
+                self.assertTrue(paths.isdisjoint(fresh_paths))
+                paths.update(fresh_paths)
+
+    def test_frozen_policy_resources_and_phase_identity_are_checked(self):
+        plan = assignments.prepare(self.request)
+        for case in ("missing-policy", "changed-policy", "different-packet-policy", "missing-phase"):
+            with self.subTest(case=case):
+                changed = json.loads(json.dumps(plan))
+                if case == "missing-policy":
+                    del changed["policy_resources"]["assessment/TESTS.md"]
+                elif case == "changed-policy":
+                    changed["policy_resources"]["PROTOCOL.md"]["content"] += "\nUnsealed change\n"
+                elif case == "different-packet-policy":
+                    instructions = changed["packets"]["security"]["instruction_set"]
+                    instructions["sources"][0]["content"] += "\nDifferent packet policy\n"
+                    instructions.pop("identity")
+                    changed["packets"]["security"]["instruction_set"] = assignments.seal(instructions)
+                else:
+                    del changed["phase_id"]
+                changed.pop("identity")
+                changed = assignments.seal(changed)
+                with self.assertRaisesRegex(ValueError, "frozen instruction|resource identity|phase identity"):
+                    assignments.check(changed, self.handoff(changed))
+
+    def test_new_policy_resource_requires_a_new_phase(self):
+        resources = (self.home / "resources").resolve()
+        shutil.copytree(assignments.RESOURCES, resources)
+        with patch.object(assignments, "RESOURCES", resources):
+            plan = assignments.prepare(self.request)
+            catalog = assignments.catalog()
+            catalog["categories"].append({
+                "id": "additional", "source": "categories/comments.md", "feature": "review-additional",
+                "applicability": "Fixture source", "assessment": ["assessment/ADDITIONAL.md"],
+            })
+            request = copy.deepcopy(self.request)
+            request["review_options"]["configuration"]["review_features"]["review-additional"] = True
+            (resources / "assessment/ADDITIONAL.md").write_text("New policy fixture.\n")
+            with patch.object(assignments, "catalog", return_value=catalog):
+                with self.assertRaisesRegex(ValueError, "New instruction resources.*new phase"):
+                    assignments.prepare(request, plan)
+                fresh = assignments.prepare(request)
+            self.assertIn("additional", fresh["required"])
+            self.assertTrue(assignments.check(fresh, self.handoff(fresh))["structurally_complete"])
 
     def test_shipped_category_dependencies_do_not_reach_other_categories_or_composers(self):
         skills = assignments.RESOURCES.parent

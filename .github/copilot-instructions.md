@@ -79,8 +79,9 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   instructions own conditional nested coordination or flat adjudication.
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
-- `review_assignments.py` freezes source-language evidence in schema-2 phase
-  plans, separately from review switches and user exclusions. JSDoc requires
+- `review_assignments.py` freezes source-language evidence and all policy
+  resources in schema-3 phase plans with unique report namespaces, separately
+  from review switches and user exclusions. JSDoc requires
   JavaScript; general categories adapt to the actual stack. Unknown language
   facts leave coverage unresolved, not a permission fence. Retain old evidence
   and consumed work when a corrected contract requires a new phase.

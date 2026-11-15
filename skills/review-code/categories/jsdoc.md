@@ -51,7 +51,7 @@ illustrate type references; they do not require those packages in other projects
  */
 ```
 
-**Use `[...]` for arrays, not `Array<...>`:**
+**Use `ElementType[]` for arrays, not `Array<ElementType>`:**
 
 ```javascript
 @param {[number, number][]} ranges - Array of [min, max] pairs
@@ -99,7 +99,7 @@ When documenting types, verify:
 - [ ] Nullable types marked with `|null` or `|undefined`
 - [ ] Union types used for multiple accepted types
 - [ ] No inline `Object`, use typedef or imported type
-- [ ] Array element types specified: `[ElementType]`
+- [ ] Array element types specified: `ElementType[]`
 - [ ] Async functions return `Promise<Type>`
 
 ## Common Patterns

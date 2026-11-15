@@ -72,14 +72,27 @@ complete evidence for mixed-language content. JSDoc requires JavaScript, not
 TypeScript. A missing language/framework guide is not evidence of language absence.
 The caller records source facts, not a predicted usefulness judgment.
 
-The current phase-plan schema is 2; the catalog and ledger event schemas are
-unchanged. Schema-1 plans lack this applicability contract and cannot be silently
-reinterpreted. Preserve their original evidence and consumed work, then use the
+The current phase-plan schema is 3; the catalog and ledger event schemas are
+unchanged. Schema-1 plans lack the applicability contract; schema-2 plans lack
+the complete policy snapshot and phase namespace. Neither can be silently
+upgraded. Preserve their original evidence and consumed work, then use the
 existing counted reconciliation/new-phase path if authorized and within limits.
 An unavailable new phase leaves coverage incomplete, not a fence on other work.
 Fingerprints use SHA-256 over canonical sorted JSON, including full frozen
 instruction strings, not a claim that source provenance has been independently
 authenticated. Keep source contents, not just hashes and paths.
+
+Each fresh `prepare` generates a `phase_id` and includes it in initial report
+filenames, so even unchanged-snapshot phases can share a scratch directory
+without overwriting reports. `phase_id` is plan metadata, not a request option.
+Resume with the saved plan and `--previous`, retaining its namespace and packets;
+do not prepare a fresh phase to reset consumed work.
+
+The plan's `policy_resources` stores the protocol, common assessment policy and
+every assessment module referenced by the registry, including disabled or
+language-unresolved categories. Category source contents remain in the registry.
+Later packets use these stored resources, never newer installed policy text.
+Adding a previously unrecorded policy resource requires a counted new phase.
 
 Each packet carries `assignment`, `review_type`, target/base/snapshot/root,
 objective/kind/constraints, `candidate_files`, `scope_files`, `result_file`,
@@ -116,6 +129,7 @@ The caller records every invocation chronologically, including failed launches:
 `round: 0` is the initial attempt, shared by initial shards; `round: 1` is the
 first replacement round for that category, shared by its replacements/shards.
 Each physical invocation gets a new assignment, attempt ID and result path.
+Caller-chosen replacement paths must also remain distinct from all prior reports.
 Use an observed native worker identity when exposed, otherwise JSON `null`.
 Set observation kind to `native` only for a referenced native tool/transcript
 observation; a caller-authored description remains `caller`.

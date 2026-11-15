@@ -203,6 +203,9 @@ applied outcome using valid focused evidence or fresh outcome evidence with the
 same snapshot, authority and passing-check prerequisites. These decisions do
 not certify invalid category coverage. If prerequisites cannot support an
 outcome, remain incomplete rather than manufacture a fixed history or extra edit.
+New no-drift reconciliation requests are rejected until settlement. If actual
+source drift prevents a supported outcome decision, reconciliation remains
+available, but cannot turn old applied evidence into a verified correction.
 
 After reconciliation, a fresh completed full review can reconfirm a previously
 verified `valid/fixed` finding while its current state is pending/open and

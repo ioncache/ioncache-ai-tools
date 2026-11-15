@@ -15,7 +15,7 @@ The caller supplies:
 | `objective`, `kind` | User objective and `full` or `focused` review. |
 | `target`, `base`, `snapshot` | Scope, pinned comparison commit when applicable, and root plus snapshot identity including local changes. State when a base is not applicable. |
 | `standards`, `constraints` | The CRITERIA.md standards inventory, scoped source identities and exceptions; execution constraints, user-supplied exclusions with provenance, read-only authority, allowed checks, and limits. |
-| `phase_plan` | PACKETS.md's frozen effective registry, source-language inventory/evidence, technical-applicability decisions, full instruction content, category packets and replacement bounds. Shipped review controls are independent of writing-skill activation. |
+| `phase_plan` | PACKETS.md's phase identity, frozen effective registry, source-language inventory/evidence, technical-applicability decisions, complete policy-resource snapshot, category packets and replacement bounds. Shipped review controls are independent of writing-skill activation. |
 | `settled_decisions` | Decisions already made and their rationale, or an explicit empty list. Do not reopen them without new contradictory evidence. |
 | `history` | Relevant previous findings and evidence-backed dispositions, or an explicit empty history. |
 | `mode`, `capabilities` | `nested` or `flat`, plus current host lifecycle and selection observations and their sources. No inline execution. |

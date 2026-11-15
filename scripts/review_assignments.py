@@ -8,11 +8,12 @@ import json
 from pathlib import Path
 import re
 import sys
+from uuid import uuid4
 
 
 RESOURCES = Path(__file__).resolve().parent.parent / "skills" / "review-code"
 PROJECT_ID = re.compile(r"project:[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PLAN_SCHEMA = 2
+PLAN_SCHEMA = 3
 
 
 def require(condition, message):
@@ -52,7 +53,21 @@ def verify_plan(plan):
     verify_identity(plan)
     require(plan.get("schema") == PLAN_SCHEMA,
             "Unsupported phase plan; retain original history and use a counted new phase "
-            "for the changed applicability contract; other authorized work remains available")
+            "for the changed instruction/applicability contract; other authorized work remains available")
+    require(isinstance(plan.get("phase_id"), str) and
+            re.fullmatch(r"[0-9a-f]{32}", plan["phase_id"]), "Invalid phase identity")
+    resources = plan.get("policy_resources")
+    require(isinstance(resources, dict) and
+            policy_resource_names(plan["registry"]) <= resources.keys(),
+            "Missing frozen instruction resources; retain history and use a counted new phase")
+    for value in resources.values():
+        require(isinstance(value, dict), "Invalid frozen instruction resource")
+        text(value.get("source"), "Frozen resource source")
+        content = text(value.get("content"), "Frozen resource content")
+        require(value.get("identity") == digest(content), "Frozen instruction resource identity mismatch")
+    for category, packet in plan["packets"].items():
+        require(packet["instruction_set"] == instruction_set(plan["registry"][category], resources),
+                "Packet differs from frozen instruction resources")
 
 
 def resource(name):
@@ -170,10 +185,16 @@ def private_result(request, filename):
     return str(path)
 
 
-def instruction_set(entry):
-    sources = [resource("PROTOCOL.md"), *entry["sources"]]
-    sources.append(resource("assessment/COMMON.md"))
-    sources.extend(resource(name) for name in entry["assessment"])
+def policy_resource_names(registry):
+    return {"PROTOCOL.md", "assessment/COMMON.md"} | {
+        name for entry in registry.values() for name in entry["assessment"]
+    }
+
+
+def instruction_set(entry, resources):
+    sources = [resources["PROTOCOL.md"], *entry["sources"]]
+    sources.append(resources["assessment/COMMON.md"])
+    sources.extend(resources[name] for name in entry["assessment"])
     return seal({
         "category": entry["id"], "applicability": entry["applicability"],
         "sources": sources, "project_sources": entry["project_sources"],
@@ -253,6 +274,12 @@ def prepare(request, previous=None):
     registry = effective_registry(request)
     validate_context(request, registry)
     packets = freeze_existing(registry, previous, request)
+    names = policy_resource_names(registry)
+    resources = (copy.deepcopy(previous["policy_resources"]) if previous is not None else
+                 {name: resource(name) for name in sorted(names)})
+    require(names <= resources.keys(),
+            "New instruction resources require a counted new phase; retain original history")
+    phase_id = previous["phase_id"] if previous is not None else uuid4().hex
     applicability = technical_applicability(request, registry)
     required_categories = []
     for key in enabled_categories(request, registry):
@@ -262,19 +289,20 @@ def prepare(request, previous=None):
         required_categories.append(key)
         if key in packets:
             continue
-        filename = Path(request["scratch_directory"]) / f"{key.replace(':', '-')}-initial.json"
+        filename = Path(request["scratch_directory"]) / f"{key.replace(':', '-')}-{phase_id}-initial.json"
         packets[key] = seal({
             **{k: request[k] for k in required - {"review_options", "scratch_directory", "files"}},
             "candidate_files": request["files"], "scope_files": request["files"],
             "review_type": key, "assignment": f"{key}-initial",
-            "instruction_set": instruction_set(entry),
+            "instruction_set": instruction_set(entry, resources),
             "technical_applicability": applicability[key],
             "correction": request.get("correction"),
             "context": request.get("category_context", {}).get(
                 key, {"history": [], "settled_decisions": []}),
             "result_file": private_result(request, filename),
         })
-    return seal({"schema": PLAN_SCHEMA, "request": request, "registry": registry,
+    return seal({"schema": PLAN_SCHEMA, "phase_id": phase_id, "policy_resources": resources,
+                 "request": request, "registry": registry,
                  "technical_applicability": applicability, "packets": packets,
                  "required": required_categories, "replacement_rounds": rounds})
 

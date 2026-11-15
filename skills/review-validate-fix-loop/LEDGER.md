@@ -168,6 +168,10 @@ not invalidate frozen instructions.
 Before reconciliation in `validating_fixes`, settle any still-applied outcomes
 with valid independent evidence and the same snapshot, authority and check
 prerequisites. If those prerequisites cannot support verification, stop incomplete.
+The CLI rejects new no-drift reconciliation requests until these outcomes are
+settled. Actual snapshot drift still permits reconciliation without certifying
+old corrections; settlement cannot bypass snapshot checks. This request guard
+does not invalidate previously accepted ledger history during replay.
 Do not invent a prior fixed decision or perform an artificial edit to escape.
 Reconciliation keeps decision history, permitting the narrow full-review
 reconfirmation above without another fix cycle. For a plan retired while still
