@@ -90,7 +90,7 @@
     },
     {
       "id": "Q07",
-      "split": "held-out",
+      "split": "calibration",
       "task": "Review a new audit export. Every matching event must be exported. Typical queries match 90 events, each several kilobytes.",
       "files": {
         "export.py": "def export(client, sink):\n    page = client.events(limit=100)\n    for event in page['items']:\n        sink.write(event)\n"
@@ -107,7 +107,7 @@
     },
     {
       "id": "Q08",
-      "split": "held-out",
+      "split": "calibration",
       "task": "Review this new account-readiness check. One global cache serves concurrent account registrations.",
       "files": {
         "wait.py": "async def setup(store, account):\n    await store.wait_until_any_account_ready()\n    return await store.read_profile(account)\n"
@@ -124,7 +124,7 @@
     },
     {
       "id": "Q09",
-      "split": "held-out",
+      "split": "calibration",
       "task": "Review a new CLI create path. Its contract requires rejecting invalid output URLs before creating remote resources. Creation is billable and has no automatic rollback. A pass proposed only a missing create-path URL-validation test.",
       "files": {
         "create.py": "def create(client, output_url):\n    resources = client.create_resources()\n    if not output_url.startswith('https://'):\n        raise ValueError('output URL must use HTTPS')\n    return client.publish(resources, output_url)\n"
@@ -141,7 +141,7 @@
     },
     {
       "id": "Q10",
-      "split": "held-out",
+      "split": "calibration",
       "task": "Review a changed operator quickstart for a destructive cleanup command. Do not infer defects in the command implementation; its contract below is established.",
       "files": {
         "README.md": "Run `cleanup --preview` to inspect the affected records. Run `cleanup` to remove them from the test environment.\n"
@@ -155,6 +155,296 @@
         }
       ],
       "reject": ["Filtering a consequential operational instruction as harmless wording.", "Requiring an observed deletion incident before reporting the documented hazard."]
+    }
+  ],
+  "category_controls": [
+    {
+      "category": "security",
+      "positive": {
+        "task": "Review file access against the boundary. Existing tests are otherwise complete.",
+        "files": {"files.py": "def read(root, name):\n    return (root / name).read_text()\n"},
+        "reference": "name is supplied by an untrusted caller, including absolute paths and parent components. Only files within the resolved root may be returned.",
+        "expected": [{"claim": "Unvalidated paths can read outside the allowed root.", "action": "Act", "severity": "High"}]
+      },
+      "negative": {
+        "task": "Review the same boundary with containment enforced.",
+        "files": {"files.py": "def read(root, name):\n    root = root.resolve()\n    target = (root / name).resolve()\n    if not target.is_relative_to(root):\n        raise ValueError('outside root')\n    return target.read_text()\n"},
+        "reference": "The caller cannot modify filesystem entries or links during the operation. The resolved-root boundary is the entire access policy.",
+        "expected": []
+      }
+    },
+    {
+      "category": "code-complexity",
+      "positive": {
+        "task": "Review the wide positional interface and its concrete maintenance consequence in the supplied caller.",
+        "files": {"report.py": "def report_row(a, b, c, d, e, f, g, h):\n    return f'{a}|{b}|{c}|{d}|{e}|{f}|{g}|{h}'\n", "caller.py": "from report import report_row\n\ndef invoice_row(invoice):\n    return report_row(invoice['number'], invoice['date'], invoice['currency'], invoice['amount'], invoice['customer'], invoice['region'], invoice['status'], invoice['owner'])\n"},
+        "reference": "The export columns are number, date, amount, currency, customer, region, status, owner, in that order. invoice_row is the complete caller set. The receiving importer parses column three as a decimal amount and rejects a currency code such as USD. Valid invoices have a numeric amount and alphabetic currency. The single-letter, eight-position interface obscures the swapped amount/currency roles in this new caller; merely counting parameters is not the defect.",
+        "expected": [{"claim": "The ambiguous positional interface hides the caller's swapped amount and currency, so valid invoice exports are rejected.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review this cohesive callback despite its four parameters exceeding the three-parameter preference.",
+        "files": {"distance.py": "from math import hypot\n\ndef distance(x1, y1, x2, y2):\n    return hypot(x2 - x1, y2 - y1)\n"},
+        "reference": "The established geometry framework requires exactly this four-positional-coordinate callback signature. Inputs are finite Cartesian coordinates and the result is Euclidean distance. Existing tests meaningfully cover the contract. Replacing the signature with point objects would break the framework; no concrete maintenance hazard is established.",
+        "expected": []
+      }
+    },
+    {
+      "category": "comments",
+      "positive": {
+        "task": "Review guidance given by this code comment.",
+        "files": {"charge.py": "def charge(gateway, amount):\n    # Retry after timeout because a timed-out request cannot commit.\n    return gateway.charge(amount)\n"},
+        "reference": "A timeout can occur after payment commits. The gateway has no idempotency key here. Operators follow the comment when retrying timed-out charges.",
+        "expected": [{"claim": "The retry rationale can cause a second committed charge.", "action": "Act", "severity": "High"}]
+      },
+      "negative": {
+        "task": "Review the historical note without promoting inconsequential style observations.",
+        "files": {"charge.py": "def charge(gateway, amount, key):\n    # The retired dashboard displayed charges newest first.\n    return gateway.charge(amount, idempotency_key=key)\n"},
+        "reference": "The retired dashboard actually displayed charges oldest first. That historical ordering affects no supported action, caller contract or maintenance decision. The current caller retains the operation key across retries, and the gateway atomically deduplicates it for the operation's lifetime. Existing tests cover current behavior.",
+        "expected": []
+      }
+    },
+    {
+      "category": "jsdoc",
+      "positive": {
+        "task": "Review the documented return contract. Style alone is not an actionable defect.",
+        "files": {"id.js": "/**\n * @function getId\n * @description Read the record identifier.\n * @param {object} record - Validated record.\n * @returns {boolean} Whether an identifier is present.\n */\nexport function getId(record) { return record.id }\n"},
+        "reference": "The intended API returns a nonempty string ID. Callers following this new documentation compare the return to true and incorrectly reject valid IDs. Existing implementation tests verify the string contract.",
+        "expected": [{"claim": "The boolean return documentation misleads callers about the established string contract.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the accurate documented type. Do not invent another return mode.",
+        "files": {"id.js": "/**\n * @function getId\n * @description Read the record identifier.\n * @param {object} record - Validated record.\n * @returns {string} Nonempty record identifier.\n */\nexport function getId(record) { return record.id }\n"},
+        "reference": "Validated records always have a nonempty string ID. The implementation and existing assertions satisfy that contract.",
+        "expected": []
+      }
+    },
+    {
+      "category": "unit-tests",
+      "positive": {
+        "task": "Review whether the Vitest mock boundary protects the supported dependency-failure behavior. Test location is an approved project exception.",
+        "files": {"profile.js": "export async function loadProfile(client, id) { return client.readProfile(id) }\n", "profile.test.js": "import { describe, expect, it, vi } from 'vitest'\nimport { loadProfile } from './profile.js'\nvi.mock('./profile.js', () => ({ loadProfile: vi.fn().mockRejectedValue(new Error('unavailable')) }))\ndescribe('loadProfile', () => {\n  it('should propagate read failures', async () => {\n    const client = { readProfile: vi.fn().mockResolvedValue({ id: '1' }) }\n    await expect(loadProfile(client, '1')).rejects.toThrow('unavailable')\n  })\n})\n"},
+        "reference": "loadProfile must propagate readProfile rejections, including the ordinary unavailable failure. The supplied implementation is correct. This test is the only intended protection of failure propagation; other supported behavior is meaningfully covered. Replacing loadProfile with a rejecting mock means the assertion never exercises the real failure path and would still pass if that implementation swallowed the error.",
+        "expected": [{"claim": "Mocking loadProfile itself fabricates the rejection and leaves real dependency-failure propagation unprotected.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review meaningful failure protection despite harmless test-presentation deviations, under the same location exception.",
+        "files": {"profile.js": "export async function loadProfile(client, id) { return client.readProfile(id) }\n", "profile.test.js": "import { expect, test, vi } from 'vitest'\nimport { loadProfile } from './profile.js'\ntest('propagates read failures', async () => {\n  const client = { readProfile: vi.fn().mockRejectedValue(new Error('unavailable')) }\n  await expect(loadProfile(client, '1')).rejects.toThrow('unavailable')\n})\n"},
+        "reference": "This test exercises the real loadProfile implementation with a rejected dependency and asserts the required failure propagation. It fails if the implementation swallows that error. Other supported behavior is meaningfully covered. Vitest accepts test() and this title; deviations from the preferred BDD presentation have no supported execution or maintenance consequence and remain private.",
+        "expected": []
+      }
+    },
+    {
+      "category": "documentation",
+      "positive": {
+        "task": "Review these operational instructions against the timeout contract.",
+        "files": {"README.md": "Set `timeout_seconds=5000` to stop requests after five seconds.\n"},
+        "reference": "The setting is an integer number of seconds, not milliseconds. Operators use this example to bound blocking requests on a shared worker.",
+        "expected": [{"claim": "The example permits requests to occupy a worker for 5000 seconds instead of five.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review an accurate operational example accompanied by harmless historical wording.",
+        "files": {"README.md": "Set `timeout_seconds=5` to stop requests after five seconds. The retired console first shipped in 2019.\n"},
+        "reference": "The setting is an integer number of seconds, enforced as documented. The retired console actually first shipped in 2018; its release year affects no supported action, compatibility requirement, operator decision or maintenance task.",
+        "expected": []
+      }
+    },
+    {
+      "category": "design-coherence",
+      "positive": {
+        "task": "Review ownership of the shared discount rule across the supported clients.",
+        "files": {"web.py": "def total(amount):\n    return amount * 0.9\n", "mobile.py": "def total(amount):\n    return amount * 0.8\n"},
+        "reference": "Both clients must use the same centrally owned 10 percent discount policy. This change implemented separate client-owned formulas; identical input now gives different payable totals.",
+        "expected": [{"claim": "Duplicated policy ownership has diverged across the two required consumers.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review ownership with the policy shared by the supported consumers.",
+        "files": {"policy.py": "def total(amount):\n    return amount * 0.9\n", "web.py": "from policy import total\n", "mobile.py": "from policy import total\n"},
+        "reference": "These modules run in the same supported application, and policy is their established shared domain owner. No cross-service deployment is involved.",
+        "expected": []
+      }
+    },
+    {
+      "category": "correctness",
+      "positive": {
+        "task": "Review cleanup's attempt-all contract under ordinary dependency failure.",
+        "files": {"cleanup.py": "def cleanup(resources):\n    for resource in resources:\n        resource.close()\n"},
+        "reference": "Every resource must receive one close attempt, even if an earlier close raises. A close error is a supported ordinary failure.",
+        "expected": [{"claim": "An early close failure leaves later resources without a cleanup attempt.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review attempt-all cleanup with retained failures.",
+        "files": {"cleanup.py": "def cleanup(resources):\n    errors = []\n    for resource in resources:\n        try:\n            resource.close()\n        except Exception as error:\n            errors.append(error)\n    return errors\n"},
+        "reference": "The contract returns all ordinary close exceptions after attempting every resource; the caller handles the returned list. Process-level cancellation is outside this fixture.",
+        "expected": []
+      }
+    },
+    {
+      "category": "integration",
+      "positive": {
+        "task": "Trace the producer and consumer readiness contract together.",
+        "files": {"producer.py": "async def create(store, key):\n    await store.mark_ready(key)\n    await store.write_profile(key)\n", "consumer.py": "async def load(store, key):\n    await store.wait_ready(key)\n    return await store.read_profile(key)\n"},
+        "reference": "Writes commit separately; the reader can run between them. read_profile requires a committed profile and otherwise fails.",
+        "expected": [{"claim": "The readiness signal does not establish the consumer's profile prerequisite.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Trace the same boundary with its prerequisite established.",
+        "files": {"producer.py": "async def create(store, key):\n    await store.write_profile(key)\n    await store.mark_ready(key)\n", "consumer.py": "async def load(store, key):\n    await store.wait_ready(key)\n    return await store.read_profile(key)\n"},
+        "reference": "The profile commits before its account-specific ready signal; subsequent reads see it. No later operation removes it.",
+        "expected": []
+      }
+    },
+    {
+      "category": "privacy",
+      "positive": {
+        "task": "Review analytics disclosure against the established collection purpose.",
+        "files": {"analytics.py": "def report(analytics, users):\n    analytics.send({'active_count': len(users), 'emails': [u.email for u in users]})\n"},
+        "reference": "The approved recipient and purpose allow only an aggregate active count. Email disclosure is explicitly prohibited and unnecessary for that count.",
+        "expected": [{"claim": "The report discloses individual email addresses outside the approved aggregate-only purpose.", "action": "Act", "severity": "High"}]
+      },
+      "negative": {
+        "task": "Review the aggregate-only analytics payload.",
+        "files": {"analytics.py": "def report(analytics, users):\n    analytics.send({'active_count': len(users)})\n"},
+        "reference": "This count is explicitly authorized for this recipient and purpose. The client sends only the supplied payload and no user-level metadata.",
+        "expected": []
+      }
+    },
+    {
+      "category": "performance",
+      "positive": {
+        "task": "Review lookup growth under the supported input volume.",
+        "files": {"positions.py": "def positions(ids):\n    return [ids.index(value) for value in ids]\n"},
+        "reference": "ids is a list of 100000 unique values in a common request. Each list.index scans from the beginning. The required result is each input's zero-based position.",
+        "expected": [{"claim": "Repeated linear searches make a routine request quadratic despite directly available positions.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the position calculation for the same unique-value contract.",
+        "files": {"positions.py": "def positions(ids):\n    return list(range(len(ids)))\n"},
+        "reference": "Inputs are a list of 100000 unique values; each element's first position is its own index. The result allocation is required by the API.",
+        "expected": []
+      }
+    },
+    {
+      "category": "test-coverage",
+      "positive": {
+        "task": "Review assertion coverage of the newly supported discount mode.",
+        "files": {"price.py": "def price(amount, discounted):\n    return amount * 0.9 if discounted else amount\n", "test_price.py": "from price import price\n\ndef test_regular_price():\n    assert price(20, False) == 20\n"},
+        "reference": "The True branch is new and supported. This is the complete behavior test suite; no assertion would detect losing the discount.",
+        "expected": [{"claim": "The new discount branch lacks an assertion detecting a wrong payable amount.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review assertion coverage with both supported modes protected.",
+        "files": {"price.py": "def price(amount, discounted):\n    return amount * 0.9 if discounted else amount\n", "test_price.py": "from price import price\n\ndef test_regular_price():\n    assert price(20, False) == 20\n\ndef test_discounted_price():\n    assert price(20, True) == 18\n"},
+        "reference": "These are the two supported modes. No external effects or hidden branches exist. Do not add assertions that detect no distinct regression.",
+        "expected": []
+      }
+    }
+  ],
+  "stack_applicability_controls": [
+    {
+      "id": "native-python-tests",
+      "category": "unit-tests",
+      "positive": {
+        "task": "Review the unit tests against the project's unittest conventions.",
+        "files": {
+          "amounts.py": "def cents(dollars):\n    return round(dollars * 100)\n",
+          "test_amounts.py": "import unittest\nfrom unittest.mock import patch\nfrom amounts import cents\n\nclass AmountTests(unittest.TestCase):\n    def test_cents(self):\n        with patch('test_amounts.cents', return_value=250):\n            self.assertEqual(cents(2.5), 250)\n"
+        },
+        "reference": "This Python project uses unittest and test_* method names. The test must detect an incorrect cents calculation for 2.5 dollars. No Vitest or JavaScript is used.",
+        "expected": [{"claim": "Patching the function under test makes the assertion confirm only the mock's configured value.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the unit tests against the project's unittest conventions.",
+        "files": {
+          "amounts.py": "def cents(dollars):\n    return round(dollars * 100)\n",
+          "test_amounts.py": "import unittest\nfrom amounts import cents\n\nclass AmountTests(unittest.TestCase):\n    def test_cents(self):\n        self.assertEqual(cents(2.5), 250)\n"
+        },
+        "reference": "This fixture's supported input is 2.5 dollars and its required result is 250 cents. unittest discovery and test_* method names are the project convention. There are no other branches or dependency effects to cover.",
+        "expected": []
+      }
+    },
+    {
+      "id": "native-node-tests",
+      "category": "unit-tests",
+      "positive": {
+        "task": "Review the unit tests using the project's Node built-in runner.",
+        "files": {
+          "amounts.js": "exports.cents = dollars => Math.round(dollars * 100)\n",
+          "amounts.test.js": "const { test } = require('node:test')\nconst assert = require('node:assert/strict')\nconst amounts = require('./amounts.js')\n\ntest('converts dollars to cents', () => {\n  const cents = () => 250\n  assert.equal(cents(2.5), 250)\n})\n"
+        },
+        "reference": "The project uses node:test, not Vitest. This test must detect an incorrect amounts.cents calculation for 2.5 dollars.",
+        "expected": [{"claim": "The local stub replaces the behavior under test, so the assertion never exercises amounts.cents.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the unit tests using the project's Node built-in runner.",
+        "files": {
+          "amounts.js": "exports.cents = dollars => Math.round(dollars * 100)\n",
+          "amounts.test.js": "const { test } = require('node:test')\nconst assert = require('node:assert/strict')\nconst amounts = require('./amounts.js')\n\ntest('converts dollars to cents', () => {\n  assert.equal(amounts.cents(2.5), 250)\n})\n"
+        },
+        "reference": "The supported fixture input is 2.5 dollars, producing 250 cents, with no other branches or effects. node:test and descriptive test titles are the project convention; no Vitest is installed.",
+        "expected": []
+      }
+    },
+    {
+      "id": "mixed-jsdoc",
+      "category": "jsdoc",
+      "positive": {
+        "task": "Review the JavaScript function documentation in this mixed-language target.",
+        "files": {
+          "amount.js": "/**\n * Returns the payable amount.\n * @returns {string} Amount formatted for display.\n */\nexports.amount = () => 250\n",
+          "amount.ts": "export function amount(): number { return 250 }\n"
+        },
+        "reference": "The JavaScript runtime contract returns a number. Consumers use this public return documentation when deciding whether string methods are safe. The TypeScript file uses its native type declaration.",
+        "expected": [{"claim": "The JavaScript return contract promises a string but returns a number, misleading consumers about safe operations.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the JavaScript function documentation in this mixed-language target.",
+        "files": {
+          "amount.js": "/**\n * Returns the payable amount.\n * @returns {number} Amount in cents.\n */\nexports.amount = () => 250\n",
+          "amount.ts": "export function amount(): number { return 250 }\n"
+        },
+        "reference": "Both implementations return a number of cents. The TypeScript file uses native type declarations. Do not invent another supported return mode.",
+        "expected": []
+      }
+    },
+    {
+      "id": "native-python-identifiers",
+      "category": "security",
+      "positive": {
+        "task": "Review identifier validation and failure handling for this Python MongoDB boundary.",
+        "files": {
+          "lookup.py": "from bson import ObjectId\n\ndef lookup(collection, value):\n    try:\n        identifier = ObjectId(value)\n        return collection.find_one({'_id': identifier})\n    except Exception:\n        return {'status': 400}\n"
+        },
+        "reference": "The project uses PyMongo's documented ObjectId constructor. InvalidId/TypeError for malformed identifiers must return 400. Operational database failures must propagate to the server's retry/error handler, not become client-input errors. Native API reference: https://pymongo.readthedocs.io/en/stable/api/bson/objectid.html#bson.objectid.ObjectId",
+        "expected": [{"claim": "The broad conversion handler also catches database failures and misclassifies them as invalid client input.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review identifier validation and failure handling for this Python MongoDB boundary.",
+        "files": {
+          "lookup.py": "from bson import ObjectId\nfrom bson.errors import InvalidId\n\ndef lookup(collection, value):\n    try:\n        identifier = ObjectId(value)\n    except (InvalidId, TypeError):\n        return {'status': 400}\n    return collection.find_one({'_id': identifier})\n"
+        },
+        "reference": "The native constructor accepts the supported 24-hex-digit string input, raising InvalidId/TypeError for malformed values. The caller has already authenticated and authorized access. Operational database failures must propagate. No JavaScript driver API is used. Reference: https://pymongo.readthedocs.io/en/stable/api/bson/objectid.html#bson.objectid.ObjectId",
+        "expected": []
+      }
+    },
+    {
+      "id": "native-go-documentation",
+      "category": "comments",
+      "positive": {
+        "task": "Review the caller-facing documentation comments in this Go API.",
+        "files": {
+          "flags.go": "package flags\n\n// Has reports whether flags does not contain name.\nfunc Has(flags map[string]bool, name string) bool {\n    _, ok := flags[name]\n    return ok\n}\n"
+        },
+        "reference": "The intended API returns true when the key is present, independent of its stored value. Consumers use the generated API documentation to choose their membership branch. The project follows native Go doc-comment conventions: https://go.dev/doc/comment#func",
+        "expected": [{"claim": "The public doc comment reverses the membership result and tells callers to take the wrong branch.", "action": "Act", "severity": "Medium"}]
+      },
+      "negative": {
+        "task": "Review the caller-facing documentation comments in this Go API.",
+        "files": {
+          "flags.go": "package flags\n\n// Has reports whether flags contains name.\nfunc Has(flags map[string]bool, name string) bool {\n    _, ok := flags[name]\n    return ok\n}\n"
+        },
+        "reference": "The intended API returns true when the key is present, independent of its stored value. This accurate public contract is consumed by Go documentation tools. It is not an explanatory comment inside the implementation. Reference: https://go.dev/doc/comment#func",
+        "expected": []
+      }
     }
   ]
 }

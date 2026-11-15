@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "categories": [
+    {"id": "security", "source": "categories/security.md", "feature": "review-security", "applicability": "Trust boundaries in any supported language", "assessment": []},
+    {"id": "code-complexity", "source": "categories/code-complexity.md", "feature": "review-code-complexity", "applicability": "Function and module structure", "assessment": []},
+    {"id": "comments", "source": "categories/comments.md", "feature": "review-comments", "applicability": "Code comments and their stated rationale", "assessment": ["assessment/DOCUMENTATION.md"]},
+    {"id": "jsdoc", "source": "categories/jsdoc.md", "feature": "review-jsdoc", "language": "javascript", "applicability": "JavaScript function documentation only, including JavaScript portions of mixed-language files; not TypeScript", "assessment": ["assessment/DOCUMENTATION.md"]},
+    {"id": "unit-tests", "source": "categories/unit-tests.md", "feature": "review-unit-tests", "applicability": "Unit-test quality in the target language and test framework", "assessment": ["assessment/TESTS.md"]},
+    {"id": "documentation", "source": "categories/documentation.md", "feature": "review-documentation", "applicability": "Usage, operational and other written contracts", "assessment": ["assessment/DOCUMENTATION.md"]},
+    {"id": "design-coherence", "source": "categories/design-coherence.md", "feature": "review-design-coherence", "applicability": "Objectives, abstractions and responsibility ownership", "assessment": []},
+    {"id": "correctness", "source": "categories/correctness.md", "feature": "review-correctness", "applicability": "Functional behavior and completion", "assessment": []},
+    {"id": "integration", "source": "categories/integration.md", "feature": "review-integration", "applicability": "Producer/consumer contracts and runtime handoffs", "assessment": []},
+    {"id": "privacy", "source": "categories/privacy.md", "feature": "review-privacy", "applicability": "Personal-data processing against established purposes and obligations", "assessment": []},
+    {"id": "performance", "source": "categories/performance.md", "feature": "review-performance", "applicability": "Resource use under supported workloads", "assessment": []},
+    {"id": "test-coverage", "source": "categories/test-coverage.md", "feature": "review-test-coverage", "applicability": "Meaningful behavior assertions and acceptance controls in any framework", "assessment": ["assessment/TESTS.md"]}
+  ],
+  "skill_roles": {
+    "category": ["security", "code-complexity", "comments", "jsdoc", "unit-tests"],
+    "generic": ["engineering-judgment", "documentation-writing"],
+    "workflow": ["answer-questions", "create-worktree", "investigate", "post-pr-review-comments", "prompt-output", "review-code", "review-dependabot-pr", "review-triage-loop", "review-validate-fix-loop", "triage-errors", "verify-unresolved-pr-comments", "write-pr-descriptions"]
+  }
+}

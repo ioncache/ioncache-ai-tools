@@ -170,6 +170,8 @@ def read_configuration(skill):
         "auto_selection_enabled": (
             "review-auto-model-selection" in catalog and "review-auto-model-selection" not in disabled
         ),
+        "review_features": {name: name not in disabled for name in catalog
+                            if name.startswith("review-") and name != "review-auto-model-selection"},
     }
 
 

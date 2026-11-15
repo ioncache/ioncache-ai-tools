@@ -65,6 +65,26 @@ class ConfigurationTests(unittest.TestCase):
             **self.data, 'prompt': 'Implement the fix',
         })['hookSpecificOutput'])
 
+    def test_bounded_review_guidance_is_stateless(self):
+        for event in ('SessionStart', 'SubagentStart', 'UserPromptSubmit'):
+            for identity in ('root', 'reviewer'):
+                data = {**self.data, 'session_id': identity, 'agent_id': identity,
+                        'prompt': 'Review only the assigned category'}
+                output = guidance.run_hook(event, data)
+                message = output['hookSpecificOutput']['additionalContext']
+                self.assertIn('Assigned review workers and validators', message)
+                self.assertIn('do not load engineering-judgment, review-code', message)
+                self.assertNotIn('permissionDecision', str(output))
+                self.assertIsNone(guidance.run_hook('PreToolUse', {
+                    **data, 'tool_name': 'Read', 'tool_input': {'file_path': 'source.py'},
+                }))
+        self.write(config.paths(self.project)['claude'][0], {
+            'features': {'engineering-judgment': False},
+        })
+        output = guidance.run_hook('SubagentStart', self.data)
+        self.assertNotIn('Assigned review workers and validators', str(output))
+        self.assertIn('documentation-backed', str(output))
+
     def test_install_update_adds_preserves_and_removes_settings(self):
         path = self.root / 'config.json'
         old = {'features': {'retained': True, 'disabled': True, 'removed': True}}

@@ -50,6 +50,7 @@ remain after synchronization finishes.
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
+| `review-<category>` | Independent coverage for a shipped review category; all enabled by default |
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
 
@@ -74,7 +75,37 @@ Disabling `review-auto-model-selection` selects configured defaults for
 unspecified roles without disabling reviews, explicit role choices, or other
 safeguards. See [../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md).
 
+The review categories are `security`, `code-complexity`, `comments`, `jsdoc`,
+`unit-tests` (framework-adaptive), `documentation`, `design-coherence`, `correctness`,
+`integration`, `privacy`, `performance`, and `test-coverage` (framework-neutral).
+For example, `review-comments: false` removes that category's review obligation.
+Disabling `skill:comments` only disables its writing/explicit skill activation;
+it does not silently remove comment review. Disabling `skill:review-code` still
+disables that workflow.
+
+Review enablement is separate from technical language applicability. JSDoc
+requires evidenced JavaScript source and does not apply to TypeScript; no JSDoc
+worker launches for a verified JavaScript-free target. General categories still
+adapt to the target's languages and frameworks. This is not a config exclusion,
+and missing language evidence does not silently count as absence.
+
+Additional project categories live in a request-local `project:<slug>` registry,
+not plugin settings. General purposes run by default; an explicitly declared
+language prerequisite uses the same evidence rules. User exclusions retain their
+provenance. The skill does not suggest exclusions or ask a category-selection question.
+Same-purpose project instructions modify the owning category's scoped standard.
+
+Startup engineering guidance excludes already assigned reviewers and validators
+from generic composing skills. That reminder remains stateless and advisory;
+native instruction delivery and model compliance require separate verification.
+
 ## Synchronization and recovery
+
+Do not mix old and new catalog writers while using the new review controls.
+An older cached plugin removes keys it does not recognize; a newer copy then
+restores their default `true`, losing an intended opt-out. Refresh all active
+host copies together and recheck effective settings. Mixed-version preservation
+of new settings is not supported.
 
 Hooks reconcile settings on each invocation. To synchronize explicitly after
 installing or updating, run this from the installed plugin directory:

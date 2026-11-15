@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from review_loop_state import (
-    LedgerError, apply_event, current_cycle, fields, replay, require, text,
+    LedgerError, apply_event, check_reconcile_request, current_cycle, fields, replay, require, text,
 )
 
 
@@ -303,6 +303,7 @@ def append(args, root):
     event.update(snapshot=key, sequence=state["revision"] + 1,
                  time=datetime.now(timezone.utc).isoformat())
     check_snapshot_transition(ledger, state, event)
+    check_reconcile_request(state, event)
     apply_event(state, event)
     ledger["events"].append(event)
     atomic_write(path, encode(ledger))

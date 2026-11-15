@@ -56,8 +56,9 @@ In nested mode, launch one coordinator with this file's coordinator role.
 Do not also dispatch its specialists yourself. In flat mode, perform the
 allocation below, including a dedicated integration worker.
 Collect every discovery and integration outcome, then launch a fresh
-adjudicator with the assignment-scoped request, assignment map, and all received
-results. The integration report is evidence to assess, not a pass to perform.
+adjudicator with the assignment-scoped request, frozen worker packets, assignment
+map, and all received results. The integration report is evidence to assess, not
+a pass to perform.
 Send partial evidence if blocked, but retain missing assignments as incomplete.
 Nested mode uses the same separate discovery, integration, and adjudication assignments.
 
@@ -87,6 +88,11 @@ contradictions, or evidence gaps under the role below. Do not repeat every
 completed specialist investigation. Only the review/fix owner records loop
 events; a surrounding controller retains references, not a second competing review history.
 Workers own only their assigned reports.
+Persist and check the final PACKETS.md handoff after adjudication and required
+validation, including their observed identities or explicit nulls. A successful
+earlier category check is not the final check. If record completion is blocked,
+use an allowed new caller-owned handoff file or return incomplete; do not turn
+the missing final record into a completion claim.
 
 ## Independent caller validation
 
@@ -112,12 +118,17 @@ review or a way to reset the caller's allowances.
 
 ## Allocation and strategy
 
-Build the complete assignment roster before launch: correctness, one pass for
-each configured code-review standard, integration, and adjudication. Add a
+Build the assignment roster before launch from the frozen plan: each enabled
+general category, each evidenced language-specific purpose, and adjudication.
+Retain unresolved technical applicability as incomplete coverage, not an omitted
+obligation. Other categories may proceed while the caller investigates language
+facts. Add a
 caller-validation assignment when required. Derive this roster from the named
 review purposes and standards, not a desired agent count. Do not omit or merge
 a task because it looks small or unlikely to find anything. The assigned
-worker verifies applicability and records a reason when no paths apply.
+worker verifies file-level applicability and records a reason when no paths
+apply. An explicit language prerequisite is resolved before that worker launches,
+not by spending a worker merely to discover that the language is absent.
 
 Each assignment has one `review_type`, one `instruction_set`, and one fresh
 worker. Never put several standards into one task, even with separate output
@@ -125,7 +136,16 @@ sections. Never reuse a completed worker for a different task or review round.
 Same-task clarification may continue in its existing context; a new review
 purpose always needs a new worker. Give workers only the instructions for
 their purpose under CRITERIA.md's single-purpose packet rules.
+Prepare and freeze packets using [PACKETS.md](PACKETS.md) before dispatch.
+Preserve PACKETS.md's language evidence with the plan and provide each worker's
+frozen technical-applicability record. Missing a language-specific guide never
+removes a general review purpose. Same-purpose project standards and scoped exceptions belong in one effective
+packet, not a second worker applying a competing default.
 
+Each category initially owns the whole candidate scope. Size each assignment
+using measured inputs, actual advertised capacity and caller read limits;
+pre-launch sizing does not require a sacrificial failed worker.
+Unknown capacity is a limitation, not permission to invent a bound.
 Size each assignment so its owner can read every in-scope file in full,
 including relevant shared implementations and callers. Diffs locate changes;
 diff hunks alone never complete a pass. Split oversized file sets across
@@ -133,16 +153,12 @@ workers within authorized limits, keeping continuous call traces together.
 If a single trace or file cannot fit, report incomplete coverage rather than
 quietly substituting partial reads or exceeding limits.
 
-When code moves into a shared module or gains a new consumer, the pass owning
-that consumer also reads the shared code it calls. Record cross-pass symbols
-and consumer owners in the assignment map. The integration pass checks every
-symbol crossing pass boundaries against its consumers, especially new ones;
-reviewing producer and consumer separately is not contract validation.
-Include runtime edges in the same map: producer, consumer, async handoff or
-readiness signal, and prerequisites the consumer assumes. Assign one owner to
-trace each edge end to end, even when its files belong to different passes.
-For batching and enumeration, include the dependency's partial-result and
-completion contract, not only the exported function signature.
+The integration category discovers its own actual producer/consumer boundaries
+across the scope. Its report records traced symbols, runtime handoffs and
+prerequisites; no directory-owner map or upstream generalist supplies its
+discovery. Every category may trace relevant callers for its own purpose.
+Capacity shards must retain complete relevant traces, not merely a complete
+file union. No coordinator or adjudicator can take over a missing trace.
 
 Carry all caller read/tool constraints as explicit hard limits in every
 assignment. Supply settled decisions directly or through the immutable shared
@@ -210,7 +226,7 @@ failed checks, constraint breaches, and missing evidence are explicit limitation
 ## Integration specialist
 
 Use a fresh specialist context for integration only. Trace the assignment
-map's producer/consumer contracts, moved or shared symbols, runtime handoffs,
+scope's producer/consumer contracts, moved or shared symbols, runtime handoffs,
 readiness prerequisites, and partial-result/completion guarantees end to end.
 Check consumers against the producers they actually use. Record applicability
 even when there are no cross-boundary changes. Do not also run standards
@@ -226,7 +242,11 @@ standards-review assignments. It cannot launch workers or take over missing
 passes. Read each report before examining the source evidence needed to
 assess it. Missing or truncated files are incomplete handoffs, not empty
 findings. Verify assignment, purpose, instruction-set, worker, and snapshot
-identities, including that distinct assignments used distinct contexts.
+identities, including that distinct assignments used distinct contexts. Apply
+ASSESSMENT.md's assignment-compliance check to the work actually reported,
+not only its identity fields. Return out-of-purpose coverage as incomplete
+even when the underlying findings are correct; do not repair the missing
+independent pass through your own investigation.
 
 Verify reachable behavior, requirements, and relevant callers. Resolve
 contradictory evidence instead of voting. Merge observations about the same
@@ -237,8 +257,8 @@ third-party behavior, descriptive PR text, or an unsupported "known" or
 "acknowledged" claim. Verify the premise or retain the consequential uncertainty;
 do not simply adopt a pass's reason. This is targeted rejection validation,
 not a second full review of every dismissed style observation.
-Apply CRITERIA.md's
-actionability policy to each assessment, including whether a correction is
+Apply [ASSESSMENT.md](ASSESSMENT.md) and its three policy modules
+to each assessment, including whether a correction is
 warranted and when. Validate inaccurate documentation and missing test coverage
 as substantive issues, without promoting style deviations or speculative
 scenarios into fixes. Explain rejection, uncertainty, accepted findings, and
@@ -329,6 +349,14 @@ Malformed, partial, failed, or missing results never count as completed
 coverage. Preserve available evidence, identify missing assignments, and
 return an incomplete or blocked handback. A failed worker does not by itself
 prove the surrounding run is unrecoverable.
+
+Keep the caller-owned chronological attempt log and active map from PACKETS.md.
+The default is one automatic replacement round per failed category per phase,
+including shards, with a fresh context and result path for every attempt.
+Category-worker model fallback consumes that same replacement allowance; it is not an
+extra retry pool. Retain failed attempts and never reset the allowance by
+renaming, resuming or losing history. Exhaustion leaves coverage incomplete,
+while other authorized work remains available.
 
 Compare reviewed inputs before dispatch and after adjudication. On drift,
 return the mismatch without adopting a new scope or relabeling stale evidence.
