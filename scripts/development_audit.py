@@ -62,7 +62,7 @@ def identity(value):
 def review_record(path):
     result = {"id": path.parent.name, "history_digest": None, "available": False}
     try:
-        if path.exists():
+        if not path.is_symlink() and path.exists():
             result["history_digest"] = review.digest(path.read_bytes())
         closed = review.abandoned(path)
         if closed is not None:
@@ -144,7 +144,7 @@ def build(state, assignment, public):
     if folder.exists():
         paths = sorted({*paths, *(item / "REVIEW_LEDGER.json" for item in folder.iterdir()
                                  if re.fullmatch(r"[a-f0-9]{32}", item.name))})
-    records = [review_record(review.safe_path(root, str(path.relative_to(root))))
+    records = [review_record(review.ledger_path(root, str(path.relative_to(root)), allow_unavailable=True))
                for path in paths if re.fullmatch(r"[a-f0-9]{32}", path.parent.name)]
     for record in records:
         record["assignment_ids"] = []
@@ -257,10 +257,14 @@ def api(endpoint, *, data=None, paginate=False):
     return json.loads(command(args, data=plan.encode(data) if data is not None else None))
 
 
+def match_repository_url(value, repo, resource):
+    return re.fullmatch(rf"https://github\.com/(?ai:{re.escape(repo)})/{resource}", value or "")
+
+
 def target(state, assignment):
     repo = repository(state["manifest"]["repository"]["url"])
     url = state["prs"][assignment["pr"]]["url"]
-    match = re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/([1-9][0-9]*)", url or "")
+    match = match_repository_url(url, repo, r"pull/([1-9][0-9]*)")
     plan.require(match is not None, "Audit must attach to this run's PR in the approved repository")
     return repo, match[1]
 
@@ -302,6 +306,14 @@ def publish_files(state, assignment, files):
         return commit
 
 
+def publication_actor():
+    response = api("graphql", data={"query": "query { viewer { login } }"})
+    plan.require(not response.get("errors"), "Authenticated publication actor is unavailable")
+    login = ((response.get("data") or {}).get("viewer") or {}).get("login")
+    plan.require(isinstance(login, str) and login.strip(), "Authenticated publication actor is unavailable")
+    return login
+
+
 def publish(state, assignment, approved):
     bundle, files = prepared(state, assignment)
     exported = bundle_identity(files)
@@ -310,15 +322,16 @@ def publish(state, assignment, approved):
     pull = api(f"repos/{repo}/pulls/{number}")
     pr = plan.indexed(state["manifest"]["prs"])[assignment["pr"]]
     plan.require(pull["state"] == "open" and pull["head"]["sha"] == bundle["code_commit"] and
-                 pull["head"]["ref"] == pr["branch"] and pull["head"]["repo"]["full_name"] == repo,
+                 pull["head"]["ref"] == pr["branch"] and
+                 pull["head"]["repo"]["full_name"].casefold() == repo.casefold(),
                  "Push the accepted implementation commit to its existing PR before audit publication")
+    login = publication_actor()
     commit = publish_files(state, assignment, files)
     url = f"https://github.com/{repo}/tree/{commit}"
     marker = f"<!-- ioncache-audit:{state['id']}:{assignment['id']}:{exported} -->"
     body = (f"{marker}\nDevelopment audit ({assignment['role']}) for `{bundle['code_commit']}`:\n\n"
             f"https://github.com/{repo}/blob/{commit}/AUDIT.md\n\n"
             f"https://github.com/{repo}/blob/{commit}/audit.json\n\nBundle identity: `{exported}`")
-    login = api("user")["login"]
     pages = api(f"repos/{repo}/issues/{number}/comments?per_page=100", paginate=True)
     matches = [item for page in pages for item in page
                if marker in item.get("body", "") and (item.get("user") or {}).get("login") == login]
@@ -345,9 +358,8 @@ def validate_receipt(state, assignment, data):
                  receipt["code_commit"] == bundle["code_commit"] and receipt["bundle"] == bundle_identity(files) and
                  re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", receipt["audit_commit"]) and
                  receipt["branch"] == branch(state, assignment["pr"]) and
-                 receipt["url"] == f"https://github.com/{repo}/tree/{receipt['audit_commit']}" and
-                 re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/{number}#issuecomment-[0-9]+",
-                              receipt["comment_url"]),
+                 match_repository_url(receipt["url"], repo, f"tree/{receipt['audit_commit']}") and
+                 match_repository_url(receipt["comment_url"], repo, rf"pull/{number}#issuecomment-[0-9]+"),
                  "Audit receipt does not match this assignment's reviewed export")
     return receipt
 
@@ -365,8 +377,8 @@ def main():
         folder = Path(args.store).resolve()
         with development.locked(folder):
             state = development.load(folder)
-            development.feature(Path(state["root"]))
-            plan.require(development.audit_enabled(state), "Audit publication is disabled or not approved")
+            settings = development.feature(Path(state["root"]))
+            plan.require(development.audit_enabled(state, settings), "Audit publication is disabled or not approved")
             plan.validate(state["manifest"], folder / "inputs")
             assignment = state["active"]
             plan.require(assignment is not None and assignment["role"] in ROLES,

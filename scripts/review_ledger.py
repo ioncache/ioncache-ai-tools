@@ -187,6 +187,7 @@ def validate_snapshots(ledger, folder):
 def load_history(path):
     """Validate surviving history without authorizing use of a closed run."""
     try:
+        require(not path.is_symlink(), f"Symlink not allowed: {path}")
         ledger = json.loads(path.read_bytes())
         validate_snapshots(ledger, path.parent)
         state = replay(ledger, check_snapshot_transition)
@@ -233,7 +234,7 @@ def abandoned(path):
 
 def recover_closure(args, root):
     """Close readable history before removing a damaged marker's terminal fence."""
-    path = ledger_path(root, args.ledger)
+    path = ledger_path(root, args.ledger, allow_unavailable=True)
     for value in (args.reason, args.evidence, args.shutdown_evidence):
         text(value)
     error = None
@@ -266,7 +267,7 @@ def recover_closure(args, root):
 
 def abandon(args, root):
     """Close unreadable history as failed without rewriting any surviving evidence."""
-    path = ledger_path(root, args.ledger)
+    path = ledger_path(root, args.ledger, allow_unavailable=True)
     require(path.parent.is_dir() and re.fullmatch(r"[a-f0-9]{32}", path.parent.name),
             "Abandon requires an existing published run directory")
     for value in (args.reason, args.evidence, args.shutdown_evidence):
@@ -299,13 +300,14 @@ def abandon(args, root):
     return result
 
 
-def ledger_path(root, argument):
-    """Resolve run paths against root without admitting foreign or symlinked storage."""
+def ledger_path(root, argument, *, allow_unavailable=False):
+    """Validate owned storage, retaining an unusable ledger entry only for inspection or closure."""
     candidate = Path(os.path.abspath(root / argument))
     base = safe_path(root, ".review-loop")
     require(candidate.parent.parent == base and candidate.name == "REVIEW_LEDGER.json",
             "Ledger must be .review-loop/<run-id>/REVIEW_LEDGER.json in this worktree")
-    return safe_path(root, str(candidate.relative_to(root)))
+    folder = safe_path(root, str(candidate.parent.relative_to(root)))
+    return folder / candidate.name if allow_unavailable else safe_path(folder, candidate.name)
 
 
 def ensure_owner(ledger, root):
@@ -433,7 +435,7 @@ def append(args, root):
 
 def status(args, root):
     """Report saved decisions and live drift without accepting drift as new evidence."""
-    path = ledger_path(root, args.ledger)
+    path = ledger_path(root, args.ledger, allow_unavailable=True)
     closed = abandoned(path)
     if closed is not None:
         return closed

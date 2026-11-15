@@ -289,8 +289,9 @@ class DevelopmentRunTests(unittest.TestCase):
         return json.loads(result.stdout) if ok else result.stderr
 
     def audit_api(self, endpoint, *, data=None, paginate=False):
-        if endpoint == "user":
-            return {"login": "fixture-bot"}
+        if endpoint == "graphql":
+            self.assertEqual(data, {"query": "query { viewer { login } }"})
+            return {"data": {"viewer": {"login": "fixture-bot"}}}
         if endpoint == "repos/fixture/project/pulls/1":
             head = self.git("ls-remote", "origin", "refs/heads/fixture-feature").split()[0]
             return {"state": "open", "head": {"sha": head, "ref": "fixture-feature",
@@ -380,6 +381,167 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
+
+    def test_audit_repository_identity_accepts_casing_but_rejects_other_targets(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        state["prs"]["first"]["url"] = "https://github.com/Fixture/Project/pull/1"
+
+        def canonical_api(endpoint, **kwargs):
+            result = self.audit_api(endpoint, **kwargs)
+            if endpoint.endswith("/pulls/1"):
+                result["head"]["repo"]["full_name"] = "FIXTURE/Project"
+            if "html_url" in result:
+                result["html_url"] = result["html_url"].replace("fixture/project", "Fixture/PROJECT")
+            return result
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", canonical_api):
+            receipt = audit.publish(state, active, exported["identity"])
+        self.assertEqual(audit.validate_receipt(state, active, receipt), receipt)
+        self.finish(receipt)
+        for url in ("https://github.com/fixture/other/pull/1",
+                    "https://github.com/fixture/project/PULL/1"):
+            with self.subTest(url=url):
+                state["prs"]["first"]["url"] = url
+                with patch.object(audit, "api", side_effect=AssertionError("Wrong publication target")):
+                    with self.assertRaisesRegex(manifest.ManifestError, "approved repository"):
+                        audit.publish(state, active, exported["identity"])
+        state["prs"]["first"]["url"] = "https://github.com/fixture/project/pull/1"
+        for field in ("repository", "branch"):
+            with self.subTest(field=field):
+                def mismatched_api(endpoint, **kwargs):
+                    result = self.audit_api(endpoint, **kwargs)
+                    if field == "repository":
+                        result["head"]["repo"]["full_name"] = "fixture/other"
+                    else:
+                        result["head"]["ref"] = "Fixture-Feature"
+                    return result
+
+                with patch.dict(os.environ, self.env, clear=True), \
+                        patch.object(audit, "api", mismatched_api), \
+                        patch.object(audit, "publish_files", side_effect=AssertionError("Wrong branch")):
+                    with self.assertRaisesRegex(manifest.ManifestError, "accepted implementation commit"):
+                        audit.publish(state, active, exported["identity"])
+        receipt_path = Path(exported["directory"]) / "receipt.json"
+        for key, value in (("comment_url", receipt["comment_url"].replace("Fixture/PROJECT", "fixture/other")),
+                           ("url", receipt["url"].replace("fixture/project", "fixture/other")),
+                           ("branch", receipt["branch"].upper())):
+            with self.subTest(receipt_field=key):
+                changed = {**receipt, key: value}
+                receipt_path.write_bytes(manifest.encode(changed))
+                with self.assertRaisesRegex(manifest.ManifestError, "receipt does not match"):
+                    audit.validate_receipt(state, active, changed)
+
+    def test_installation_actor_lookup_precedes_publication_and_preserves_author_recovery(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        actor = "fixture-installation[bot]"
+        unavailable = True
+
+        def installation_api(endpoint, *, data=None, paginate=False):
+            if endpoint == "user":
+                raise OSError("Installation tokens cannot use GET /user")
+            if endpoint == "graphql":
+                self.assertEqual(data, {"query": "query { viewer { login } }"})
+                if unavailable:
+                    return {"errors": [{"message": "Fixture actor lookup unavailable"}]}
+                return {"data": {"viewer": {"login": actor}}}
+            try:
+                result = self.audit_api(endpoint, data=data, paginate=paginate)
+            finally:
+                if data is not None and self.audit_comments:
+                    self.audit_comments[-1]["user"]["login"] = actor
+            if data is not None:
+                result["user"]["login"] = actor
+            return result
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", installation_api):
+            with self.assertRaisesRegex(manifest.ManifestError, "actor"):
+                audit.publish(state, active, exported["identity"])
+            self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]), "")
+            self.assertEqual(self.audit_comments, [])
+            unavailable = False
+            receipt = audit.publish(state, active, exported["identity"])
+            self.audit_comments[0]["user"]["login"] = "another-publisher"
+            self.lose_audit_response = True
+            with self.assertRaisesRegex(OSError, "lost response"):
+                audit.publish(state, active, exported["identity"])
+            recovered = audit.publish(state, active, exported["identity"])
+            self.assertEqual(receipt["audit_commit"], recovered["audit_commit"])
+            self.assertNotEqual(receipt["comment_url"], recovered["comment_url"])
+            self.assertEqual(len(self.audit_comments), 2)
+            self.assertEqual(self.audit_comments[0]["user"]["login"], "another-publisher")
+        self.finish(recovered)
+
+    def mutation_during_settings_failure(self, command, *extra):
+        original = development.feature_settings
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+
+        def failing_after_read(data):
+            settings = original(data)
+            config.write_text("{broken")
+            return settings
+
+        args = development.parser().parse_args(
+            [command, str(self.store), "--revision", str(self.state["revision"]), *map(str, extra)])
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(development, "feature_settings", side_effect=failing_after_read):
+            return development.mutate(args, self.store)
+
+    def test_settings_snapshot_keeps_assignment_consistent_and_shutdown_reachable(self):
+        self.configure_audit()
+        self.init()
+        self.state = self.mutation_during_settings_failure("next")
+        self.assertTrue(self.state["assignment"]["audit"]["enabled"])
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("disabled", self.finish(outcome="blocked", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.cli("status", self.store)["assignment"]["id"], self.state["assignment"]["id"])
+        self.mutate("interrupt", "--reason", "Settings became unreadable")
+        self.mutate("retire", "--reason", "Stopped the outstanding worker",
+                    "--shutdown-evidence", "Offline fixture has no running worker")
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.write_text('{"features": {}}')
+        self.mutate("resume", "--reason", "Repaired settings")
+        self.assertEqual(self.next()["attempt"], 2)
+
+    def test_settings_failure_cannot_waive_audit_completion(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            receipt = audit.publish(state, active, exported["identity"])
+        before = (self.store / "RUN.json").read_bytes()
+        with self.assertRaisesRegex(manifest.ManifestError, "receipt does not match"):
+            self.mutation_during_settings_failure("record", "--report", self.report({"disabled": True}))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.write_text('{"features": {}}')
+        self.finish(receipt)
+
+    def test_settings_failure_cannot_waive_final_audit_at_reservation_or_delivery(self):
+        root = self.start_audit_fixture()
+        self.execute_fixture(self.state["assignment"])
+        while self.next()["role"] != "audit-final":
+            self.execute_fixture(self.state["assignment"])
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        disabled = json.dumps({"features": {"autonomous-development-audit": False}})
+        config.write_text(disabled)
+        self.finish({"disabled": True})
+        config.write_text('{"features": {}}')
+        before = (self.store / "RUN.json").read_bytes()
+        with self.assertRaisesRegex(manifest.ManifestError, "Final audit is missing"):
+            self.mutation_during_settings_failure("next")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        config.write_text(disabled)
+        self.assertEqual(self.next()["role"], "ready")
+        config.write_text('{"features": {}}')
+        report = self.report({"commit": self.git("rev-parse", "HEAD", root=root),
+                              "url": "https://github.com/fixture/project/pull/1",
+                              "state": "ready", "evidence": "Offline fixture receipt"})
+        before = (self.store / "RUN.json").read_bytes()
+        with self.assertRaisesRegex(manifest.ManifestError, "Final audit is missing"):
+            self.mutation_during_settings_failure("record", "--report", report)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
 
     def test_git_transformations_cannot_publish_unapproved_audit_bytes_or_files(self):
         self.start_audit_fixture()
@@ -708,7 +870,11 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.next()["role"], "commit")
 
     def abandoned_review_retry(self, damage):
+        if damage == "symlink-ledger":
+            self.configure_audit()
         self.init()
+        if damage == "symlink-ledger":
+            self.env.update(self.audit_git_env)
         self.preflight()
         root = self.prepare()
         self.next()
@@ -718,6 +884,11 @@ class DevelopmentRunTests(unittest.TestCase):
         path = Path(data["ledger"])
         if damage == "missing-ledger":
             path.unlink()
+        elif damage == "symlink-ledger":
+            path.unlink()
+            path.symlink_to("unavailable-history.json")
+            for _ in range(2):
+                self.assertIn("Symlink", self.finish(data, ok=False))
         elif damage == "file-map":
             ledger = json.loads(path.read_bytes())
             ledger["snapshots"][ledger["initial"]]["files"] = []
@@ -747,9 +918,26 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["consumed_assignments"], consumed + 1)
         self.review(root)
         self.assertEqual(self.next()["role"], "commit")
+        if damage == "symlink-ledger":
+            self.execute_fixture(self.state["assignment"])
+            while self.next():
+                self.execute_fixture(self.state["assignment"])
+            self.assertTrue(path.is_symlink())
+            self.assertEqual(path.readlink(), Path("unavailable-history.json"))
+            self.assertEqual(self.state["outcome"], "completed")
+            final = development.load(self.store)
+            audit_assignment = next(item for item in final["history"] if item["role"] == "audit-final")
+            bundle = json.loads((audit.directory(final, audit_assignment) / "audit.json").read_bytes())
+            record = next(item for item in bundle["reviews"] if item["id"] == path.parent.name)
+            self.assertFalse(record["available"])
+            self.assertEqual(record["allowance"], "unavailable")
+            self.assertTrue(record["closure_digest"])
 
     def test_abandoned_review_can_only_continue_as_a_counted_retry(self):
         self.abandoned_review_retry("missing-ledger")
+
+    def test_symlinked_review_requires_counted_retry_and_remains_in_final_audit(self):
+        self.abandoned_review_retry("symlink-ledger")
 
     def test_missing_review_object_requires_counted_retry(self):
         self.abandoned_review_retry("missing-object")

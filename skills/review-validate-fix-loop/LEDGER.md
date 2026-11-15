@@ -46,6 +46,10 @@ remaining allowance is unavailable. It cannot resume or satisfy a completed
 review. Readable ledgers use the ordinary `stop` event instead.
 `status` and repeated `abandon` calls return the saved closure. A damaged closure
 record is archived before replacement only when history is unreadable.
+An unusable symlink at the ledger entry can be abandoned without following,
+removing or replacing it. Its target does not supply trusted history.
+The run directory must still be real, owned storage. Closure status and audit
+export retain this run as failed with unavailable allowance.
 
 If the closure record is damaged but the ledger is readable, use:
 

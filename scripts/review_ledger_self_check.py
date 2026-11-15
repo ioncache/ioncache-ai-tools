@@ -1123,6 +1123,42 @@ sys.exit(review_ledger.main())
         self.send("advance")
         self.assertEqual(self.state["outcome"], "completed")
 
+    def test_symlinked_ledger_can_be_closed_without_following_its_target(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                self.init()
+                path = Path(self.ledger)
+                original = path.read_bytes()
+                target = self.root / ("missing-history" if missing else "external-history")
+                if not missing:
+                    target.write_bytes(original)
+                path.unlink()
+                path.symlink_to(target)
+                args = [self.ledger, "--reason", "Ledger entry is an unusable symlink",
+                        "--evidence", "Inspected the entry without following its target",
+                        "--shutdown-evidence", "All fixture workers have exited"]
+                self.assertIn("abandon", self.cli(
+                    ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+                self.cli(["status", self.ledger], ok=False)
+                self.cli(["recover-closure", *args], ok=False)
+                closed = self.cli(["abandon", *args])
+                self.assertEqual((closed["outcome"], closed["allowance"]), ("failed", "unavailable"))
+                self.assertIn("Symlink", closed["error"])
+                self.assertEqual(self.cli(["status", self.ledger]), closed)
+                self.assertEqual(self.cli(["abandon", *args]), closed)
+                self.reject("resume")
+                self.reject("start_review")
+                self.assertTrue(path.is_symlink())
+                self.assertEqual(path.readlink(), target)
+                if missing:
+                    self.assertFalse(target.exists())
+                else:
+                    self.assertEqual(target.read_bytes(), original)
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
     def test_readable_history_survives_damaged_closure_recovery(self):
         self.init("--max-loops", "2")
         self.review()

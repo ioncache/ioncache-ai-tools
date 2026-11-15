@@ -33,23 +33,24 @@ def git(root, *args):
         raise plan.ManifestError(f"Git check failed ({' '.join(args[:3])}): {error}") from error
 
 
-def feature(root):
-    settings = feature_settings({"cwd": str(root)})
+def feature(root, settings=None):
+    if settings is None:
+        settings = feature_settings({"cwd": str(root)})
     features = {"autonomous-development", "skill:autonomous-development"}
     plan.require(features <= settings.catalog and not features.intersection(settings.disabled),
                  "Autonomous development is disabled; continue without this workflow. "
                  "Status and interruption commands remain available.")
+    return settings
 
 
-def audit_enabled(state):
-    settings = feature_settings({"cwd": state["root"]})
+def audit_enabled(state, settings):
     key = "autonomous-development-audit"
     return (state["manifest"]["permissions"].get("publish_audit", False) and
             key in settings.catalog and key not in settings.disabled)
 
 
-def require_final_audit(state, pr, commit):
-    if audit_enabled(state):
+def require_final_audit(state, pr, commit, settings):
+    if audit_enabled(state, settings):
         published = state["prs"][pr].get("audits", [{}])[-1]
         plan.require(published.get("stage") == "audit-final" and
                      published.get("code_commit") == commit and not published.get("disabled"),
@@ -211,8 +212,8 @@ def permission(manifest, role):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
 
-def reserve(state):
-    feature(Path(state["root"]))
+def reserve(state, settings):
+    feature(Path(state["root"]), settings)
     plan.require(state["outcome"] == "running", "Run is stopped; inspect it before resuming")
     plan.require(state["active"] is None, "An assignment is outstanding; collect or reconcile it first")
     target = current_target(state)
@@ -247,7 +248,7 @@ def reserve(state):
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
         if role == "ready":
-            require_final_audit(state, pr_id, before["head"])
+            require_final_audit(state, pr_id, before["head"], settings)
     if role == "implement":
         state["prs"][pr_id].setdefault("task_bases", {}).setdefault(task_id, before["head"])
     state["attempts"][key] = state["attempts"].get(key, 0) + 1
@@ -368,7 +369,7 @@ def commit_result(state, assignment, data):
     progress["commit"] = after["head"]
 
 
-def delivery_result(state, assignment, data):
+def delivery_result(state, assignment, data, settings):
     progress = state["prs"][assignment["pr"]]
     after = capture(Path(assignment["root"]))
     unchanged(assignment["before"], after)
@@ -378,13 +379,13 @@ def delivery_result(state, assignment, data):
     expected = "draft" if assignment["role"] == "draft" else "ready"
     plan.require(data["state"] == expected, "PR state does not match the assignment")
     if assignment["role"] == "ready":
-        require_final_audit(state, assignment["pr"], after["head"])
+        require_final_audit(state, assignment["pr"], after["head"], settings)
     if progress["url"]:
         plan.require(progress["url"] == data["url"], "Publication cannot replace the owned PR")
     progress["url"] = data["url"]
 
 
-def complete(state, report):
+def complete(state, report, settings):
     plan.fields(report, "assignment worker outcome summary evidence artifacts data")
     active = state["active"]
     plan.require(active is not None and report["assignment"] == active["id"], "Unexpected assignment result")
@@ -397,7 +398,7 @@ def complete(state, report):
     plan.require(report["outcome"] in ("complete", "blocked", "waiting"), "Unknown worker outcome")
     plan.require(isinstance(report["data"], dict), "Result data must be an object")
     if report["outcome"] == "complete":
-        complete_role(state, active, report["data"])
+        complete_role(state, active, report["data"], settings)
         if active["pr"]:
             state["prs"][active["pr"]]["position"] += 1
         else:
@@ -411,7 +412,7 @@ def complete(state, report):
     state["active"] = None
 
 
-def complete_role(state, assignment, data):
+def complete_role(state, assignment, data, settings):
     role = assignment["role"]
     if assignment["pr"] and role != "prepare":
         check_worktree(state, assignment["pr"])
@@ -419,7 +420,7 @@ def complete_role(state, assignment, data):
         required = ("artifact_access", "native_permissions", "fresh_workers",
                     "independent_review", "result_delivery", "cancellation")
         plan.require(all(data.get(key) is True for key in required), "Required execution capability is unverified")
-        if audit_enabled(state):
+        if audit_enabled(state, settings):
             audit.repository(state["manifest"]["repository"]["url"])
             plan.require(data.get("audit_publication") is True,
                          "Verify GitHub audit-branch and PR-comment publication before execution")
@@ -433,10 +434,10 @@ def complete_role(state, assignment, data):
     elif role == "commit":
         commit_result(state, assignment, data)
     elif role in ("draft", "ready"):
-        delivery_result(state, assignment, data)
+        delivery_result(state, assignment, data, settings)
     elif role in ("audit-initial", "audit-final"):
         unchanged(assignment["before"], capture(Path(assignment["root"])))
-        if not audit_enabled(state):
+        if not audit_enabled(state, settings):
             plan.require(data == {"disabled": True}, "Record disabled audit publication explicitly")
             result = {**data, "stage": role, "code_commit": assignment["before"]["head"]}
         else:
@@ -450,10 +451,12 @@ def complete_role(state, assignment, data):
         state["prs"][assignment["pr"]]["evidence"] = data
 
 
-def request(state):
+def request(state, settings):
     assignment = state["active"]
     if assignment is None:
         return None
+    if settings is None:
+        settings = feature_settings({"cwd": state["root"]})
     manifest = state["manifest"]
     before = assignment["before"]
     before_identity = None if before is None else {
@@ -478,7 +481,7 @@ def request(state):
                             if assignment["pr"] else [])
             },
             "progress": progress_summary(state["prs"][assignment["pr"]]) if assignment["pr"] else None,
-            "audit": {"enabled": audit_enabled(state),
+            "audit": {"enabled": audit_enabled(state, settings),
                       "branch": audit.branch(state, assignment["pr"]) if assignment["pr"] else None},
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
@@ -492,18 +495,18 @@ def progress_summary(progress):
     return result
 
 
-def summary(state):
+def summary(state, settings=None):
     return {"run": state["id"], "store": state["store"], "revision": state["revision"],
             "outcome": state["outcome"], "reason": state.get("reason"),
             "input_error": input_error(state),
             "consumed_assignments": len(state["history"]), "limits": state["manifest"]["limits"],
             "prs": {key: progress_summary(value) for key, value in state["prs"].items()},
-            "assignment": request(state),
+            "assignment": request(state, settings),
             "usage": "Model tokens, cost, and native retries are not measured by this ledger"}
 
 
-def reconcile(state, args):
-    feature(Path(state["root"]))
+def reconcile(state, args, settings):
+    feature(Path(state["root"]), settings)
     plan.require(state["outcome"] in ("running", "blocked", "waiting") and state["active"] is None,
                  "Collect or retire the outstanding worker before reconciling an unfinished run")
     plan.text(args.reason)
@@ -531,19 +534,20 @@ def mutate(args, folder):
         if args.command not in ("interrupt", "retire"):
             plan.validate(state["manifest"], folder / "inputs")
         report = json.loads(Path(args.report).read_bytes()) if args.command == "record" else None
+        settings = feature_settings({"cwd": state["root"]})
         if report is not None and any(item.get("report") == report for item in state["history"]):
-            return summary(state)
+            return summary(state, settings)
         plan.require(args.revision == state["revision"], "Stale revision; inspect status before retrying")
         if args.command == "next":
-            reserve(state)
+            reserve(state, settings)
         elif args.command == "record":
-            feature(Path(state["root"]))
-            complete(state, report)
+            feature(Path(state["root"]), settings)
+            complete(state, report, settings)
         elif args.command == "interrupt":
             plan.text(args.reason)
             state["outcome"], state["reason"] = "blocked", args.reason
         elif args.command == "resume":
-            feature(Path(state["root"]))
+            feature(Path(state["root"]), settings)
             plan.require(state["outcome"] in ("blocked", "waiting"), "Run cannot resume from this outcome")
             plan.require(state["active"] is None, "Collect the outstanding result or retire it after native worker shutdown")
             plan.text(args.reason)
@@ -560,10 +564,10 @@ def mutate(args, folder):
             state["active"] = None
             state["outcome"] = "blocked"
         elif args.command == "reconcile":
-            reconcile(state, args)
+            reconcile(state, args, settings)
         state["revision"] += 1
         save(folder, state)
-        return summary(state)
+        return summary(state, settings)
 
 
 def parser():

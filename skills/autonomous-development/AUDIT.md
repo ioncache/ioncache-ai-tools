@@ -102,6 +102,9 @@ Return the complete publisher receipt as the development report's `data`.
 The publisher uses a temporary private Git repository, an explicit non-force
 push to the audit ref, and authenticated `gh api` calls. It checks the PR's
 repository, owned branch, open state and exact code commit before publication.
+Repository identities are case-insensitive; branch names remain case-sensitive.
+It resolves the authenticated actor through GraphQL before pushing, supporting
+both user and GitHub App installation tokens without relying on `GET /user`.
 Before pushing, it verifies that the Git commit contains exactly the two
 approved files with their approved bytes. Filters or commit hooks cannot silently
 change the published bundle or add files.
@@ -138,3 +141,4 @@ Protocol references:
 https://git-scm.com/docs/git-push
 https://cli.github.com/manual/gh_api
 https://docs.github.com/en/rest/issues/comments
+https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
