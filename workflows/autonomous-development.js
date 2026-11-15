@@ -79,7 +79,12 @@ ${args.pluginRoot}/skills/autonomous-development/WORKERS.md, flat review section
 You may maintain only this assignment's existing review ledger and private reports.
 Do not edit project code, commit, publish, or launch agents.
 Read the complete approved assignment and original result files.
-Use existing review-code criteria, contracts, orchestration, and review/fix ledger mechanics.
+Normalize review options and prepare frozen category packets with the shared helpers.
+Use review-code PACKETS.md, contracts, orchestration, and review/fix ledger mechanics.
+Persist the full phase plan and attempt history before dispatch.
+Each reviewer request carries its exact single-purpose packet in packet.
+Other requests carry only that role's instructions and evidence in prompt.
+Never send a reviewer the whole development assignment, WORKERS.md, or sibling criteria.
 Return bounded leaf requests, a blocked result, or the final development report path.
 Do not repeat completed passes. Reconstruct progress from the existing ledger on replay.
 Owner calls plus leaf calls remaining after this call: ${maximum - calls}.
@@ -94,7 +99,8 @@ Completed leaf report references: ${JSON.stringify(reports)}`,
             type: 'object', required: ['role', 'prompt', 'result_file'],
             properties: {
               role: { enum: ['reviewer', 'adjudicator', 'validator', 'fixer'] },
-              prompt: { type: 'string' }, result_file: { type: 'string' }
+              prompt: { type: 'string' }, result_file: { type: 'string' },
+              packet: { type: ['object', 'null'] }
             }
           } }
         }
@@ -114,21 +120,38 @@ Completed leaf report references: ${JSON.stringify(reports)}`,
       }
       if (resultPaths.has(request.result_file)) throw new Error('Review reports must have distinct paths')
       resultPaths.add(request.result_file)
+      let instructions = request.prompt
+      if (request.role === 'reviewer') {
+        const packet = request.packet
+        if (!packet || !packet.identity || !packet.review_type ||
+            packet.instruction_set?.category !== packet.review_type ||
+            !packet.instruction_set.identity ||
+            packet.root !== assignment.root || packet.base !== assignment.comparison_base ||
+            packet.result_file !== request.result_file) {
+          throw new Error('Reviewer request must carry its frozen single-purpose packet')
+        }
+        instructions = `Perform only the category in this frozen packet.
+Use its instruction_set source contents, not writing skills, the full catalog, or sibling criteria.
+Frozen packet: ${JSON.stringify(packet)}`
+      }
       calls += 1
       const result = await agent(
         `Perform only the bounded ${request.role} assignment below. Do not launch agents.
-Read ${args.pluginRoot}/skills/autonomous-development/WORKERS.md, flat review section.
 Only fixer may edit approved project files. Other roles are read-only toward the worktree.
 Do not write the review ledger or RUN.json. Never commit, push, or publish.
 Write the complete shared-contract result to the assigned private result file.
-Approved development assignment: ${JSON.stringify(assignment)}
-Bounded leaf request: ${JSON.stringify(request)}`,
+Return its path with outcome complete only for a complete report; map partial or failed reports
+to blocked without rewriting the original report. Do not return waiting for a review role.
+Assigned result file: ${JSON.stringify(request.result_file)}
+Purpose-specific instructions and evidence:
+${instructions}`,
         { label: request.role, schema: resultSchema }
       )
-      if (!result || result.outcome !== 'complete' || result.result_file !== request.result_file) {
-        throw new Error('Missing, failed, or mismatched review leaf result')
+      if (!result || !['complete', 'blocked'].includes(result.outcome) ||
+          result.result_file !== request.result_file) {
+        throw new Error('Missing or mismatched review leaf result')
       }
-      reports.push(result.result_file)
+      reports.push({ role: request.role, result_file: result.result_file, outcome: result.outcome })
     }
   }
   throw new Error('Review dispatch allowance exhausted before a complete handback')

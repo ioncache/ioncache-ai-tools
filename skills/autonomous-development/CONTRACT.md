@@ -74,7 +74,10 @@ checks cannot be replaced by `not_applicable` in the final review handback.
 caps attempts at the same role/task or role/PR. Reservations consume capacity
 before dispatch; missing results do not refund it. `review_dispatches` bounds
 review-owner plus leaf calls per review assignment attempt. The existing review
-ledger retains its own outer and inner allowances.
+ledger retains its own outer and inner allowances. Category replacement rounds
+also remain bounded under review-code `PACKETS.md`; they are not another
+dispatch allowance. Budget for the complete enabled category roster, separate
+adjudication and owner calls. Do not combine purposes to fit a smaller limit.
 
 These are logical execution limits, not hard token, time, or spending caps.
 Control workers and host-native retries also consume model usage. Establish
@@ -110,15 +113,24 @@ the assignment incomplete.
 recorded report is idempotent; altered or stale reports cannot advance another
 assignment.
 
-Every report contains `assignment`, actual `worker` identity, `outcome`
+Every report contains `assignment`, observed `worker` identity or JSON `null`, `outcome`
 (`complete`, `blocked`, or `waiting`), `summary`, non-empty `evidence`, `artifacts`
 (approved ID-to-digest map), and role-specific `data`. A worker cannot invent a
-host ID or treat an unobservable identity as verified. Keep the full report;
+host ID or treat an unobservable identity as verified. Preserve visibility
+limitations; an explicit verified-identity requirement still needs evidence.
+Keep the full report;
 returning its path is not itself evidence of successful work.
 
-Review results refer to the existing `.review-loop/<id>/REVIEW_LEDGER.json`.
+Review results supply `data.ledger` for the existing
+`.review-loop/<id>/REVIEW_LEDGER.json`, plus `data.plan` and `data.handoff` for
+the final full phase's frozen category plan and handoff in this run's private
+`reports/`. Retain complete plans and attempt history in the shared ledger as
+specified by `PACKETS.md`, not just these file references.
 The controller verifies its completion, base, current snapshot, exact allowances,
-and passing named acceptance checks. Complete-with-exceptions results remain
+and passing named acceptance checks. It also runs the shared category-record
+checker and binds the full plan to that root, base and snapshot. Missing
+categories, missing adjudication or unresolved applicability cannot authorize a
+commit. Complete-with-exceptions results remain
 visible in PR progress; they are not relabeled as clean reviews.
 
 Task review finishes before commit. Full-PR review follows draft publication.
@@ -148,6 +160,10 @@ If accepted code drifts within the approved paths, use `reconcile` with `--pr`,
 It schedules another review without reverting files, changing the original
 comparison base, or refunding attempts. Drift outside approved paths requires
 an explicit scope decision, not an automatic rollback or wider fix.
+
+Accepted reviews without category-coverage records cannot authorize further
+commits or readiness. Use the same `reconcile` command for a counted review with
+the current contract; retain prior evidence, original bases and spent allowances.
 
 Snapshots inherit the existing review helper's boundaries: tracked and
 non-ignored untracked files, excluding `.review-loop/`. Symlink targets are

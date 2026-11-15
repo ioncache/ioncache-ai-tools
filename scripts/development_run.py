@@ -18,6 +18,7 @@ import tempfile
 from uuid import uuid4
 
 import development_manifest as plan
+import review_assignments as assignments
 import review_ledger as review
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "scripts"))
@@ -200,8 +201,12 @@ def reserve(state):
             else check_worktree(state, pr_id))
     before = None if role in ("preflight", "prepare") else capture(root)
     if role in ("commit", "ready", "evidence"):
-        accepted = state["prs"][pr_id]["accepted"]
+        progress = state["prs"][pr_id]
+        accepted = progress["accepted"]
         plan.require(accepted is not None, "A completed review is required")
+        plan.require(progress.get("review", {}).get("coverage", {}).get("structurally_complete"),
+                     "Review lacks category coverage; reconcile this PR for a counted review "
+                     "before continuing, preserving existing work and allowances")
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
     if role == "implement":
@@ -245,6 +250,27 @@ def prepare_result(state, assignment, data):
     state["prs"][pr["id"]]["base"] = observed
 
 
+def review_coverage(state, assignment, report, data):
+    records = {}
+    directory = Path(state["store"]) / "reports"
+    for key in ("plan", "handoff"):
+        path = Path(data[key]).resolve()
+        plan.require(path.is_relative_to(directory) and path != directory,
+                     "Review records must remain in this run's private reports")
+        records[key] = assignments.read_json(path)
+    phase = records["plan"]
+    checked = assignments.check(phase, records["handoff"])
+    request = phase["request"]
+    plan.require(request["root"] == assignment["root"] and request["base"] == report["base"] and
+                 request["snapshot"] == report["snapshot"] and request["kind"] == "full",
+                 "Final category coverage does not match the completed full review")
+    plan.require(checked["structurally_complete"],
+                 "Category review is incomplete: " + json.dumps(checked))
+    return {"plan": str(Path(data["plan"]).resolve()),
+            "handoff": str(Path(data["handoff"]).resolve()),
+            "identity": phase["identity"], **checked}
+
+
 def review_result(state, assignment, data):
     root = Path(assignment["root"])
     report = review.status(SimpleNamespace(ledger=data["ledger"]), root)
@@ -265,6 +291,7 @@ def review_result(state, assignment, data):
     after = capture(root)
     plan.require(review.digest(review.encode(after)) == report["snapshot"],
                  "Code changed after the completed review snapshot")
+    report["coverage"] = review_coverage(state, assignment, report, data)
     within_scope(state, assignment, after)
     progress["accepted"] = after
     progress["review"] = report
@@ -307,7 +334,8 @@ def complete(state, report):
     plan.fields(report, "assignment worker outcome summary evidence artifacts data")
     active = state["active"]
     plan.require(active is not None and report["assignment"] == active["id"], "Unexpected assignment result")
-    plan.text(report["worker"])
+    if report["worker"] is not None:
+        plan.text(report["worker"])
     plan.text(report["summary"])
     plan.strings(report["evidence"])
     expected = {item["id"]: item["sha256"] for item in state["manifest"]["artifacts"]}
@@ -396,7 +424,7 @@ def progress_summary(progress):
     reviewed = progress.get("review")
     if reviewed:
         result["review"] = {"ledger": reviewed["ledger"], "outcome": reviewed["outcome"],
-                            "snapshot": reviewed["snapshot"]}
+                            "snapshot": reviewed["snapshot"], "coverage": reviewed.get("coverage")}
     return result
 
 

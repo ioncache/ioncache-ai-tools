@@ -22,9 +22,11 @@ async function scenario(scenario) {
   const recorded = []
   const waiting = scenario === 'waiting' || scenario === 'waiting-independent'
   let owners = 0
+  let reviewers = 0
   let assignment = {
     id: 'A0001', role: scenario.startsWith('review') ? 'review' : waiting ? 'prepare' : 'implement',
     pr: waiting ? 'dependent' : 'first',
+    root: '/project', comparison_base: 'fixture-base', private_context: 'owner-only-context',
     store: input.store, result_file: '/private/run/reports/A0001.json',
     configuration: { execution: { provider: 'claude-workflows' } },
     limits: { review_dispatches: scenario === 'review-budget' ? 2 : 6 }
@@ -58,17 +60,35 @@ async function scenario(scenario) {
     if (scenario === 'missing') return null
     if (options.label === 'review-owner') {
       owners += 1
-      return owners === 1
-        ? { outcome: 'dispatch', result_file: '', requests: [{
-          role: 'reviewer', prompt: 'Read the fixture and its callers.',
-          result_file: scenario === 'review-path' ? '/outside/report.json'
-            : '/private/run/reports/A0001/correctness.json'
+      if (owners > 1 && scenario === 'review-replacement') {
+        assert(prompt.includes('"outcome":"blocked"'))
+      }
+      if (owners === 1 || (owners === 2 && scenario === 'review-replacement')) {
+        const resultFile = scenario === 'review-path' ? '/outside/report.json'
+          : `/private/run/reports/A0001/correctness-${owners}.json`
+        const packet = {
+          identity: 'fixture-packet', assignment: `correctness-${owners}`,
+          root: assignment.root, base: assignment.comparison_base, snapshot: 'fixture-snapshot',
+          review_type: 'correctness', result_file: resultFile,
+          instruction_set: { identity: 'fixture-instructions', category: 'correctness',
+            sources: [{ content: 'fixture-correctness-only' }] }
+        }
+        return { outcome: 'dispatch', result_file: '', requests: [{
+          role: 'reviewer', prompt: 'sibling-instruction-marker', result_file: resultFile,
+          packet: scenario === 'review-missing-packet' ? null : packet
         }] }
-        : { outcome: 'complete', result_file: assignment.result_file, requests: [] }
+      }
+      return { outcome: 'complete', result_file: assignment.result_file, requests: [] }
     }
     if (options.label === 'reviewer') {
-      return { outcome: scenario === 'review-waiting' ? 'waiting' : 'complete',
-        result_file: '/private/run/reports/A0001/correctness.json' }
+      reviewers += 1
+      assert(prompt.includes('fixture-correctness-only'))
+      assert(!prompt.includes('owner-only-context'))
+      assert(!prompt.includes('sibling-instruction-marker'))
+      assert(!prompt.includes('/WORKERS.md'))
+      const outcome = scenario === 'review-waiting' ? 'waiting'
+        : scenario === 'review-replacement' && reviewers === 1 ? 'blocked' : 'complete'
+      return { outcome, result_file: `/private/run/reports/A0001/correctness-${reviewers}.json` }
     }
     return { outcome: assignment.role === 'prepare' ? 'waiting' : 'complete',
       result_file: assignment.result_file }
@@ -120,7 +140,7 @@ async function main() {
   assert.deepEqual(review.roles, [
     'development-control', 'review-owner', 'reviewer', 'review-owner', 'development-control'
   ])
-  for (const name of ['review-budget', 'review-path']) {
+  for (const name of ['review-budget', 'review-path', 'review-missing-packet']) {
     const blocked = await scenario(name)
     assert.equal(blocked.result.outcome, 'blocked')
     assert(!blocked.roles.includes('reviewer'))
@@ -144,6 +164,12 @@ async function main() {
     'development-control', 'review-owner', 'reviewer', 'development-control'
   ])
   assert.deepEqual(incompleteReview.recorded, [])
+  const replacement = await scenario('review-replacement')
+  assert.equal(replacement.result.outcome, 'completed', replacement.result.reason)
+  assert.deepEqual(replacement.roles, [
+    'development-control', 'review-owner', 'reviewer', 'review-owner',
+    'reviewer', 'review-owner', 'development-control'
+  ])
   await assert.rejects(run({}, null, phase), /Provide absolute/)
   console.log('Development workflow offline self-check passed')
 }

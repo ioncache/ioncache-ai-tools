@@ -40,9 +40,17 @@ either to the execution provider.
 The Python controller persists assignments before dispatch, rejects stale
 results, retains allowances on interruption, and validates local Git and existing
 review-ledger evidence. Claude's packaged Workflow dispatches fresh workers and
-flat review roles. The script itself performs no filesystem or shell operations.
+flat review roles using frozen, single-purpose category packets. Final acceptance
+checks the full phase's category handoff against the completed review snapshot;
+old bundled coverage requires counted reconciliation, not relabeling.
+The script itself performs no filesystem or shell operations.
 Publication remains an assigned worker operation under native permissions.
 The helper does not independently verify the truth of remote receipts.
+
+Review-category controls and saved review options use the same helpers as
+standalone review. This adapter currently uses configured models: unsupported
+role overrides follow their declared fallback, never a silent substitution.
+Reported null identities remain visibility limitations, not fabricated worker IDs.
 
 Independent increments can be handed over early. Dependent PRs wait for observed
 human merges; this adapter does not implement stacked-branch maintenance.

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import development_manifest as manifest
 import development_run as development
+import review_assignments as assignments
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -107,7 +108,7 @@ class DevelopmentRunTests(unittest.TestCase):
 
     def report(self, data=None, outcome="complete"):
         assignment = self.state["assignment"]
-        result = {"assignment": assignment["id"], "worker": "fixture-" + assignment["id"],
+        result = {"assignment": assignment["id"], "worker": None,
                   "outcome": outcome, "summary": "Offline fixture result",
                   "evidence": ["Executed isolated fixture operations"],
                   "artifacts": {item["id"]: item["sha256"] for item in self.plan["artifacts"]},
@@ -134,7 +135,44 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish({"base": pr["base"], "merged_dependencies": pr["dependencies"]})
         return Path(assignment["root"])
 
-    def review(self, root):
+    def review_records(self, root, snapshot):
+        assignment = self.state["assignment"]
+        scratch = self.store / "reports" / assignment["id"]
+        scratch.mkdir(exist_ok=True)
+        options = subprocess.run(
+            [sys.executable, str(SCRIPTS / "review_options.py"), "review-validate-fix-loop"],
+            cwd=root, env=self.env, capture_output=True, text=True, check=True)
+        phase = assignments.prepare({
+            "objective": "Fixture review", "kind": "full", "target": "branch",
+            "root": str(root), "base": assignment["comparison_base"], "snapshot": snapshot,
+            "files": ["app.txt"], "constraints": ["Offline fixture; no model launches"],
+            "scratch_directory": str(scratch), "review_options": json.loads(options.stdout),
+            "language_inventory": {
+                "app.txt": {"languages": [], "evidence": "Inspected plain-text fixture content"}},
+        })
+        attempts = []
+        for packet in phase["packets"].values():
+            result = {
+                "assignment": packet["assignment"], "review_type": packet["review_type"],
+                "instruction_set": packet["instruction_set"]["identity"],
+                "packet_identity": packet["identity"], "snapshot": snapshot,
+                "worker": None, "origin": "specialist", "selection": {"actual": "unknown"},
+                "coverage": {"files": packet["scope_files"], "isolation": "unknown"},
+                "outcome": "complete", "candidates": [], "limitations": [],
+            }
+            Path(packet["result_file"]).write_bytes(manifest.encode(result))
+            attempts.append({"id": packet["assignment"], "round": 0, "packet": packet,
+                             "worker": None, "result": result,
+                             "observation": {"kind": "caller", "source": "Offline fixture"}})
+        handoff = {"history_complete": True, "attempts": attempts,
+                   "active": {item["packet"]["review_type"]: [item["id"]] for item in attempts},
+                   "other_workers": [{"role": "adjudicator", "worker": None}]}
+        paths = {"plan": str(scratch / "phase.json"), "handoff": str(scratch / "handoff.json")}
+        for key, value in (("plan", phase), ("handoff", handoff)):
+            Path(paths[key]).write_bytes(manifest.encode(value))
+        return paths, phase
+
+    def review(self, root, *, record=True):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
@@ -142,18 +180,25 @@ class DevelopmentRunTests(unittest.TestCase):
                 "--max-fix-cycles", str(self.plan["limits"]["fix_cycles"])]
         result = self.review_cli(root, args)
         ledger = result["ledger"]
+        records, phase = self.review_records(root, result["snapshot"])
         events = [
-            {"type": "start_review"},
-            {"type": "review_done", "passes": [{"name": "fixture", "worker": "fixture-reviewer",
-              "result": "complete", "evidence": "Read fixture and caller requirements"}],
+            {"type": "start_review", "reason": json.dumps(phase)},
+            {"type": "review_done", "passes": [
+                {"name": category, "worker": "unobserved (non-identity marker)",
+                 "result": "complete", "evidence": "Offline fixture; native identity not observed"}
+                for category in phase["required"]],
              "checks": [{"name": "fixture", "result": "passed", "evidence": "Fixture command exited zero"}]},
             {"type": "advance"},
         ]
         subprocess.run([sys.executable, "-c", "assert True"], env=self.env, cwd=root, check=True)
         for event in events:
-            event.update(actor="fixture-owner", reason="Offline regression evidence")
+            event.update(actor="fixture-owner")
+            event.setdefault("reason", "Offline regression evidence")
             result = self.review_cli(root, ["apply", ledger, "--revision", str(result["revision"])], event)
-        self.finish({"ledger": ledger})
+        data = {"ledger": ledger, **records}
+        if record:
+            self.finish(data)
+        return data
 
     def review_cli(self, root, args, event=None):
         result = subprocess.run([sys.executable, str(SCRIPTS / "review_ledger.py"), *args],
@@ -207,6 +252,69 @@ class DevelopmentRunTests(unittest.TestCase):
         (self.bundle / "design.md").write_text("Unapproved change")
         with self.assertRaisesRegex(manifest.ManifestError, "Artifact changed"):
             manifest.validate(self.plan, self.bundle)
+
+    def test_category_handback_is_required_and_recoverable_without_resetting_work(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        data = self.review(root, record=False)
+        path = Path(data["handoff"])
+        original = json.loads(path.read_text())
+        incomplete = copy.deepcopy(original)
+        incomplete["active"].pop("security")
+        path.write_bytes(manifest.encode(incomplete))
+        self.assertIn("Category review is incomplete", self.finish(data, ok=False))
+        self.assertEqual(self.state["assignment"]["role"], "review")
+        path.write_bytes(manifest.encode(original))
+        self.finish(data)
+        coverage = self.state["prs"]["first"]["review"]["coverage"]
+        self.assertTrue(coverage["structurally_complete"])
+        self.assertTrue(coverage["limitations"])
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_legacy_review_requires_counted_reconciliation_before_commit(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        self.review(root)
+        path = self.store / "RUN.json"
+        saved = json.loads(path.read_text())
+        saved["prs"]["first"]["review"].pop("coverage")
+        path.write_bytes(manifest.encode(saved))
+        consumed = self.state["consumed_assignments"]
+        self.assertIn("reconcile this PR", self.mutate("next", ok=False))
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace legacy coverage")
+        self.assertEqual(self.next()["role"], "review")
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_final_category_plan_must_match_the_completed_full_review(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        data = self.review(root, record=False)
+        path = Path(data["plan"])
+        original = json.loads(path.read_text())
+        for field, value in (("kind", "focused"), ("snapshot", "different-revision"),
+                             ("base", "different-base"), ("root", str(self.root))):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original)
+                changed["request"][field] = value
+                changed.pop("identity")
+                path.write_bytes(manifest.encode(assignments.seal(changed)))
+                self.assertIn("does not match the completed full review", self.finish(data, ok=False))
+        path.write_bytes(manifest.encode(original))
+        self.finish(data)
 
     def test_invalid_graph_scope_and_limits_are_rejected(self):
         mutations = [

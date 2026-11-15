@@ -89,7 +89,10 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   `scripts/development_run.py` owns private development-run bookkeeping outside
   the repository. It does not launch models or publish. The Claude script in
   `workflows/` dispatches fresh workers and flat review roles; keep offline
-  lifecycle checks distinct from live-host qualification.
+  lifecycle checks distinct from live-host qualification. Forward frozen
+  single-purpose packets, not generic catalogs or the implementation context.
+  Final acceptance reuses the shared category checker and pins its full-phase
+  evidence to the completed ledger's root, base and snapshot.
 - The `create-worktree` skill invokes `scripts/create-worktree.py`, which requires
   Node.js 22.12.0+ and checks its version before launching the sibling
   `create-worktree.js` helper.

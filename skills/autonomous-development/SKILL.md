@@ -28,6 +28,10 @@ not cancel an existing assignment. Use native permissions, not a turn-based gate
    normalized interpretation and content identity for approval.
 6. Resolve permissions and finite limits explicitly. Approval of document content
    is not native host permission. Do not infer publication or model budgets.
+   Preserve explicit review-role choices in the approved constraints. This
+   adapter uses configured models; unsupported overrides require their declared
+   configured fallback or leave execution incomplete. Size review allowances
+   for the enabled category roster, separate adjudication and owner calls.
 
 Run the helper by resolving `../../scripts/development_run.py` relative to this
 installed skill directory:
@@ -55,7 +59,9 @@ The invocation string distinguishes a new launch from native replay.
 Preflight must establish actual artifact access, native permissions, fresh
 workers, independent review, result delivery, and cancellation. The adapter
 dispatches reviewers, adjudicators, validators, and fixers flat. No leaf
-launches another agent. [WORKERS.md](WORKERS.md) defines these assignments.
+launches another agent. Reviewers receive frozen single-purpose packets, with
+category controls independent of writing skills. [WORKERS.md](WORKERS.md)
+defines these assignments and the final category-coverage handoff.
 
 The controller and adapter have offline checks, not completed live-host
 qualification. Obtain separate approval and resource limits for live trials.

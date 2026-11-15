@@ -188,6 +188,8 @@ The initial execution adapter is the Claude Workflow
 `/ioncache-ai-tools:autonomous-development-run`. It uses fresh workers, private
 durable state, per-task and full-PR reviews, and human-controlled PR merging.
 Copilot and Codex currently support preparation and state inspection only.
+This adapter uses configured models; unsupported review-role overrides require
+their declared fallback or leave the affected work incomplete.
 The adapter is **not yet live-host qualified**; offline checks do not establish
 unattended permissions, cloud operation, or shared team controls.
 
