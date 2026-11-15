@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import development_manifest as manifest
+import development_audit as audit
 import development_run as development
 import review_assignments as assignments
 
@@ -123,7 +124,8 @@ class DevelopmentRunTests(unittest.TestCase):
     def preflight(self):
         self.assertEqual(self.next()["role"], "preflight")
         self.finish({name: True for name in ("artifact_access", "native_permissions", "fresh_workers",
-                                             "independent_review", "result_delivery", "cancellation")})
+                                             "independent_review", "result_delivery", "cancellation",
+                                             "audit_publication")})
 
     def prepare(self):
         assignment = self.next()
@@ -175,7 +177,7 @@ class DevelopmentRunTests(unittest.TestCase):
             Path(paths[key]).write_bytes(manifest.encode(value))
         return paths, phase
 
-    def review(self, root, *, record=True, files=None):
+    def review(self, root, *, record=True, files=None, finding=False):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
@@ -193,6 +195,14 @@ class DevelopmentRunTests(unittest.TestCase):
              "checks": [{"name": "fixture", "result": "passed", "evidence": "Fixture command exited zero"}]},
             {"type": "advance"},
         ]
+        if finding:
+            events[-1:-1] = [
+                {"type": "finding", "key": "private-fixture-key", "summary": "PRIVATE-AUDIT-SENTINEL",
+                 "locations": [str(root / "app.txt")], "severity": "Low",
+                 "evidence": ["PRIVATE-AUDIT-SENTINEL"]},
+                {"type": "decision", "id": "F001", "validation": "invalid", "disposition": "ignored",
+                 "severity": "Low", "evidence": ["PRIVATE-AUDIT-SENTINEL"]},
+            ]
         subprocess.run([sys.executable, "-c", "assert True"], env=self.env, cwd=root, check=True)
         for event in events:
             event.update(actor="fixture-owner")
@@ -223,11 +233,241 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.git("add", "app.txt", root=root)
                 self.git("commit", "-qm", "fixture implementation", root=root)
             self.finish({"commit": self.git("rev-parse", "HEAD", root=root)})
+        elif role in audit.ROLES:
+            if not assignment["audit"]["enabled"]:
+                self.finish({"disabled": True})
+            else:
+                state, active, exported = self.audit_export()
+                with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+                    receipt = audit.publish(state, active, exported["identity"])
+                self.finish(receipt)
         else:
             self.finish({"commit": self.git("rev-parse", "HEAD", root=root),
-                         "url": "https://example.invalid/pull/1",
+                         "url": ("https://github.com/fixture/project/pull/1"
+                                 if self.plan["permissions"].get("publish_audit")
+                                 else "https://example.invalid/pull/1"),
                          "state": "draft" if role == "draft" else "ready",
                          "evidence": "Offline simulated remote receipt; no network used"})
+
+    def configure_audit(self):
+        self.plan["permissions"]["publish_audit"] = True
+        self.plan["constraints"].append("PRIVATE-AUDIT-SENTINEL")
+        self.plan["repository"]["url"] = "https://github.com/fixture/project.git"
+        self.git("remote", "set-url", "origin", self.plan["repository"]["url"])
+        self.remote = self.folder / "audit-remote.git"
+        self.git("init", "--bare", "-q", str(self.remote))
+        self.audit_git_env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.file://{self.remote}.insteadOf",
+                              "GIT_CONFIG_VALUE_0": self.plan["repository"]["url"]}
+        self.audit_comments = []
+        self.lose_audit_response = False
+
+    def audit_export(self):
+        state = development.load(self.store)
+        active = state["active"]
+        self.git("push", "origin", f"HEAD:refs/heads/{self.plan['prs'][0]['branch']}",
+                 root=Path(active["root"]))
+        records = [audit.review_record(path) for path in
+                   (Path(active["root"]) / ".review-loop").glob("*/REVIEW_LEDGER.json")]
+        public = {"summary": "Fixture process audit", "method": "Isolated offline category fixtures",
+                  "verification": "Fixture checks passed; no native model was launched.",
+                  "findings": [{"review": row["id"], "id": item["id"], "summary": "A fixture concern",
+                                "rationale": "Rejected by the fixture's independent assessment"}
+                               for row in records if row["available"] for item in row["findings"]],
+                  "regressions": [], "limitations": ["Offline evidence only"]}
+        folder = self.store / "reports" / active["id"]
+        folder.mkdir(exist_ok=True)
+        path = folder / "public.json"
+        path.write_bytes(manifest.encode(public))
+        exported = self.audit_cli("export", "--public", str(path))
+        return state, active, exported
+
+    def audit_cli(self, operation, *args, ok=True):
+        result = subprocess.run([sys.executable, str(SCRIPTS / "development_audit.py"),
+                                 operation, str(self.store), *args],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
+        return json.loads(result.stdout) if ok else result.stderr
+
+    def audit_api(self, endpoint, *, data=None, paginate=False):
+        if endpoint == "user":
+            return {"login": "fixture-bot"}
+        if endpoint == "repos/fixture/project/pulls/1":
+            head = self.git("ls-remote", "origin", "refs/heads/fixture-feature").split()[0]
+            return {"state": "open", "head": {"sha": head, "ref": "fixture-feature",
+                                              "repo": {"full_name": "fixture/project"}}}
+        if paginate:
+            self.assertEqual(endpoint, "repos/fixture/project/issues/1/comments?per_page=100")
+            return [copy.deepcopy(self.audit_comments)]
+        self.assertEqual(endpoint, "repos/fixture/project/issues/1/comments")
+        self.assertIsNotNone(data)
+        comment = {"body": data["body"], "user": {"login": "fixture-bot"},
+                   "html_url": f"https://github.com/fixture/project/pull/1#issuecomment-{len(self.audit_comments) + 1}"}
+        self.audit_comments.append(comment)
+        if self.lose_audit_response:
+            self.lose_audit_response = False
+            raise OSError("Fixture lost response after comment creation")
+        return copy.deepcopy(comment)
+
+    def start_audit_fixture(self):
+        self.configure_audit()
+        self.init()
+        self.env.update(self.audit_git_env)
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        (root / "app.txt").write_text("after\n")
+        self.finish({"private_diagnostics": "PRIVATE-AUDIT-SENTINEL"})
+        self.next()
+        self.review(root, finding=True)
+        while self.next()["role"] != "audit-initial":
+            self.execute_fixture(self.state["assignment"])
+        return root
+
+    def test_audit_publication_preserves_code_and_recovers_lost_response(self):
+        root = self.start_audit_fixture()
+        before = self.review_cli(root, ["fingerprint"])
+        state, active, exported = self.audit_export()
+        for name in audit.FILES:
+            content = (Path(exported["directory"]) / name).read_text()
+            self.assertNotIn("PRIVATE-AUDIT-SENTINEL", content)
+            self.assertNotIn(str(self.folder), content)
+        bundle = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
+        linked = bundle["reviews"][0]["assignment_ids"]
+        self.assertEqual(linked, [item["id"] for item in bundle["history"] if item["role"] == "review"])
+        self.assertEqual(bundle["reviews"][0]["findings"][0]["validation"], "invalid")
+        self.lose_audit_response = True
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with self.assertRaisesRegex(OSError, "lost response"):
+                audit.publish(state, active, exported["identity"])
+            self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
+            first = self.git("ls-remote", "origin", "refs/heads/" + exported["branch"])
+            receipt = audit.publish(state, active, exported["identity"])
+            self.assertEqual(first, self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]))
+        self.assertEqual(len(self.audit_comments), 1)
+        self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
+        self.finish(receipt)
+        while self.next():
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual([item["stage"] for item in self.state["prs"]["first"]["audits"]], list(audit.ROLES))
+        self.assertIn(receipt["audit_commit"], self.audit_comments[0]["body"])
+        final = self.state["prs"]["first"]["audits"][-1]
+        self.assertNotEqual(receipt["audit_commit"], final["audit_commit"])
+        self.assertEqual(final["code_commit"], self.git("rev-parse", "HEAD", root=root))
+        tree = subprocess.run(["git", "--git-dir", str(self.remote), "ls-tree", "-r", "--name-only",
+                               receipt["audit_commit"]], env=self.env, capture_output=True, text=True, check=True)
+        self.assertEqual(set(tree.stdout.splitlines()), set(audit.FILES))
+        parents = subprocess.run(["git", "--git-dir", str(self.remote), "rev-list", "--parents", "-n", "1",
+                                  receipt["audit_commit"]], env=self.env, capture_output=True,
+                                 text=True, check=True)
+        self.assertEqual(parents.stdout.strip(), receipt["audit_commit"])
+
+    def test_failed_audit_retries_without_refunding_or_consuming_the_final_audit_attempt(self):
+        root = self.start_audit_fixture()
+        before = self.review_cli(root, ["fingerprint"])
+        consumed = self.state["consumed_assignments"]
+        self.finish(outcome="blocked")
+        self.mutate("resume", "--reason", "Recovered publication capability within approved limits")
+        retried = self.next()
+        self.assertEqual(retried["role"], "audit-initial")
+        self.assertEqual(retried["attempt"], 2)
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.execute_fixture(retried)
+        while self.next():
+            if self.state["assignment"]["role"] == "audit-final":
+                self.assertEqual(self.state["assignment"]["attempt"], 1)
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
+
+    def test_git_transformations_cannot_publish_unapproved_audit_bytes_or_files(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        original = audit.command
+        for name in ("AUDIT.md", "unexpected.txt"):
+            with self.subTest(file=name):
+                def changed_by_hook(argv, **kwargs):
+                    if argv[1] == "commit":
+                        root = Path(kwargs["cwd"])
+                        (root / name).write_bytes(b"PRIVATE-AUDIT-SENTINEL")
+                        original(["git", "add", "--", name], cwd=root)
+                    return original(argv, **kwargs)
+
+                with patch.dict(os.environ, self.env, clear=True), \
+                        patch.object(audit, "api", self.audit_api), \
+                        patch.object(audit, "command", side_effect=changed_by_hook):
+                    with self.assertRaisesRegex(manifest.ManifestError, "inspect .*hooks"):
+                        audit.publish(state, active, exported["identity"])
+                self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]), "")
+                self.assertEqual(self.audit_comments, [])
+
+    def test_audit_export_requires_complete_narrative_and_exact_publication_approval(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        folder = Path(exported["directory"])
+        public = json.loads((folder / "audit.json").read_bytes())["public"]
+        incomplete = {**public, "findings": []}
+        with self.assertRaisesRegex(manifest.ManifestError, "every recorded finding"):
+            audit.export(state, active, incomplete)
+        public["regressions"] = [{"cause": {"review": "unknown", "id": "F001"},
+                                  "effect": {"review": "unknown", "id": "F002"},
+                                  "basis": "inferred", "evidence": "Fixture hypothesis"}]
+        with self.assertRaisesRegex(manifest.ManifestError, "Unknown regression"):
+            audit.export(state, active, public)
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("receipt.json", self.finish({}, ok=False))
+        self.assertEqual(before, (self.store / "RUN.json").read_bytes())
+        stale = {"state": "open", "head": {"sha": "0" * 40, "ref": "fixture-feature",
+                                           "repo": {"full_name": "fixture/project"}}}
+        with patch.object(audit, "api", return_value=stale), \
+                patch.object(audit, "publish_files", side_effect=AssertionError("No stale publication")):
+            with self.assertRaisesRegex(manifest.ManifestError, "accepted implementation commit"):
+                audit.publish(state, active, exported["identity"])
+        with patch.object(audit, "api", side_effect=AssertionError("Publication must not start")):
+            with self.assertRaisesRegex(manifest.ManifestError, "exact exported files"):
+                audit.publish(state, active, "not-approved")
+            (folder / "AUDIT.md").write_text("Unreviewed replacement")
+            with self.assertRaisesRegex(manifest.ManifestError, "evidence changed"):
+                audit.publish(state, active, exported["identity"])
+
+    def test_audit_opt_out_keeps_development_available_without_publication(self):
+        self.configure_audit()
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"features": {"autonomous-development-audit": False}}))
+        self.init()
+        self.env.update(self.audit_git_env)
+        self.preflight()
+        self.prepare()
+        while self.next():
+            if self.state["assignment"]["role"] in audit.ROLES:
+                self.assertIn("disabled", self.audit_cli("publish", "--approved", "unused", ok=False))
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertTrue(all(item["disabled"] for item in self.state["prs"]["first"]["audits"]))
+        self.assertEqual(self.audit_comments, [])
+        self.assertEqual(self.git("ls-remote", "origin"), "")
+
+    def test_reenabled_audit_requires_counted_reconciliation_before_readiness(self):
+        self.start_audit_fixture()
+        self.execute_fixture(self.state["assignment"])
+        while self.next()["role"] != "audit-final":
+            self.execute_fixture(self.state["assignment"])
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.write_text(json.dumps({"features": {"autonomous-development-audit": False}}))
+        self.finish({"disabled": True})
+        config.write_text(json.dumps({"features": {"autonomous-development-audit": True}}))
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("Final audit is missing", self.mutate("next", ok=False))
+        self.assertEqual(before, (self.store / "RUN.json").read_bytes())
+        self.mutate("reconcile", "--pr", "first", "--reason", "Audit publication reenabled")
+        while self.next():
+            if self.state["assignment"]["role"] == "audit-final":
+                self.assertEqual(self.state["assignment"]["attempt"], 2)
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(self.audit_comments), 2)
 
     def workflow(self, scenario):
         fixture = {"python": sys.executable, "store": str(self.store), "scenario": scenario,

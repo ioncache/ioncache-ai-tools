@@ -34,6 +34,9 @@ before doing more work. A stale assignment cannot authorize new changes.
 Only the assigned result file and explicitly assigned private review records
 are writable outside the approved worktree. Do not edit `RUN.json` directly.
 Reports use [CONTRACT.md](CONTRACT.md).
+Audit workers may also write their assigned public narrative and export directory,
+and use the audit helper's temporary publication repository inside the private
+run store. They may not add audit files to the implementation worktree.
 
 When handing back a development report, return `result_file` and the same
 `outcome` as the report. Preparation waiting for a prerequisite merge returns
@@ -65,6 +68,11 @@ Include data booleans `artifact_access`, `native_permissions`, `fresh_workers`,
 `independent_review`, `result_delivery`, and `cancellation` only after verifying
 them. Describe observations and limitations in evidence. Missing capability
 means `blocked`, not permission to alter host settings or launch another CLI.
+When audit publication is approved and enabled, also verify Git and authenticated
+`gh` access to the same GitHub repository, creation/update of the run-owned audit
+branch, and PR comments. Check branch rules, signing requirements and native
+permissions without publishing a probe. Record `audit_publication: true` only
+when these capabilities are established. The helper does not provision access.
 
 `prepare` checks prerequisite PRs are actually merged. If not, return `waiting`
 before creating anything. Resolve the approved target base and preserve the
@@ -194,11 +202,25 @@ draft PR. Reuse the existing write-pr-descriptions skill and preserve intervenin
 human edits. Inspect existing branch and PR state before repeating any operation.
 Never push the default branch or silently create a replacement PR.
 
+`audit-initial` and `audit-final` follow [AUDIT.md](AUDIT.md). If the assignment
+reports audit publication disabled, return `data: {"disabled": true}` without
+exporting or publishing. Otherwise, verify the accepted implementation commit
+is pushed to the existing PR's owned branch, then export, inspect and publish
+the permitted audit bundle. Return the helper's exact receipt as `data`.
+Only these workers may push the run-owned audit branch. Never force-push,
+change code, upload the private store, or turn a failed publication into success.
+On failure preserve exports, existing commits/comments and diagnostics; return
+blocked or recover the same operation from observed state without duplicating it.
+
 `ready` verifies current code, checks, review evidence, artifact freshness, and
 PR head. Push any accepted final correction commit without force, update the
 description/evidence, and mark ready. Never approve, merge, deploy, or activate
 production flags. Publication data includes `commit`, `url`, `state` (`draft`
 or `ready`), and `evidence` identifying the actual observed remote state.
+When audit publication is enabled, verify the retained final receipt and its PR
+comment refer to this same code commit before marking ready. Keep the initial
+and final audit comments; neither is a review approval. When disabled, disclose
+that no final audit was published rather than presenting initial evidence as final.
 
 `evidence` uses approved startup commands, fixtures, and native browser tools.
 Verify readiness, capture screenshots for the accepted revision, and write them

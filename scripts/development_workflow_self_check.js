@@ -25,7 +25,8 @@ async function scenario(scenario) {
   let owners = 0
   let reviewers = 0
   let assignment = {
-    id: 'A0001', role: scenario.startsWith('review') ? 'review' : waiting ? 'prepare' : 'implement',
+    id: 'A0001', role: scenario.startsWith('audit-') ? scenario
+      : scenario.startsWith('review') ? 'review' : waiting ? 'prepare' : 'implement',
     pr: waiting ? 'dependent' : 'first',
     root: '/project', comparison_base: 'fixture-base', private_context: 'owner-only-context',
     store: input.store, result_file: '/private/run/reports/A0001.json',
@@ -228,6 +229,12 @@ async function main() {
   const complete = await scenario('complete')
   assert.equal(complete.result.outcome, 'completed')
   assert.deepEqual(complete.roles, ['development-control', 'implement', 'development-control'])
+  for (const role of ['audit-initial', 'audit-final']) {
+    const audited = await scenario(role)
+    assert.equal(audited.result.outcome, 'completed')
+    assert.deepEqual(audited.roles, ['development-control', role, 'development-control'])
+    assert.deepEqual(audited.recorded, ['/private/run/reports/A0001.json'])
+  }
   assert.equal((await scenario('missing')).result.outcome, 'blocked')
   const review = await scenario('review-complete')
   assert.equal(review.result.outcome, 'completed')

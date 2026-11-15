@@ -188,7 +188,10 @@ def validate(manifest, folder):
     fields(manifest["limits"], "assignments attempts review_loops fix_cycles review_dispatches")
     for value in manifest["limits"].values():
         require(type(value) is int and value > 0, "Limits must be positive integers")
-    fields(manifest["permissions"], "commit push create_pr mark_ready screenshots")
+    permission_names = "commit push create_pr mark_ready screenshots"
+    if isinstance(manifest["permissions"], dict) and "publish_audit" in manifest["permissions"]:
+        permission_names += " publish_audit"
+    fields(manifest["permissions"], permission_names)
     require(all(type(value) is bool for value in manifest["permissions"].values()),
             "Permissions must be explicit booleans")
     sources = artifacts(manifest["artifacts"], folder)

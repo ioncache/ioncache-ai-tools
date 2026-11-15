@@ -32,6 +32,12 @@ not cancel an existing assignment. Use native permissions, not a turn-based gate
    adapter uses configured models; unsupported overrides require their declared
    configured fallback or leave execution incomplete. Size review allowances
    for the enabled category roster, separate adjudication and owner calls.
+   Include `permissions.publish_audit` explicitly in new manifests, proposing
+   `true` for GitHub PRs. Explain the separate run-owned audit branch, public
+   narrative review and PR comments before approval. A declined permission or
+   the independent audit opt-out leaves publication disabled, not implied.
+   Budget two additional assignments per PR plus any publication retries.
+   See [AUDIT.md](AUDIT.md) for the export and publication contract.
 
 Run the helper by resolving `../../scripts/development_run.py` relative to this
 installed skill directory:
@@ -43,7 +49,7 @@ python3 "/absolute/plugin/scripts/development_run.py" validate "/private/bundle/
 ## Execute
 
 After explicit approval of the returned identity, initialize private state
-outside the repository. Keep the approved input bundle and evidence private.
+outside the repository. Keep the approved input bundle and raw evidence private.
 
 ```sh
 python3 "/absolute/plugin/scripts/development_run.py" init "/private/bundle/manifest.json" \
@@ -85,3 +91,6 @@ Report per-PR progress, readiness, exceptions, consumed allowances, incomplete
 work, and evidence references. A runtime success is not acceptance. Mark a PR
 ready only for its verified revision. Never approve or merge it, force-push,
 push the default branch, deploy, or change production flags.
+When audit publication is approved and enabled, publish initial evidence after
+creating the draft PR and final evidence before readiness. Preserve both immutable
+links. Report disabled publication explicitly; never upload the private run store.

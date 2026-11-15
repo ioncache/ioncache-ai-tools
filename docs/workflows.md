@@ -46,6 +46,14 @@ old bundled coverage requires counted reconciliation, not relabeling.
 The script itself performs no filesystem or shell operations.
 Publication remains an assigned worker operation under native permissions.
 The helper does not independently verify the truth of remote receipts.
+With approved audit publication, separate initial and final assignments export
+selected process evidence and a publication-reviewed narrative. The audit helper
+publishes versioned files on a run-owned branch and links them from PR comments,
+without changing the implementation snapshot. It verifies the observed GitHub
+PR head, audit ref and comment response; the controller binds the retained receipt
+to the current export. See
+[../skills/autonomous-development/AUDIT.md](../skills/autonomous-development/AUDIT.md)
+for privacy, retention, opt-out and recovery boundaries.
 
 Review-category controls and saved review options use the same helpers as
 standalone review. This adapter currently uses configured models: unsupported

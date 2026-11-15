@@ -193,6 +193,12 @@ their declared fallback or leave the affected work incomplete.
 The adapter is **not yet live-host qualified**; offline checks do not establish
 unattended permissions, cloud operation, or shared team controls.
 
+When approved, runs automatically publish initial and final process audit bundles
+on a separate branch in the same GitHub repository and link immutable versions
+from PR comments. Private inputs and raw reports stay local. The public narrative
+requires publication review. Set `autonomous-development-audit` to `false` to
+disable this independently. See [skills/autonomous-development/AUDIT.md](skills/autonomous-development/AUDIT.md).
+
 Usage and recovery: [skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
 Manifest fields: [skills/autonomous-development/CONTRACT.md](skills/autonomous-development/CONTRACT.md).
 Set `autonomous-development` to `false` in the feature configuration to disable

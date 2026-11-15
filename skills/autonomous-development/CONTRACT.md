@@ -22,7 +22,7 @@ letters, digits, and hyphens, beginning with a letter.
 | `prs` | PR records below |
 | `tasks` | Task records below |
 | `limits` | Positive integer `assignments`, `attempts`, `review_loops`, `fix_cycles`, `review_dispatches` |
-| `permissions` | Explicit booleans for `commit`, `push`, `create_pr`, `mark_ready`, `screenshots` |
+| `permissions` | Explicit booleans for `commit`, `push`, `create_pr`, `mark_ready`, `screenshots`; new plans also specify `publish_audit` |
 | `constraints` | Non-empty list of scope, decision, risk-acceptance, model, and operational constraints |
 
 Artifacts include all three roles: `requirements`, `design`, and `plan`.
@@ -83,6 +83,16 @@ These are logical execution limits, not hard token, time, or spending caps.
 Control workers and host-native retries also consume model usage. Establish
 available native resource controls during preflight and disclose gaps.
 
+`publish_audit: true` authorizes the selected worker to publish a reviewed export
+to `ioncache-audit/<run-id>/<pr-id>` in the same GitHub repository and link each
+version in a PR comment. It does not authorize uploading raw private evidence.
+Older schema-1 manifests without this field retain their original identity and
+sequence; absence means false, never retroactive publication consent.
+`autonomous-development-audit` is an independent, enabled-by-default feature
+setting. When disabled, scheduled audit assignments record `{"disabled": true}`
+without network publication. Other development and review safeguards remain active.
+See [AUDIT.md](AUDIT.md).
+
 ## Durable controller
 
 Use `../../scripts/development_run.py` relative to the installed skill directory.
@@ -137,11 +147,20 @@ worktree, including committed changes and non-ignored untracked files.
 Additional context files may be reviewed, but cannot substitute for changed files.
 
 Task review finishes before commit. Full-PR review follows draft publication.
+Approved audit publication adds `audit-initial` after `draft`, and `audit-final`
+after the final commit and any UI evidence, before `ready`. These are separate
+assignment keys with independent retry accounting. Final readiness requires an
+accepted audit receipt for the current code commit while the feature is enabled.
 Commit receipts must extend the reviewed HEAD and preserve the accepted content.
 Commit accounting uses the first implementation baseline, not the latest retry.
 Additions left by failed attempts must be included; unchanged setup files need
 not be committed.
 Readiness requires that same accepted content and a current publication receipt.
+Audit receipts contain `stage`, `code_commit`, `bundle`, `audit_commit`, `branch`,
+`url`, and `comment_url`. The controller checks them against the retained exported
+bytes and helper receipt. The publication helper verifies GitHub's observed PR
+head, the pushed audit ref and the comment response. This is not independent
+authentication of a hand-edited local receipt.
 
 ## Interruption and resumption
 

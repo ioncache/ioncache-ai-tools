@@ -18,6 +18,7 @@ import tempfile
 from uuid import uuid4
 
 import development_manifest as plan
+import development_audit as audit
 import review_assignments as assignments
 import review_ledger as review
 
@@ -38,6 +39,21 @@ def feature(root):
     plan.require(features <= settings.catalog and not features.intersection(settings.disabled),
                  "Autonomous development is disabled; continue without this workflow. "
                  "Status and interruption commands remain available.")
+
+
+def audit_enabled(state):
+    settings = feature_settings({"cwd": state["root"]})
+    key = "autonomous-development-audit"
+    return (state["manifest"]["permissions"].get("publish_audit", False) and
+            key in settings.catalog and key not in settings.disabled)
+
+
+def require_final_audit(state, pr, commit):
+    if audit_enabled(state):
+        published = state["prs"][pr].get("audits", [{}])[-1]
+        plan.require(published.get("stage") == "audit-final" and
+                     published.get("code_commit") == commit and not published.get("disabled"),
+                     "Final audit is missing or stale; reconcile for a counted review and audit")
 
 
 def common_directory(root):
@@ -129,9 +145,14 @@ def steps(manifest, pr_id):
     for key in plan.dependency_order(task_map):
         if task_map[key]["pr"] == pr_id:
             result.extend((role, key) for role in ("implement", "review", "commit"))
-    result.extend((role, None) for role in ("draft", "review", "commit"))
+    result.append(("draft", None))
+    if manifest["permissions"].get("publish_audit", False):
+        result.append(("audit-initial", None))
+    result.extend((role, None) for role in ("review", "commit"))
     if manifest["permissions"]["screenshots"]:
         result.append(("evidence", None))
+    if manifest["permissions"].get("publish_audit", False):
+        result.append(("audit-final", None))
     result.append(("ready", None))
     return result
 
@@ -183,7 +204,9 @@ def check_worktree(state, pr_id):
 def permission(manifest, role):
     required = {"preflight": ["commit", "push", "create_pr", "mark_ready"],
                 "commit": ["commit"], "draft": ["push", "create_pr"],
-                "ready": ["push", "mark_ready"], "evidence": ["screenshots"]}
+                "ready": ["push", "mark_ready"], "evidence": ["screenshots"],
+                "audit-initial": ["publish_audit", "push", "create_pr"],
+                "audit-final": ["publish_audit", "push", "create_pr"]}
     for key in required.get(role, []):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
@@ -208,7 +231,7 @@ def reserve(state):
     root = (roots(state, pr_id) if role in ("preflight", "prepare")
             else check_worktree(state, pr_id))
     before = None if role in ("preflight", "prepare") else capture(root)
-    if role in ("commit", "ready", "evidence"):
+    if role in ("commit", "ready", "evidence", "audit-initial", "audit-final"):
         progress = state["prs"][pr_id]
         accepted = progress["accepted"]
         plan.require(accepted is not None, "A completed review is required")
@@ -223,6 +246,8 @@ def reserve(state):
                      "before continuing, preserving existing work and allowances")
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
+        if role == "ready":
+            require_final_audit(state, pr_id, before["head"])
     if role == "implement":
         state["prs"][pr_id].setdefault("task_bases", {}).setdefault(task_id, before["head"])
     state["attempts"][key] = state["attempts"].get(key, 0) + 1
@@ -352,6 +377,8 @@ def delivery_result(state, assignment, data):
     plan.text(data["evidence"])
     expected = "draft" if assignment["role"] == "draft" else "ready"
     plan.require(data["state"] == expected, "PR state does not match the assignment")
+    if assignment["role"] == "ready":
+        require_final_audit(state, assignment["pr"], after["head"])
     if progress["url"]:
         plan.require(progress["url"] == data["url"], "Publication cannot replace the owned PR")
     progress["url"] = data["url"]
@@ -392,6 +419,10 @@ def complete_role(state, assignment, data):
         required = ("artifact_access", "native_permissions", "fresh_workers",
                     "independent_review", "result_delivery", "cancellation")
         plan.require(all(data.get(key) is True for key in required), "Required execution capability is unverified")
+        if audit_enabled(state):
+            audit.repository(state["manifest"]["repository"]["url"])
+            plan.require(data.get("audit_publication") is True,
+                         "Verify GitHub audit-branch and PR-comment publication before execution")
     elif role == "prepare":
         prepare_result(state, assignment, data)
     elif role == "implement":
@@ -403,6 +434,14 @@ def complete_role(state, assignment, data):
         commit_result(state, assignment, data)
     elif role in ("draft", "ready"):
         delivery_result(state, assignment, data)
+    elif role in ("audit-initial", "audit-final"):
+        unchanged(assignment["before"], capture(Path(assignment["root"])))
+        if not audit_enabled(state):
+            plan.require(data == {"disabled": True}, "Record disabled audit publication explicitly")
+            result = {**data, "stage": role, "code_commit": assignment["before"]["head"]}
+        else:
+            result = audit.validate_receipt(state, assignment, data)
+        state["prs"][assignment["pr"]].setdefault("audits", []).append(result)
     else:
         plan.require(role == "evidence", "Unsupported assignment role")
         unchanged(assignment["before"], capture(Path(assignment["root"])))
@@ -439,6 +478,8 @@ def request(state):
                             if assignment["pr"] else [])
             },
             "progress": progress_summary(state["prs"][assignment["pr"]]) if assignment["pr"] else None,
+            "audit": {"enabled": audit_enabled(state),
+                      "branch": audit.branch(state, assignment["pr"]) if assignment["pr"] else None},
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
 
