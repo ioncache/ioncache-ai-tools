@@ -1056,6 +1056,95 @@ sys.exit(review_ledger.main())
         self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
         self.assertTrue(path.parent.is_dir())
 
+    def test_unrecoverable_history_can_be_closed_without_rewriting_evidence(self):
+        for damage in ("missing-ledger", "truncated-ledger", "missing-object", "corrupt-object",
+                       "file-map", "snapshot-map"):
+            with self.subTest(damage=damage):
+                self.init("--max-loops", "2")
+                self.send("start_review")
+                if damage == "file-map":
+                    self.send("review_done", passes=PASSES, checks=CHECKS)
+                    self.finding()
+                    self.decide()
+                    self.fix()
+                path = Path(self.ledger)
+                arguments = ["abandon", self.ledger, "--reason", "History is unrecoverable",
+                             "--evidence", "Inspected surviving objects; no complete history exists",
+                             "--shutdown-evidence", "All fixture workers have exited"]
+                self.assertIn("use stop", self.cli(arguments, ok=False))
+                missing = None
+                if damage == "missing-ledger":
+                    path.unlink()
+                    missing = path
+                elif damage == "truncated-ledger":
+                    path.write_bytes(b'{"incomplete":')
+                elif damage in ("missing-object", "corrupt-object"):
+                    obj = next((path.parent / "objects").iterdir())
+                    if damage == "missing-object":
+                        obj.unlink()
+                        missing = obj
+                    else:
+                        obj.write_bytes(b"corrupt")
+                else:
+                    ledger = json.loads(path.read_bytes())
+                    if damage == "file-map":
+                        before = ledger["initial"]
+                        item = ledger["snapshots"].pop(before)
+                        item["files"] = []
+                        key = review_ledger.digest(review_ledger.encode(item))
+                        ledger["snapshots"][key] = item
+                        ledger["initial"] = key
+                        for event in ledger["events"]:
+                            if event["snapshot"] == before:
+                                event["snapshot"] = key
+                    else:
+                        ledger["snapshots"] = []
+                    path.write_bytes(review_ledger.encode(ledger))
+                evidence = {item: item.read_bytes() for item in path.parent.rglob("*") if item.is_file()}
+                project = (self.root / "app.txt").read_bytes()
+                self.assertIn("abandon", self.cli(
+                    ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+                closed = self.cli(arguments)
+                self.assertEqual(closed["outcome"], "failed")
+                self.assertEqual(closed["allowance"], "unavailable")
+                if damage == "file-map":
+                    self.assertIn("Invalid snapshot file map", closed["error"])
+                self.assertEqual(closed, self.cli(["status", self.ledger]))
+                self.assertEqual(closed, self.cli(arguments))
+                for item, content in evidence.items():
+                    self.assertEqual(item.read_bytes(), content)
+                if missing is not None:
+                    self.assertFalse(missing.exists())
+                for event in ("resume", "start_review"):
+                    self.assertIn("abandoned", self.reject(event))
+                self.assertEqual((self.root / "app.txt").read_bytes(), project)
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_abandonment_requires_evidence_and_cannot_be_transplanted(self):
+        self.init()
+        path = Path(self.ledger)
+        path.unlink()
+        args = ["abandon", self.ledger, "--reason", "Unrecoverable history",
+                "--evidence", "No surviving ledger copy", "--shutdown-evidence", ""]
+        self.cli(args, ok=False)
+        self.assertFalse((path.parent / "ABANDONED.json").exists())
+        args[-1] = "Offline fixture has no running worker"
+        self.cli(args)
+        marker = path.parent / "ABANDONED.json"
+        marker.write_bytes(b"corrupt closure")
+        self.cli(["status", self.ledger], ok=False)
+        recovered = self.cli(args)
+        self.assertEqual((path.parent / recovered["previous_record"]).read_bytes(), b"corrupt closure")
+        self.assertEqual(self.cli(["status", self.ledger])["outcome"], "failed")
+        other = path.parent.parent / ("a" * 32)
+        other.mkdir()
+        (other / "ABANDONED.json").write_bytes((path.parent / "ABANDONED.json").read_bytes())
+        self.assertIn("different run", self.cli(
+            ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+
     def test_lock_blocks_concurrent_updates(self):
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()

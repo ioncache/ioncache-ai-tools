@@ -51,11 +51,19 @@ def save(folder, state):
 def load(folder):
     state = json.loads((folder / "RUN.json").read_bytes())
     plan.require(state["schema"] == 1 and state["store"] == str(folder), "Invalid run storage")
-    validated = plan.validate(state["manifest"], folder / "inputs")
-    plan.require(validated["identity"] == state["approval"], "Approved manifest changed")
+    plan.require(plan.digest(plan.encode(state["manifest"])) == state["approval"],
+                 "Approved manifest changed")
     plan.require(json.loads((folder / "MANIFEST.json").read_bytes()) == state["manifest"],
                  "Shared approved manifest changed")
     return state
+
+
+def input_error(state):
+    try:
+        plan.artifacts(state["manifest"]["artifacts"], Path(state["store"]) / "inputs")
+    except (ValueError, OSError) as error:
+        return str(error)
+    return None
 
 
 @contextmanager
@@ -207,6 +215,12 @@ def reserve(state):
         plan.require(progress.get("review", {}).get("coverage", {}).get("structurally_complete"),
                      "Review lacks category coverage; reconcile this PR for a counted review "
                      "before continuing, preserving existing work and allowances")
+        reviewed = progress["review"]
+        files = reviewed["coverage"].get("files")
+        plan.require(isinstance(files, list) and
+                     set(review_files(root, reviewed["base"])) <= set(files),
+                     "Review lacks complete file coverage; reconcile this PR for a counted review "
+                     "before continuing, preserving existing work and allowances")
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
     if role == "implement":
@@ -233,7 +247,8 @@ def within_scope(state, assignment, after):
     plan.require(before["head"] == after["head"] and before["index"] == after["index"],
                  "Implementation and review must not change HEAD or staging")
     permitted = scope_paths(state, assignment)
-    for name in review.changed(before, after):
+    original = next(item["before"] for item in state["history"] if item["key"] == assignment["key"])
+    for name in review.changed(original, after):
         plan.require(any(path == "." or name == path or name.startswith(path + "/") for path in permitted),
                      f"Change outside the approved scope: {name}")
 
@@ -250,6 +265,13 @@ def prepare_result(state, assignment, data):
     state["prs"][pr["id"]]["base"] = observed
 
 
+def review_files(root, base):
+    changed = review.git(root, ["diff", "--name-only", "--no-renames", "-z", base, "--"])
+    untracked = review.git(root, ["ls-files", "--others", "--exclude-standard", "-z"])
+    names = {os.fsdecode(name) for name in (changed + untracked).split(b"\0") if name}
+    return sorted(name for name in names if name != ".review-loop" and not name.startswith(".review-loop/"))
+
+
 def review_coverage(state, assignment, report, data):
     records = {}
     directory = Path(state["store"]) / "reports"
@@ -264,11 +286,13 @@ def review_coverage(state, assignment, report, data):
     plan.require(request["root"] == assignment["root"] and request["base"] == report["base"] and
                  request["snapshot"] == report["snapshot"] and request["kind"] == "full",
                  "Final category coverage does not match the completed full review")
+    omitted = set(review_files(Path(assignment["root"]), report["base"])) - set(request["files"])
+    plan.require(not omitted, "Category review omits changed files: " + json.dumps(sorted(omitted)))
     plan.require(checked["structurally_complete"],
                  "Category review is incomplete: " + json.dumps(checked))
     return {"plan": str(Path(data["plan"]).resolve()),
             "handoff": str(Path(data["handoff"]).resolve()),
-            "identity": phase["identity"], **checked}
+            "identity": phase["identity"], "files": request["files"], **checked}
 
 
 def review_result(state, assignment, data):
@@ -293,6 +317,7 @@ def review_result(state, assignment, data):
                  "Code changed after the completed review snapshot")
     report["coverage"] = review_coverage(state, assignment, report, data)
     within_scope(state, assignment, after)
+    unchanged(after, capture(root))
     progress["accepted"] = after
     progress["review"] = report
 
@@ -308,7 +333,9 @@ def commit_result(state, assignment, data):
         plan.require(parents == [after["head"], before["head"]], "Commit must extend the accepted HEAD")
     git(root, "diff", "--exit-code")
     git(root, "diff", "--cached", "--exit-code")
-    for name in state["prs"][assignment["pr"]].get("changed", []):
+    initial = next(item["before"] for item in state["history"]
+                   if item["pr"] == assignment["pr"] and item["role"] == "implement")
+    for name in review.changed(initial, after):
         if name in after["files"]:
             git(root, "ls-files", "--error-unmatch", "--", name)
     progress = state["prs"][assignment["pr"]]
@@ -370,12 +397,8 @@ def complete_role(state, assignment, data):
     elif role == "implement":
         after = capture(Path(assignment["root"]))
         within_scope(state, assignment, after)
-        state["prs"][assignment["pr"]]["changed"] = review.changed(assignment["before"], after)
     elif role == "review":
         review_result(state, assignment, data)
-        progress = state["prs"][assignment["pr"]]
-        progress["changed"] = sorted(set(progress.get("changed", [])) |
-                                     set(review.changed(assignment["before"], progress["accepted"])))
     elif role == "commit":
         commit_result(state, assignment, data)
     elif role in ("draft", "ready"):
@@ -431,6 +454,7 @@ def progress_summary(progress):
 def summary(state):
     return {"run": state["id"], "store": state["store"], "revision": state["revision"],
             "outcome": state["outcome"], "reason": state.get("reason"),
+            "input_error": input_error(state),
             "consumed_assignments": len(state["history"]), "limits": state["manifest"]["limits"],
             "prs": {key: progress_summary(value) for key, value in state["prs"].items()},
             "assignment": request(state),
@@ -463,6 +487,8 @@ def reconcile(state, args):
 def mutate(args, folder):
     with locked(folder):
         state = load(folder)
+        if args.command not in ("interrupt", "retire"):
+            plan.validate(state["manifest"], folder / "inputs")
         report = json.loads(Path(args.report).read_bytes()) if args.command == "record" else None
         if report is not None and any(item.get("report") == report for item in state["history"]):
             return summary(state)

@@ -28,6 +28,31 @@ the existing run instead. Inspect that run with `status` and continue it rather
 than replacing its history or limits. Missing or corrupt published ledgers
 remain errors, not permission to start over.
 
+If exact history cannot be restored, inspect the surviving evidence and stop
+the run's native workers before closing it:
+
+```bash
+python3 "/installed plugin/scripts/review_ledger.py" abandon \
+  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  --reason "Complete history cannot be recovered" \
+  --evidence "Inspected retained reports and objects; no complete ledger copy exists" \
+  --shutdown-evidence "Native host confirms this run's workers and processes exited"
+```
+
+Supply actual observations, not these example claims. `abandon` records a
+terminal failed outcome in `ABANDONED.json`, without rewriting surviving history,
+snapshots, or project files. Unknown spending stays unknown; the abandoned run's
+remaining allowance is unavailable. It cannot resume or satisfy a completed
+review. Readable ledgers use the ordinary `stop` event instead.
+`status` and repeated `abandon` calls return the saved closure. A damaged closure
+record is archived before replacement.
+
+Closure does not authorize another review. Further work needs a separately
+authorized attempt within the caller's retained limits. A development controller
+must retire or record the old assignment as blocked, then reserve a counted
+retry before another ledger is initialized. Do not reuse exhausted or unknown
+caller allowance. Other authorized work remains available.
+
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" apply \
   ".review-loop/<run-id>/REVIEW_LEDGER.json" --revision 0 <<'JSON'

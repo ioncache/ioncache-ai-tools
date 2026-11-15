@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { execFileSync } = require('node:child_process')
 
 const source = fs.readFileSync(path.join(__dirname, '../workflows/autonomous-development.js'), 'utf8')
 assert.match(source, /^export const meta = \{\n/)
@@ -125,12 +126,105 @@ function phase(title) {
 }
 
 /**
+ * Runs the adapter against a persisted controller using only local fixture workers.
+ * @param {object} fixture - Isolated Python fixture paths and failure scenario
+ * @returns {Promise<object>} Durable result and dispatched labels
+ * @throws {Error} If the controller or fixture protocol fails
+ * @example
+ * const observed = await persistedScenario(fixture)
+ */
+async function persistedScenario(fixture) {
+  const roles = []
+  /**
+   * Uses fresh CLI processes and persisted revisions rather than synthetic state.
+   * @param {string} command - Controller command
+   * @param {...string} extra - Command arguments
+   * @returns {object} Controller JSON
+   * @throws {Error} If the controller rejects the operation
+   * @example
+   * const state = helper('status')
+   */
+  function helper(command, ...extra) {
+    const args = [path.join(__dirname, 'development_run.py'), command, fixture.store, ...extra]
+    if (command !== 'status') args.push('--revision', String(helper('status').revision))
+    return JSON.parse(execFileSync(fixture.python, args, { encoding: 'utf8', stdio: 'pipe' }))
+  }
+  /**
+   * Executes the workflow's bookkeeping instructions with the real controller.
+   * @param {string} prompt - Adapter bookkeeping request
+   * @returns {object} Persisted helper state
+   * @throws {Error} If shutdown bookkeeping cannot be recorded
+   * @example
+   * const state = control('Read status.')
+   */
+  function control(prompt) {
+    let state = helper('status')
+    if (prompt.includes('Read status.')) {
+      if (state.assignment) return helper('interrupt', '--reason', 'Outstanding fixture worker')
+      return state.outcome === 'running' ? helper('next') : state
+    }
+    if (prompt.includes('Read and record the complete report at')) {
+      assert(prompt.includes(JSON.stringify(state.assignment.result_file)))
+      try {
+        state = helper('record', '--report', state.assignment.result_file)
+        return state.outcome === 'running' ? helper('next') : state
+      } catch (error) {
+        return helper('interrupt', '--reason', String(error.stderr || error))
+      }
+    }
+    assert(prompt.includes('Interrupt'))
+    return helper('interrupt', '--reason', prompt)
+  }
+  /**
+   * Simulates bounded workers, retaining partial effects on failure.
+   * @param {string} prompt - Native-call prompt
+   * @param {object} options - Native-call options
+   * @returns {Promise<object|null>} Fixture handback or missing response
+   * @throws {Error} For the injected native-call failure
+   * @example
+   * const response = await agent(prompt, { label: 'implement' })
+   */
+  async function agent(prompt, options) {
+    roles.push(options.label)
+    if (options.label === 'development-control') return control(prompt)
+    const assignment = helper('status').assignment
+    assert(['implement', 'review-owner'].includes(options.label))
+    if (options.label === 'implement') {
+      const name = fixture.scenario === 'scope' ? 'unapproved.txt' : 'app.txt'
+      fs.writeFileSync(path.join(assignment.root, name), 'after\n')
+      if (fixture.scenario === 'throw') throw new Error('Fixture native call failed')
+      if (fixture.scenario === 'missing') return null
+      if (fixture.scenario === 'missing-input') {
+        fs.unlinkSync(assignment.artifacts.find(item => item.id === 'design').snapshot)
+      }
+    }
+    const outcome = options.label === 'implement' ? 'complete' : 'blocked'
+    fs.writeFileSync(assignment.result_file, JSON.stringify({
+      assignment: assignment.id, worker: null, outcome,
+      summary: 'Offline fixture stops at the next review boundary',
+      evidence: ['Local fixture worker only; no model or network calls'],
+      artifacts: Object.fromEntries(assignment.artifacts.map(item => [item.id, item.sha256])),
+      data: {}
+    }))
+    return { outcome, result_file: assignment.result_file, requests: [] }
+  }
+  const args = { store: fixture.store, pluginRoot: path.resolve(__dirname, '..'),
+    invocation: fixture.invocation }
+  return { result: await run(args, agent, phase), roles }
+}
+
+/**
  * Checks successful dispatch, missing results, and finite flat-review boundaries.
  * @returns {Promise<void>}
  * @example
  * await main()
  */
 async function main() {
+  if (process.argv[2] === '--persisted-controller') {
+    const observed = await persistedScenario(JSON.parse(fs.readFileSync(0, 'utf8')))
+    process.stdout.write(JSON.stringify(observed))
+    return
+  }
   const complete = await scenario('complete')
   assert.equal(complete.result.outcome, 'completed')
   assert.deepEqual(complete.roles, ['development-control', 'implement', 'development-control'])

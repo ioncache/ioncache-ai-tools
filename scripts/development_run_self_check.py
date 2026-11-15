@@ -135,20 +135,23 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish({"base": pr["base"], "merged_dependencies": pr["dependencies"]})
         return Path(assignment["root"])
 
-    def review_records(self, root, snapshot):
+    def review_records(self, root, snapshot, files=None):
         assignment = self.state["assignment"]
         scratch = self.store / "reports" / assignment["id"]
         scratch.mkdir(exist_ok=True)
         options = subprocess.run(
             [sys.executable, str(SCRIPTS / "review_options.py"), "review-validate-fix-loop"],
             cwd=root, env=self.env, capture_output=True, text=True, check=True)
+        if files is None:
+            files = development.review_files(root, assignment["comparison_base"])
         phase = assignments.prepare({
             "objective": "Fixture review", "kind": "full", "target": "branch",
             "root": str(root), "base": assignment["comparison_base"], "snapshot": snapshot,
-            "files": ["app.txt"], "constraints": ["Offline fixture; no model launches"],
+            "files": files, "constraints": ["Offline fixture; no model launches"],
             "scratch_directory": str(scratch), "review_options": json.loads(options.stdout),
             "language_inventory": {
-                "app.txt": {"languages": [], "evidence": "Inspected plain-text fixture content"}},
+                name: {"languages": [], "evidence": "Inspected plain-text fixture content"}
+                for name in files},
         })
         attempts = []
         for packet in phase["packets"].values():
@@ -172,7 +175,7 @@ class DevelopmentRunTests(unittest.TestCase):
             Path(paths[key]).write_bytes(manifest.encode(value))
         return paths, phase
 
-    def review(self, root, *, record=True):
+    def review(self, root, *, record=True, files=None):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
@@ -180,7 +183,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 "--max-fix-cycles", str(self.plan["limits"]["fix_cycles"])]
         result = self.review_cli(root, args)
         ledger = result["ledger"]
-        records, phase = self.review_records(root, result["snapshot"])
+        records, phase = self.review_records(root, result["snapshot"], files)
         events = [
             {"type": "start_review", "reason": json.dumps(phase)},
             {"type": "review_done", "passes": [
@@ -225,6 +228,81 @@ class DevelopmentRunTests(unittest.TestCase):
                          "url": "https://example.invalid/pull/1",
                          "state": "draft" if role == "draft" else "ready",
                          "evidence": "Offline simulated remote receipt; no network used"})
+
+    def workflow(self, scenario):
+        fixture = {"python": sys.executable, "store": str(self.store), "scenario": scenario,
+                   "invocation": f"offline-{self.state['revision']}"}
+        result = subprocess.run(
+            ["node", str(SCRIPTS / "development_workflow_self_check.js"), "--persisted-controller"],
+            input=json.dumps(fixture), cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(result.stdout)
+        self.state = observed["result"]
+        self.assertEqual(self.state, self.cli("status", self.store))
+        return observed["roles"]
+
+    def retire_fixture(self):
+        self.mutate("retire", "--reason", "Reconciled the local fixture's partial effects",
+                    "--shutdown-evidence", "The synchronous fixture process and workers exited")
+        self.mutate("resume", "--reason", "Continue within the retained allowance")
+
+    def test_workflow_scope_denial_recovers_in_the_same_persisted_run(self):
+        self.plan["limits"]["attempts"] = 3
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        for attempt in (1, 2):
+            self.workflow("scope")
+            self.assertEqual(self.state["outcome"], "blocked")
+            self.assertIn("outside the approved scope", self.state["reason"])
+            self.assertEqual(self.state["assignment"]["attempt"], attempt)
+            self.assertEqual(self.workflow("complete"), ["development-control"])
+            self.mutate("resume", "--reason", "Worker still outstanding", ok=False)
+            if attempt == 2:
+                (root / "unapproved.txt").unlink()
+            self.retire_fixture()
+        self.workflow("complete")
+        saved = json.loads((self.store / "RUN.json").read_bytes())
+        implementations = [item for item in saved["history"] if item["role"] == "implement"]
+        self.assertEqual([item["outcome"] for item in implementations], ["retired", "retired", "complete"])
+        self.assertEqual(self.state["consumed_assignments"], 6)
+        self.assertEqual(self.state["prs"]["first"]["position"], 2)
+        self.assertEqual((root / "app.txt").read_text(), "after\n")
+
+    def test_workflow_native_failures_preserve_workers_effects_and_allowance(self):
+        self.plan["limits"]["attempts"] = 3
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        for scenario in ("throw", "missing"):
+            self.workflow(scenario)
+            self.assertEqual(self.state["outcome"], "blocked")
+            self.assertIsNotNone(self.state["assignment"])
+            self.assertEqual((root / "app.txt").read_text(), "after\n")
+            consumed = self.state["consumed_assignments"]
+            self.assertEqual(self.workflow("complete"), ["development-control"])
+            self.assertEqual(self.state["consumed_assignments"], consumed)
+            self.mutate("resume", "--reason", "Worker shutdown not reconciled", ok=False)
+            self.retire_fixture()
+        self.workflow("complete")
+        self.assertEqual(self.state["prs"]["first"]["position"], 2)
+        self.assertEqual(self.state["consumed_assignments"], 6)
+
+    def test_workflow_input_loss_keeps_shutdown_and_corrected_work_reachable(self):
+        self.init()
+        self.preflight()
+        self.prepare()
+        self.workflow("missing-input")
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.assertIn("regular file", self.state["input_error"])
+        self.mutate("retire", "--reason", "Reconciled the interrupted fixture",
+                    "--shutdown-evidence", "The synchronous fixture process exited")
+        self.mutate("resume", "--reason", "Inputs still missing", ok=False)
+        (self.store / "inputs/design.md").write_bytes((self.bundle / "design.md").read_bytes())
+        self.mutate("resume", "--reason", "Restored exact approved input")
+        self.workflow("complete")
+        self.assertEqual(self.state["prs"]["first"]["position"], 2)
+        self.assertEqual(self.state["consumed_assignments"], 5)
 
     def test_sequential_run_requires_task_and_full_pr_reviews(self):
         self.init()
@@ -315,6 +393,74 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertIn("does not match the completed full review", self.finish(data, ok=False))
         path.write_bytes(manifest.encode(original))
         self.finish(data)
+
+    def test_legacy_coverage_without_file_inventory_requires_counted_review(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        self.review(root)
+        path = self.store / "RUN.json"
+        saved = json.loads(path.read_text())
+        saved["prs"]["first"]["review"]["coverage"].pop("files")
+        path.write_bytes(manifest.encode(saved))
+        consumed = self.state["consumed_assignments"]
+        self.assertIn("complete file coverage", self.mutate("next", ok=False))
+        self.mutate("reconcile", "--pr", "first", "--reason", "Bind legacy coverage to changed files")
+        self.assertEqual(self.next()["role"], "review")
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def abandoned_review_retry(self, damage):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        data = self.review(root, record=False)
+        path = Path(data["ledger"])
+        if damage == "missing-ledger":
+            path.unlink()
+        elif damage == "file-map":
+            ledger = json.loads(path.read_bytes())
+            ledger["snapshots"][ledger["initial"]]["files"] = []
+            path.write_bytes(manifest.encode(ledger))
+        else:
+            obj = next((path.parent / "objects").iterdir())
+            if damage == "missing-object":
+                obj.unlink()
+            else:
+                obj.write_bytes(b"corrupt")
+        self.review_cli(root, ["abandon", data["ledger"], "--reason", "Unrecoverable review history",
+                               "--evidence", "No complete ledger copy survives",
+                               "--shutdown-evidence", "Offline review fixture has exited"])
+        for _ in range(2):
+            self.assertIn("Review is incomplete", self.finish(data, ok=False))
+        self.finish(outcome="blocked")
+        consumed = self.state["consumed_assignments"]
+        self.mutate("resume", "--reason", "Separate review attempt within approved limits")
+        assignment = self.next()
+        self.assertEqual(assignment["role"], "review")
+        self.assertEqual(assignment["attempt"], 2)
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_abandoned_review_can_only_continue_as_a_counted_retry(self):
+        self.abandoned_review_retry("missing-ledger")
+
+    def test_missing_review_object_requires_counted_retry(self):
+        self.abandoned_review_retry("missing-object")
+
+    def test_corrupt_review_object_requires_counted_retry(self):
+        self.abandoned_review_retry("corrupt-object")
+
+    def test_malformed_review_snapshot_requires_counted_retry(self):
+        self.abandoned_review_retry("file-map")
 
     def test_invalid_graph_scope_and_limits_are_rejected(self):
         mutations = [
@@ -429,17 +575,135 @@ class DevelopmentRunTests(unittest.TestCase):
         self.git("commit", "-qm", "fixture added file", root=root)
         self.finish({"commit": self.git("rev-parse", "HEAD", root=root)})
 
+    def test_retry_cannot_omit_a_file_left_by_a_blocked_implementation(self):
+        self.plan["tasks"][0]["paths"] = ["new.txt"]
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        (root / "setup.txt").write_text("unrelated setup\n")
+        self.next()
+        (root / "new.txt").write_text("approved new file\n")
+        self.finish(outcome="blocked")
+        self.mutate("resume", "--reason", "Continue the retained partial implementation")
+        self.next()
+        self.finish()
+        self.next()
+        self.review(root)
+        self.next()
+        for _ in range(2):
+            self.finish({"commit": self.git("rev-parse", "HEAD", root=root)}, ok=False)
+        self.git("add", "new.txt", root=root)
+        self.git("commit", "-qm", "fixture recovered file", root=root)
+        self.finish({"commit": self.git("rev-parse", "HEAD", root=root)})
+        self.assertEqual(self.git("ls-files", "--others", "--exclude-standard", root=root), "setup.txt")
+        self.assertEqual((root / "setup.txt").read_text(), "unrelated setup\n")
+
+    def test_category_coverage_cannot_omit_local_additions_or_deletions(self):
+        self.plan["tasks"][0]["paths"] = ["."]
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        (root / "app.txt").unlink()
+        (root / "new\nfile.txt").write_text("approved addition\n")
+        self.finish()
+        self.next()
+        self.assertEqual(development.review_files(root, self.state["assignment"]["comparison_base"]),
+                         ["app.txt", "new\nfile.txt"])
+        files = [".gitignore"]
+        data = self.review(root, record=False, files=files)
+        for _ in range(2):
+            self.assertIn("omits changed files", self.finish(data, ok=False))
+        consumed = self.state["consumed_assignments"]
+        self.mutate("interrupt", "--reason", "Retain the incomplete category review")
+        self.mutate("retire", "--reason", "Review omitted changed files",
+                    "--shutdown-evidence", "Offline review fixture has exited")
+        self.mutate("resume", "--reason", "Perform a counted complete review")
+        self.next()
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root, files=["app.txt", "new\nfile.txt"])
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_full_pr_coverage_cannot_omit_committed_changes(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        while True:
+            assignment = self.next()
+            if assignment["role"] == "review" and assignment["task"] is None:
+                break
+            self.execute_fixture(assignment)
+        self.assertEqual(self.git("status", "--porcelain", root=root), "")
+        data = self.review(root, record=False, files=[".gitignore"])
+        self.assertIn("omits changed files", self.finish(data, ok=False))
+
+    def test_missing_inputs_allow_shutdown_but_not_execution_or_acceptance(self):
+        self.init()
+        self.next()
+        report = self.report({name: True for name in (
+            "artifact_access", "native_permissions", "fresh_workers",
+            "independent_review", "result_delivery", "cancellation")})
+        snapshot = self.store / "inputs/design.md"
+        snapshot.unlink()
+        self.state = self.cli("status", self.store)
+        self.assertIn("regular file", self.state["input_error"])
+        self.mutate("record", "--report", report, ok=False)
+        self.mutate("interrupt", "--reason", "Snapshot temporarily unavailable")
+        self.mutate("resume", "--reason", "Still unavailable", ok=False)
+        self.mutate("retire", "--reason", "Stopped the incomplete fixture",
+                    "--shutdown-evidence", "No native worker remains in this offline fixture")
+        consumed = self.state["consumed_assignments"]
+        self.mutate("resume", "--reason", "Still unavailable", ok=False)
+        snapshot.write_bytes((self.bundle / "design.md").read_bytes())
+        self.mutate("resume", "--reason", "Restored the exact approved snapshot")
+        self.preflight()
+        self.assertIsNone(self.state["input_error"])
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+
     def test_private_inputs_survive_intake_removal_but_reject_tampering(self):
         self.init()
         for item in self.plan["artifacts"]:
             (self.bundle / item["snapshot"]).unlink()
         self.cli("status", self.store)
+        run = self.store / "RUN.json"
+        original = run.read_bytes()
+        changed = json.loads(original)
+        changed["manifest"]["limits"]["attempts"] += 1
+        run.write_bytes(manifest.encode(changed))
+        self.assertIn("Approved manifest changed", self.cli("status", self.store, ok=False))
+        run.write_bytes(original)
         shared = self.store / "MANIFEST.json"
         shared.write_text("{}")
         self.assertIn("Shared approved manifest changed", self.cli("status", self.store, ok=False))
         shared.write_bytes(manifest.encode(self.plan))
         (self.store / "inputs/design.md").write_text("Changed private snapshot")
-        self.assertIn("Artifact changed", self.cli("status", self.store, ok=False))
+        self.assertIn("Artifact changed", self.cli("status", self.store)["input_error"])
+        self.assertIn("Artifact changed", self.mutate("next", ok=False))
+
+    def test_unreadable_inputs_keep_shutdown_bookkeeping_available(self):
+        self.init()
+        self.next()
+        snapshot = self.store / "inputs/design.md"
+        original_read = Path.read_bytes
+
+        def unreadable(path):
+            if path == snapshot:
+                raise PermissionError("Fixture cannot read approved snapshot")
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", unreadable):
+            state = development.summary(development.load(self.store))
+            self.assertIn("cannot read approved snapshot", state["input_error"])
+            for command in ("interrupt", "retire"):
+                extra = ["--shutdown-evidence", "Fixture workers exited"] if command == "retire" else []
+                args = development.parser().parse_args([
+                    command, str(self.store), "--revision", str(state["revision"]),
+                    "--reason", "Inputs unavailable", *extra])
+                state = development.mutate(args, self.store)
+                self.assertIn("cannot read approved snapshot", state["input_error"])
+        self.state = self.cli("status", self.store)
+        self.mutate("resume", "--reason", "Snapshot readable again")
+        self.preflight()
 
     def test_readiness_permissions_are_required_before_implementation_starts(self):
         self.plan["permissions"]["mark_ready"] = False
@@ -464,6 +728,40 @@ class DevelopmentRunTests(unittest.TestCase):
                 patch.object(development.review, "status", return_value=report):
             with self.assertRaisesRegex(manifest.ManifestError, "completed review snapshot"):
                 development.review_result(state, active, {"ledger": report["ledger"]})
+
+    def test_review_rejects_drift_during_coverage_without_publishing_acceptance(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        (root / "app.txt").write_text("after\n")
+        self.finish()
+        self.next()
+        data = self.review(root, record=False)
+        args = development.parser().parse_args([
+            "record", str(self.store), "--revision", str(self.state["revision"]),
+            "--report", str(self.report(data))])
+        path = self.store / "RUN.json"
+        before = path.read_bytes()
+        check = assignments.check
+
+        def change_during_coverage(phase, handoff):
+            result = check(phase, handoff)
+            self.assertTrue(result["structurally_complete"])
+            (root / "app.txt").write_text("changed during coverage\n")
+            return result
+
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(assignments, "check", side_effect=change_during_coverage) as checked:
+            with self.assertRaisesRegex(manifest.ManifestError, "Worktree drift"):
+                development.mutate(args, self.store)
+            checked.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.cli("status", self.store), self.state)
+        self.assertIn("incomplete or stale", self.finish(data, ok=False))
+        self.assertEqual(path.read_bytes(), before)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
 
     def test_ui_evidence_is_bound_to_the_accepted_commit(self):
         self.plan["permissions"]["screenshots"] = True

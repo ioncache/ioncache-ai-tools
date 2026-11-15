@@ -169,6 +169,7 @@ def fingerprint(_args, root):
 
 def validate_snapshots(ledger, folder):
     """Reject malformed manifests or corrupt blobs before trusting saved evidence."""
+    require(isinstance(ledger["snapshots"], dict), "Invalid snapshots")
     for key, item in ledger["snapshots"].items():
         require(key == digest(encode(item)), "Snapshot checksum mismatch")
         fields(item, "head index files")
@@ -185,11 +186,73 @@ def validate_snapshots(ledger, folder):
 
 def load(path):
     """Return validated history and replayed state, not yet checked for ownership."""
-    ledger = json.loads(path.read_bytes())
-    state = replay(ledger, check_snapshot_transition)
-    require(ledger["run_id"] == path.parent.name, "Run ID does not match ledger directory")
-    validate_snapshots(ledger, path.parent)
+    require(abandoned(path) is None, "Run was abandoned; its remaining allowance is unavailable")
+    try:
+        ledger = json.loads(path.read_bytes())
+        validate_snapshots(ledger, path.parent)
+        state = replay(ledger, check_snapshot_transition)
+        require(ledger["run_id"] == path.parent.name, "Run ID does not match ledger directory")
+    except (LedgerError, OSError, ValueError, TypeError, KeyError) as error:
+        raise LedgerError(f"Review history unavailable: {error}. Restore verified history, "
+                          "or use abandon with --reason, --evidence and --shutdown-evidence "
+                          "after stopping workers; do not reset unknown spending") from error
     return ledger, state
+
+
+def abandoned(path):
+    """Keep terminal closure separate from history that could authorize more work."""
+    record = safe_path(path.parent, "ABANDONED.json")
+    if not record.exists():
+        return None
+    value = json.loads(record.read_bytes())
+    fields(value, "schema ledger root run_id outcome allowance reason evidence shutdown_evidence "
+                  "error time previous_record")
+    require(value["schema"] == 1 and value["ledger"] == str(path) and
+            value["root"] == str(path.parent.parent.parent) and value["run_id"] == path.parent.name,
+            "Abandonment belongs to a different run")
+    require(value["outcome"] == "failed" and value["allowance"] == "unavailable",
+            "Abandonment cannot authorize completion or restore allowance")
+    for key in ("reason", "evidence", "shutdown_evidence", "error", "time"):
+        text(value[key])
+    require(value["previous_record"] is None or (
+            isinstance(value["previous_record"], str) and
+            re.fullmatch(r"ABANDONED-[a-f0-9]{32}\.json", value["previous_record"])),
+            "Invalid prior abandonment record")
+    return value
+
+
+def abandon(args, root):
+    """Close unreadable history as failed without rewriting any surviving evidence."""
+    path = ledger_path(root, args.ledger)
+    require(path.parent.is_dir() and re.fullmatch(r"[a-f0-9]{32}", path.parent.name),
+            "Abandon requires an existing published run directory")
+    for value in (args.reason, args.evidence, args.shutdown_evidence):
+        text(value)
+    try:
+        existing = abandoned(path)
+    except (LedgerError, OSError, ValueError, TypeError, KeyError):
+        existing = None
+    if existing is not None:
+        return existing
+    try:
+        load(path)
+    except (LedgerError, OSError, ValueError, TypeError, KeyError) as error:
+        unavailable = str(error)
+    else:
+        raise LedgerError("History is readable; use stop to retain its decisions and counters")
+    record = path.parent / "ABANDONED.json"
+    previous = None
+    if record.exists() or record.is_symlink():
+        previous = f"ABANDONED-{uuid4().hex}.json"
+        os.rename(record, path.parent / previous)
+        sync_directory(path.parent)
+    result = {"schema": 1, "ledger": str(path), "root": str(root), "run_id": path.parent.name,
+              "outcome": "failed", "allowance": "unavailable", "reason": args.reason,
+              "evidence": args.evidence, "shutdown_evidence": args.shutdown_evidence,
+              "error": unavailable, "time": datetime.now(timezone.utc).isoformat(),
+              "previous_record": previous}
+    atomic_write(record, encode(result))
+    return result
 
 
 def ledger_path(root, argument):
@@ -214,6 +277,8 @@ def assert_available(base):
         if not folder.is_dir():
             continue
         if re.fullmatch(r"\.initializing-[a-f0-9]{32}", folder.name):
+            continue
+        if abandoned(folder / "REVIEW_LEDGER.json") is not None:
             continue
         ledger, state = load(folder / "REVIEW_LEDGER.json")
         require(state["outcome"] not in ("running", "interrupted", "blocked"),
@@ -325,6 +390,9 @@ def append(args, root):
 def status(args, root):
     """Report saved decisions and live drift without accepting drift as new evidence."""
     path = ledger_path(root, args.ledger)
+    closed = abandoned(path)
+    if closed is not None:
+        return closed
     ledger, state = load(path)
     ensure_owner(ledger, root)
     current = snapshot(root)
@@ -372,7 +440,7 @@ def parser():
     create.add_argument("--base", default="HEAD", help="Pinned comparison commit, not a moving PR")
     create.add_argument("--max-loops", type=int, default=3)
     create.add_argument("--max-fix-cycles", type=int, default=3)
-    for name in ("apply", "status", "diff"):
+    for name in ("apply", "status", "diff", "abandon"):
         command = commands.add_parser(name)
         command.add_argument("ledger", help="Absolute path or path relative to the worktree root")
         if name == "apply":
@@ -380,6 +448,9 @@ def parser():
         if name == "diff":
             command.add_argument("--from", dest="from_snapshot", required=True)
             command.add_argument("--to", dest="to_snapshot")
+        if name == "abandon":
+            for flag in ("reason", "evidence", "shutdown-evidence"):
+                command.add_argument("--" + flag, required=True)
     return cli
 
 
@@ -389,8 +460,8 @@ def main():
     try:
         root = worktree()
         handlers = {"init": init, "apply": append, "status": status, "diff": diff,
-                    "fingerprint": fingerprint}
-        if args.command in ("init", "apply"):
+                    "fingerprint": fingerprint, "abandon": abandon}
+        if args.command in ("init", "apply", "abandon"):
             base = safe_path(root, ".review-loop")
             base.mkdir(exist_ok=True, mode=0o700)
             lock = safe_path(base, ".lock")

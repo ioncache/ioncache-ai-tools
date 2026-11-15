@@ -363,6 +363,33 @@ function selfTestConcurrentWorktree(tmp) {
   assert.strictEqual(fs.readFileSync(path.join(linked, 'ready.txt'), 'utf8'), 'owned setup\n')
   fs.unlinkSync(path.join(main, '.git/hooks/post-checkout'))
   selfTestWorktreeArguments(main, env)
+  selfTestPhysicalDestination(main, env)
+}
+
+/**
+ * Checks that symlink-parent operands cannot redirect setup into another checkout.
+ * @param {string} main - Isolated fixture repository
+ * @param {import('node:process').ProcessEnv} env - Isolated Git environment
+ * @returns {void}
+ * @throws {Error} If creation fails or setup changes the wrong checkout
+ * @example
+ * selfTestPhysicalDestination(fixtureRepository, fixtureEnvironment)
+ */
+function selfTestPhysicalDestination(main, env) {
+  const assert = require('assert')
+  const physical = path.join(path.dirname(main), 'physical-parent')
+  fs.mkdirSync(path.join(physical, 'nested'), { recursive: true })
+  fs.symlinkSync(path.join(physical, 'nested'), path.join(main, 'alias'))
+  const unrelated = path.join(main, 'occupied')
+  execFileSync('git', ['worktree', 'add', '--detach', unrelated], { cwd: main, env, stdio: 'pipe' })
+  fs.writeFileSync(path.join(unrelated, 'ready.txt'), 'unrelated content\n')
+  for (const name of ['occupied', 'physical-only']) {
+    execFileSync(process.execPath, [__filename, '--detach', `alias/../${name}`],
+      { cwd: main, env, stdio: 'pipe' })
+    assert.strictEqual(fs.readFileSync(path.join(unrelated, 'ready.txt'), 'utf8'),
+      'unrelated content\n', 'lexically matching worktree must remain untouched')
+    assert.strictEqual(fs.readFileSync(path.join(physical, name, 'ready.txt'), 'utf8'), 'owned setup\n')
+  }
 }
 
 /**
@@ -499,7 +526,7 @@ function main() {
   const result = spawnSync('git', ['worktree', 'add', ...args], { cwd, stdio: 'inherit' })
   if (result.status !== 0) process.exit(result.status ?? 1)
 
-  const newWorktree = fs.realpathSync(path.resolve(cwd, destination))
+  const newWorktree = fs.realpathSync.native(destination)
   if (!listWorktrees(cwd).includes(newWorktree)) {
     throw new Error(`Requested worktree is not registered after creation: ${newWorktree}`)
   }

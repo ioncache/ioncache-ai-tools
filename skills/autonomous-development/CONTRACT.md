@@ -129,12 +129,18 @@ specified by `PACKETS.md`, not just these file references.
 The controller verifies its completion, base, current snapshot, exact allowances,
 and passing named acceptance checks. It also runs the shared category-record
 checker and binds the full plan to that root, base and snapshot. Missing
-categories, missing adjudication or unresolved applicability cannot authorize a
-commit. Complete-with-exceptions results remain
+changed files, missing categories, missing adjudication or unresolved
+applicability cannot authorize a commit. Complete-with-exceptions results remain
 visible in PR progress; they are not relabeled as clean reviews.
+The file inventory covers the pinned comparison base through the current
+worktree, including committed changes and non-ignored untracked files.
+Additional context files may be reviewed, but cannot substitute for changed files.
 
 Task review finishes before commit. Full-PR review follows draft publication.
 Commit receipts must extend the reviewed HEAD and preserve the accepted content.
+Commit accounting uses the first implementation baseline, not the latest retry.
+Additions left by failed attempts must be included; unchanged setup files need
+not be committed.
 Readiness requires that same accepted content and a current publication receipt.
 
 ## Interruption and resumption
@@ -161,9 +167,17 @@ It schedules another review without reverting files, changing the original
 comparison base, or refunding attempts. Drift outside approved paths requires
 an explicit scope decision, not an automatic rollback or wider fix.
 
-Accepted reviews without category-coverage records cannot authorize further
-commits or readiness. Use the same `reconcile` command for a counted review with
-the current contract; retain prior evidence, original bases and spent allowances.
+Accepted reviews without category-coverage records or a bound file inventory
+cannot authorize further commits or readiness. Use the same `reconcile` command
+for a counted review with the current contract; retain prior evidence, original
+bases and spent allowances.
+
+`status` reports missing, unreadable, or changed snapshots in `input_error`.
+Status, interruption, and retirement do not require available snapshot bytes,
+but still check approval and manifest integrity. Execution, acceptance, resume,
+and reconciliation require valid inputs. The run owner may restore exact
+approved bytes from the selected source to the declared input paths; changing
+the manifest or its digests is not recovery.
 
 Snapshots inherit the existing review helper's boundaries: tracked and
 non-ignored untracked files, excluding `.review-loop/`. Symlink targets are

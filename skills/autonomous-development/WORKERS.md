@@ -51,6 +51,10 @@ Do not run acceptance checks or judge code. Do not create worktrees, edit source
 commit, publish, or launch agents. Do not resume or retire workers without
 native shutdown and reconciliation evidence. A missing worker report remains
 outstanding even when the native workflow stops.
+When status reports `input_error`, interruption and retirement remain available.
+The run owner may restore exact approved artifact bytes from the selected source
+to their declared snapshot paths. Verify their recorded digests; never change
+approval, artifact hashes, or `RUN.json` to accept replacement inputs.
 
 ## Preflight and preparation
 
@@ -95,9 +99,17 @@ Reconciliation does not adopt a newer comparison base. HEAD/index stay fixed
 throughout each review/fix cycle. Normalize review options from the consuming
 worktree, using saved choices on resume. Preserve requested selection, effective
 strategy, fallback, and independent `configuration.review_features`.
+If review history is irrecoverable, follow the ledger's evidence-preserving
+`abandon` protocol after native shutdown. Return a blocked development report;
+do not initialize a replacement ledger within the same assignment or refund
+unknown spending. The controller owns any separately counted retry.
 
 Inventory scoped project standards and actual source languages, including
-embedded code. Prepare a schema-3 phase plan with `review_assignments.py`.
+embedded code. Derive the full phase's file inventory from `comparison_base`
+through the current worktree, including committed changes and non-ignored
+untracked files, excluding `.review-loop/`. Recompute it after fixes.
+Do not use only changes made since the review began. Prepare a schema-3 phase
+plan with `review_assignments.py`.
 Every enabled general category gets its own whole-scope worker; dispatch JSDoc
 only for evidenced JavaScript, not TypeScript. Unknown language facts leave the
 affected coverage unresolved, not a fence on other categories. Writing-skill
