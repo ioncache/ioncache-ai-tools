@@ -136,6 +136,21 @@ function phase(title) {
  */
 async function persistedScenario(fixture) {
   const roles = []
+  let review = null
+  /**
+   * Keeps fake native review work backed by real phase files and ledger events.
+   * @param {string} action - Prepare requests or finish the recorded review
+   * @returns {object} Frozen requests or the final report reference
+   * @throws {Error} If the persisted review fixture fails
+   * @example
+   * const requests = reviewWorker('prepare')
+   */
+  function reviewWorker(action) {
+    return JSON.parse(execFileSync(fixture.python, [
+      path.join(__dirname, 'development_run_self_check.py'), '--workflow-review-fixture'
+    ], { input: JSON.stringify({ store: fixture.store, action }), encoding: 'utf8',
+      stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 }))
+  }
   /**
    * Uses fresh CLI processes and persisted revisions rather than synthetic state.
    * @param {string} command - Controller command
@@ -189,7 +204,31 @@ async function persistedScenario(fixture) {
     roles.push(options.label)
     if (options.label === 'development-control') return control(prompt)
     const assignment = helper('status').assignment
-    assert(['implement', 'review-owner'].includes(options.label))
+    if (fixture.scenario.startsWith('review-') && options.label === 'review-owner') {
+      if (review) return reviewWorker('finish')
+      review = reviewWorker('prepare')
+      const requests = review.packets.map(packet => ({
+        role: 'reviewer', prompt: '', result_file: packet.result_file, packet
+      }))
+      if (fixture.scenario === 'review-budget') {
+        while (requests.length < assignment.limits.review_dispatches) requests.push(requests[0])
+      }
+      if (fixture.scenario === 'review-path') requests[0].result_file = '/outside/report.json'
+      if (fixture.scenario === 'review-missing-packet') requests[0].packet = null
+      return { outcome: 'dispatch', result_file: '', requests }
+    }
+    if (options.label === 'reviewer') {
+      const handoff = JSON.parse(fs.readFileSync(review.handoff, 'utf8'))
+      const prefix = '\nFrozen packet: '
+      const packet = JSON.parse(prompt.slice(prompt.indexOf(prefix) + prefix.length))
+      const attempt = handoff.attempts.find(item => item.packet.identity === packet.identity)
+      assert(attempt, 'Reviewer must receive its exact frozen packet')
+      assert.deepEqual(packet, attempt.packet)
+      fs.writeFileSync(attempt.packet.result_file, JSON.stringify(attempt.result))
+      if (fixture.scenario === 'review-throw') throw new Error('Fixture review native call failed')
+      return { outcome: 'complete', result_file: attempt.packet.result_file }
+    }
+    assert(['implement', 'review-owner', 'commit'].includes(options.label))
     if (options.label === 'implement') {
       const name = fixture.scenario === 'scope' ? 'unapproved.txt' : 'app.txt'
       fs.writeFileSync(path.join(assignment.root, name), 'after\n')
@@ -202,7 +241,7 @@ async function persistedScenario(fixture) {
     const outcome = options.label === 'implement' ? 'complete' : 'blocked'
     fs.writeFileSync(assignment.result_file, JSON.stringify({
       assignment: assignment.id, worker: null, outcome,
-      summary: 'Offline fixture stops at the next review boundary',
+      summary: 'Offline fixture stops at the next review or commit boundary',
       evidence: ['Local fixture worker only; no model or network calls'],
       artifacts: Object.fromEntries(assignment.artifacts.map(item => [item.id, item.sha256])),
       data: {}

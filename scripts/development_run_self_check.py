@@ -544,6 +544,59 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["prs"]["first"]["position"], 2)
         self.assertEqual(self.state["consumed_assignments"], 5)
 
+    def assert_workflow_review_recovers(self, scenario, reason):
+        self.plan["limits"].update(attempts=3, review_loops=3)
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.execute_fixture(self.state["assignment"])
+        ledger = None
+        for attempt in (1, 2):
+            roles = self.workflow(scenario)
+            self.assertEqual(self.state["outcome"], "blocked")
+            self.assertIn(reason, self.state["reason"])
+            self.assertEqual(self.state["assignment"]["attempt"], attempt)
+            if scenario != "review-throw":
+                self.assertNotIn("reviewer", roles)
+            histories = list((root / ".review-loop").glob("*/REVIEW_LEDGER.json"))
+            self.assertEqual(len(histories), 1)
+            ledger = histories[0]
+            retained = ledger.read_bytes()
+            consumed = self.state["consumed_assignments"]
+            self.assertEqual(self.workflow("review-complete"), ["development-control"])
+            self.assertEqual(ledger.read_bytes(), retained)
+            self.assertEqual(self.state["consumed_assignments"], consumed)
+            self.mutate("resume", "--reason", "Worker shutdown not reconciled", ok=False)
+            self.retire_fixture()
+            self.assertEqual(ledger.read_bytes(), retained)
+        roles = self.workflow("review-complete")
+        self.assertIn("reviewer", roles)
+        self.assertIn("commit", roles, self.state["reason"])
+        self.assertEqual(self.state["prs"]["first"]["position"], 3)
+        self.assertEqual(self.state["consumed_assignments"], 7)
+        self.assertEqual(self.state["limits"], self.plan["limits"])
+        saved = json.loads((self.store / "RUN.json").read_bytes())
+        reviews = [item for item in saved["history"] if item["role"] == "review"]
+        self.assertEqual([item["outcome"] for item in reviews], ["retired", "retired", "complete"])
+        status = self.review_cli(root, ["status", str(ledger)])
+        self.assertEqual(status["outcome"], "completed")
+        self.assertEqual(len(status["loops"]), 3)
+        self.assertTrue(all(loop["invalidated"] for loop in status["loops"][:2]))
+        self.assertEqual((root / "app.txt").read_text(), "after\n")
+
+    def test_workflow_review_path_denial_recovers_with_persisted_history(self):
+        self.assert_workflow_review_recovers("review-path", "outside the assigned private directory")
+
+    def test_workflow_review_packet_denial_recovers_with_persisted_history(self):
+        self.assert_workflow_review_recovers("review-missing-packet", "frozen single-purpose packet")
+
+    def test_workflow_review_budget_denial_recovers_without_refunding_limits(self):
+        self.assert_workflow_review_recovers("review-budget", "allowance cannot cover")
+
+    def test_workflow_review_native_failure_requires_shutdown_before_retry(self):
+        self.assert_workflow_review_recovers("review-throw", "Fixture review native call failed")
+
     def test_sequential_run_requires_task_and_full_pr_reviews(self):
         self.init()
         self.preflight()
@@ -669,15 +722,20 @@ class DevelopmentRunTests(unittest.TestCase):
             ledger = json.loads(path.read_bytes())
             ledger["snapshots"][ledger["initial"]]["files"] = []
             path.write_bytes(manifest.encode(ledger))
+        elif damage == "closure-marker":
+            (path.parent / "ABANDONED.json").write_bytes(b"damaged closure")
+            for _ in range(2):
+                self.assertIn("recover-closure", self.finish(data, ok=False))
         else:
             obj = next((path.parent / "objects").iterdir())
             if damage == "missing-object":
                 obj.unlink()
             else:
                 obj.write_bytes(b"corrupt")
-        self.review_cli(root, ["abandon", data["ledger"], "--reason", "Unrecoverable review history",
-                               "--evidence", "No complete ledger copy survives",
-                               "--shutdown-evidence", "Offline review fixture has exited"])
+        command = "recover-closure" if damage == "closure-marker" else "abandon"
+        self.review_cli(root, [command, data["ledger"], "--reason", "Damaged review evidence",
+                              "--evidence", "Inspected surviving ledger, objects and closure record",
+                              "--shutdown-evidence", "Offline review fixture has exited"])
         for _ in range(2):
             self.assertIn("Review is incomplete", self.finish(data, ok=False))
         self.finish(outcome="blocked")
@@ -701,6 +759,9 @@ class DevelopmentRunTests(unittest.TestCase):
 
     def test_malformed_review_snapshot_requires_counted_retry(self):
         self.abandoned_review_retry("file-map")
+
+    def test_damaged_review_closure_requires_counted_retry(self):
+        self.abandoned_review_retry("closure-marker")
 
     def test_invalid_graph_scope_and_limits_are_rejected(self):
         mutations = [
@@ -1047,5 +1108,64 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["consumed_assignments"], consumed + 1)
 
 
+def workflow_review_fixture(fixture):
+    """Supply offline native review work through the real persisted ledger helpers."""
+    worker = DevelopmentRunTests()
+    worker.env = dict(os.environ)
+    worker.store = Path(fixture["store"])
+    worker.plan = development.load(worker.store)["manifest"]
+    worker.state = worker.cli("status", worker.store)
+    assignment = worker.state["assignment"]
+    root = Path(assignment["root"])
+    saved = worker.store / "reports" / "workflow-review.json"
+    if fixture["action"] == "prepare":
+        if saved.exists():
+            data = json.loads(saved.read_bytes())
+            status = worker.review_cli(root, ["status", data["ledger"]])
+            worker.review_cli(root, ["apply", data["ledger"], "--revision", str(status["revision"])],
+                              {"type": "reconcile", "actor": "fixture-owner",
+                               "reason": "Counted retry after worker shutdown",
+                               "evidence": ["Retained prior phase; correcting its request contract"]})
+        else:
+            status = worker.review_cli(root, [
+                "init", "--objective", "Persisted workflow review", "--scope", "fixture",
+                "--base", assignment["comparison_base"],
+                "--max-loops", str(worker.plan["limits"]["review_loops"]),
+                "--max-fix-cycles", str(worker.plan["limits"]["fix_cycles"])])
+            data = {"ledger": status["ledger"]}
+        status = worker.review_cli(root, ["status", data["ledger"]])
+        records, phase = worker.review_records(root, status["snapshot"])
+        data.update(records)
+        for packet in phase["packets"].values():
+            Path(packet["result_file"]).unlink()
+        worker.review_cli(root, ["apply", data["ledger"], "--revision", str(status["revision"])],
+                          {"type": "start_review", "actor": "fixture-owner", "reason": json.dumps(phase)})
+        saved.write_bytes(manifest.encode(data))
+        return {"packets": list(phase["packets"].values()), **data}
+    worker.assertEqual(fixture["action"], "finish")
+    data = json.loads(saved.read_bytes())
+    handoff = json.loads(Path(data["handoff"]).read_bytes())
+    for attempt in handoff["attempts"]:
+        attempt["result"] = json.loads(Path(attempt["packet"]["result_file"]).read_bytes())
+    Path(data["handoff"]).write_bytes(manifest.encode(handoff))
+    phase = json.loads(Path(data["plan"]).read_bytes())
+    subprocess.run([sys.executable, "-c", "assert True"], cwd=root, env=worker.env, check=True)
+    for event in [
+        {"type": "review_done", "passes": [
+            {"name": category, "worker": "unobserved (non-identity marker)", "result": "complete",
+             "evidence": "Offline native fixture wrote its complete result"}
+            for category in phase["required"]],
+         "checks": [{"name": "fixture", "result": "passed", "evidence": "Fixture command exited zero"}]},
+        {"type": "advance"},
+    ]:
+        status = worker.review_cli(root, ["status", data["ledger"]])
+        worker.review_cli(root, ["apply", data["ledger"], "--revision", str(status["revision"])],
+                          {"actor": "fixture-owner", "reason": "Persisted offline review", **event})
+    return {"outcome": "complete", "result_file": str(worker.report(data)), "requests": []}
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if sys.argv[1:] == ["--workflow-review-fixture"]:
+        print(json.dumps(workflow_review_fixture(json.load(sys.stdin))))
+    else:
+        unittest.main()

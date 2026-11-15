@@ -45,7 +45,28 @@ snapshots, or project files. Unknown spending stays unknown; the abandoned run's
 remaining allowance is unavailable. It cannot resume or satisfy a completed
 review. Readable ledgers use the ordinary `stop` event instead.
 `status` and repeated `abandon` calls return the saved closure. A damaged closure
-record is archived before replacement.
+record is archived before replacement only when history is unreadable.
+
+If the closure record is damaged but the ledger is readable, use:
+
+```bash
+python3 "/installed plugin/scripts/review_ledger.py" recover-closure \
+  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  --reason "The closure record cannot be restored" \
+  --evidence "Inspected the damaged marker and validated the surviving history" \
+  --shutdown-evidence "Native host confirms this run's workers and processes exited"
+```
+
+Use actual evidence and stop the workers first. Recovery records a terminal
+failed `stop` before archiving the damaged marker, unless the history is already
+failed, stalled or limit-exhausted. Those terminal failures remain unchanged.
+It retains findings, decisions, snapshots and consumed counters, without making
+remaining allowance reusable.
+Even previously completed history becomes failed: a damaged closure is not
+evidence that the run may resume or satisfy a review. Ordinary `stop` may also
+downgrade a completed outcome to failed, but cannot reopen it.
+Recovery refuses a valid abandonment record. If recovery is interrupted, retry
+the command; neither an interrupted repair nor a lost response reopens the run.
 
 Closure does not authorize another review. Further work needs a separately
 authorized attempt within the caller's retained limits. A development controller
