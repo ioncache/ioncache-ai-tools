@@ -82,10 +82,10 @@ The implementation uses the following choices:
   current state by replay rather than maintaining a second editable summary.
 - Snapshot manifests reference content-addressed files under each run's
   `objects/` directory. They include Git-enumerated tracked and non-ignored
-  untracked files, modes, HEAD, and index metadata. Ignore `.review-loop/`
-  bookkeeping. Do not dereference symlinks or overwrite worktree files.
-- Updates use a per-worktree file lock and atomic replacement. One running
-  or resumable run is allowed per worktree; concurrent code work needs
+  untracked files, modes, HEAD, and index metadata. Bookkeeping lives outside
+  the repository. Do not dereference symlinks or overwrite worktree files.
+- Updates use the worktree's external storage lock and atomic replacement. One running
+  or resumable run is allowed in that store; concurrent code work needs
   isolated worktrees. Revision checks reject stale coordinator updates.
 - Run artifacts are retained locally, never automatically committed or
   uploaded. The helper creates private-by-default storage without modifying
@@ -402,13 +402,18 @@ The ledger is mandatory and authoritative for run history. Use one
 canonical JSON file per run:
 
 ```text
-.review-loop/<run-id>/REVIEW_LEDGER.json
+<external-review-storage>/<worktree-identity>/<run-id>/REVIEW_LEDGER.json
 ```
 
 Separate run directories prevent a new review from overwriting an earlier
 record. Generate human-readable reports from this ledger rather than
 maintaining a second authoritative document. Do not automatically stage
 or commit the ledger or other run artifacts.
+Standalone storage honors `XDG_STATE_HOME`, defaulting to
+`~/.local/state/ioncache-ai-tools/reviews/`. Autonomous development pins storage
+inside its external private run store. Resume the saved absolute path rather
+than choosing another store to bypass an active run. The executable migration
+and offline inspection contracts are in `skills/review-validate-fix-loop/LEDGER.md`.
 
 ### Run and session ownership
 
@@ -659,8 +664,9 @@ conversations across all supported hosts.
 
 Snapshot limitations are explicit: ignored files and external systems
 are not captured; Git-enumerated special files and submodules are unsupported.
-Fix declarations reject symlink paths. Unexpected changes outside declared
-files or to HEAD/index stop correction recording. Read-only-phase drift
+Fix-file hints reject symlink paths but are not edit allowlists. Discovered
+dependencies enter the actual correction delta. Changes to HEAD/index stop
+correction recording. Read-only-phase drift
 invalidates earlier judgments and requires another counted full review.
 
 ## Reporting

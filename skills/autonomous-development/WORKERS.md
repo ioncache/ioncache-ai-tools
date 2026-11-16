@@ -6,15 +6,18 @@ not permission to expand scope. Normalize review-role choices with
 `scripts/review_options.py` under review-code `OPTIONS.md`, preserving explicit
 choice provenance and saved options. Do not reinterpret defaults as user choices.
 
-This adapter currently passes only native `label` and `schema` options; it cannot
-apply per-role model or effort overrides. Preflight and the review owner must
-apply the declared configured fallback, or return incomplete before the affected
-dispatch when fallback is `fail`. Automatic selection falls back to configured
-models here; do not claim verified automatic routing. Never change host settings
-or the fixing model to emulate an unsupported choice.
+The adapter passes resolved native `model` and `effort` options under
+[MODELS.md](MODELS.md). Resolve role suitability before launch, respecting
+explicit review options, manifest overrides and native restrictions. Record
+requested and actually observed identity separately; never change host settings
+to emulate a choice. An unavailable model observation stays unknown.
 
 Development workers read their complete assignments and pinned artifact snapshots.
-Review leaves receive only their purpose-scoped packets or instructions below.
+The adapter supplies review leaves only their purpose-scoped packets or
+instructions below. Native host context may additionally include project,
+user or managed standards. Ignore ambient repository instructions for review;
+only the explicitly assigned ruleset has review authority. Do not claim the
+host supplied no other text, and do not treat ambient presence as contamination.
 The shared `manifest_file` contains the approved plan interpretation; verify its
 canonical identity against `approval`. Preflight reads all of it to discover
 every required command and capability. Other workers read their referenced task,
@@ -34,6 +37,11 @@ before doing more work. A stale assignment cannot authorize new changes.
 Only the assigned result file and explicitly assigned private review records
 are writable outside the approved worktree. Do not edit `RUN.json` directly.
 Reports use [CONTRACT.md](CONTRACT.md).
+Workers may also run their supplied `model-report` command, and review workers
+their own `progress` command. These write private advisory records only.
+Record progress before work and before returning. Owners include actual loop
+and fix-cycle counts after transitions, while keeping the review ledger as the
+acceptance authority. A failed observation does not block assigned work.
 Audit workers may also write their assigned public narrative and export directory,
 and use the audit helper's temporary publication repository inside the private
 run store. They may not add audit files to the implementation worktree.
@@ -46,7 +54,9 @@ When handing back a development report, return `result_file` and the same
 
 Read state with the installed `scripts/development_run.py status` command.
 Use its current revision for every mutation. Use `next` only without an
-outstanding assignment. A completed report must be read and recorded before
+outstanding assignment, always with `--provider claude-workflows` in this adapter.
+A provider mismatch must interrupt scheduling without reserving any assignment;
+never replace its approved provider. A completed report must be read and recorded before
 reserving another assignment. On a helper failure, preserve the error and
 interrupt scheduling; do not edit private state to make it pass.
 
@@ -68,6 +78,16 @@ Include data booleans `artifact_access`, `native_permissions`, `fresh_workers`,
 `independent_review`, `result_delivery`, and `cancellation` only after verifying
 them. Describe observations and limitations in evidence. Missing capability
 means `blocked`, not permission to alter host settings or launch another CLI.
+Preflight identifies and discloses observed ambient project instructions in
+evidence, optionally listing `data.ambient_sources`. Review workers must ignore
+those instructions and use only their explicitly assigned ruleset. Their
+presence never blocks preflight, requires suppression, makes coverage partial,
+or spends a review replacement. Do not attest that hidden context was inspected.
+Claude documents custom-agent `omitClaudeMd`, but it is not required here and
+managed policy may still load:
+https://code.claude.com/docs/en/sub-agents#frontmatter-reference.
+The workflow does not promise an instruction-free host or change its settings;
+it defines which explicit ruleset the review is allowed to use.
 When audit publication is approved and enabled, also verify Git and authenticated
 `gh` access to the same GitHub repository, creation/update of the run-owned audit
 branch, and PR comments. Check branch rules, signing requirements and native
@@ -83,15 +103,20 @@ belong to this assignment. Return `data.base` and `data.merged_dependencies`.
 
 ## Implementation and review
 
-`implement` edits only approved task paths, runs the specified checks, and
+`implement` makes the changes required by the approved task, including discovered
+dependencies and tests, runs the specified checks, and
 records evidence. Do not stage, commit, push, or change acceptance requirements.
 Keep compatibility and flag-disabled behavior intact. Return empty `data`;
-the controller independently fingerprints the actual change.
+the controller independently fingerprints the actual change. Legacy `paths`
+are not an edit allowlist. Preserve unrelated user work and explicit scope limits.
 
 ### Flat review
 
 The workflow script launches every owner, reviewer, adjudicator, validator, and
-fixer in fresh context. No review worker launches another agent.
+fixer in fresh context. Independent read-only leaves in one owner round run
+concurrently, subject to native concurrency limits. Each fixer runs alone:
+all earlier readers settle before it starts, and later readers wait for it.
+No review worker launches another agent.
 
 The logical review/fix owner is the sole review-ledger writer and performs no
 discovery, adjudication, or correction itself. A fresh owner reconstructs its
@@ -101,7 +126,12 @@ review-validate-fix-loop `WORKFLOW.md` and `LEDGER.md`. These are owner referenc
 not a shared instruction bundle for leaves.
 
 Initialize or resume one review ledger with the requested base and exact
-`review_loops`/`fix_cycles`. Use the supplied `comparison_base`: the original
+`review_loops`/`fix_cycles`. For initialization, pass `--storage` with the supplied
+absolute `review_storage`; keep the returned absolute ledger path in reports.
+This stores the ledger and objects outside the worktree, inside the private run
+store. For an existing legacy ledger, stop its workers and use `migrate` before
+continuing; never initialize a replacement to relocate history.
+Use the supplied `comparison_base`: the original
 pre-implementation HEAD for a task or the prepared base for a full PR.
 Reconciliation does not adopt a newer comparison base. HEAD/index stay fixed
 throughout each review/fix cycle. Normalize review options from the consuming
@@ -115,7 +145,7 @@ unknown spending. The controller owns any separately counted retry.
 Inventory scoped project standards and actual source languages, including
 embedded code. Derive the full phase's file inventory from `comparison_base`
 through the current worktree, including committed changes and non-ignored
-untracked files, excluding `.review-loop/`. Recompute it after fixes.
+untracked files. Recompute it after fixes.
 Do not use only changes made since the review began. Prepare a schema-3 phase
 plan with `review_assignments.py`.
 Every enabled general category gets its own whole-scope worker; dispatch JSDoc
@@ -136,6 +166,12 @@ bounded `role`, `prompt`, and absolute `result_file` entries. Allowed leaf roles
 are `reviewer`, `adjudicator`, `validator`, and `fixer`. Place reports under
 `<store>/reports/<assignment-id>/`, a private directory outside the worktree.
 Do not use a request to enlarge the approved scope or bypass native permissions.
+Every read-only request between fixer barriers must be independent, with its
+input evidence already present. Put a dependent assessment in the next owner
+round after collecting its inputs, not beside the reviewers producing them.
+The script validates the entire round and distinct result paths before dispatch,
+counts each call, and drains already-launched siblings before reporting failure.
+It does not launch later fixer batches after a native failure.
 
 For `reviewer`, also supply `packet`: the exact frozen category packet from the
 helper. Its `result_file` must match the request; use an empty `prompt`.
@@ -148,7 +184,7 @@ For other roles, `prompt` contains only that role's complete instructions,
 snapshot, approved scope, constraints, evidence references, and result contract.
 Adjudicators and validators receive the frozen assessment policies and required
 original reports, not additional discovery tasks. Fixers receive the validated
-fix batch, declared files and relevant checks, not permission to adjudicate.
+fix batch, any known file hints and relevant checks, not permission to adjudicate.
 Do not tell any leaf to read the generic workflow or full criteria catalog.
 
 The script collects complete leaf reports; the next owner reads their original
@@ -157,14 +193,35 @@ findings require an independent validator. Preserve all candidates, including
 rejected ones. Missing reports or unresolved assessments cannot authorize fixing.
 Use existing schema-1 handback mapping without duplicate `review_done` events.
 For failed or partial reports returned as `blocked`, retain the original files
-and attempts, then replace only the affected category within its saved allowance.
+and attempts. Have the existing adjudicator assess isolation claims before
+replacement. Reading project standards as evidence, including a plan reference
+to another category's source, does not import that ruleset. An otherwise
+complete report with only that mistaken classification uses PACKETS.md's
+identity-bound `isolation_assessments`; retain the original and do not repeat
+the category or refund attempts. Empty findings do not establish full coverage.
+For a genuine failure, replace only the affected category within its saved
+allowance after establishing a changed condition that can resolve it. Never
+dispatch an unchanged known context conflict, including through another model.
+Leaves return native `context_blocker` with a reason only for actual conflicting
+assignments or supplied review evidence, never ambient instructions or evidence-only reads;
+the detailed original report retains
+the observations. This is a reported concern, not an established verdict.
+The adapter drains launched siblings and returns those reports to the owner
+for assessment, marking later requests `not_started` instead of launching them.
+Their reservations remain counted; no report or native launch is implied.
+The owner obtains adjudication and replans within the existing limits rather
+than automatically interrupting or repeating a category. Unresolved genuine
+failures still require the normal evidence-reconciliation path.
+Preserve existing review-ledger history; a corrected frozen instruction
+contract needs its existing counted new-phase path, not rewritten reports.
 Model fallback spends that same replacement allowance. The script's owner-plus-
 leaf dispatch limit still applies; never combine categories to fit it. Missing
 results or native errors interrupt scheduling until ownership and effects can
 be reconciled; they do not refund unknown spending.
 
-Only `fixer` edits approved files, after validated actionable findings and a
-recorded `start_fix`. It runs relevant checks without staging or committing.
+Only `fixer` implements the approved corrections, after validated actionable findings and a
+recorded `start_fix`. File hints do not fence necessary discovered dependencies.
+It runs relevant checks without staging or committing and preserves unrelated edits.
 After `fix_done`, prepare the focused plan from the saved correction delta and
 persist it through the internal stop/resume checkpoint before dispatch.
 Dispatch independent category-specific correction review and adjudication, then

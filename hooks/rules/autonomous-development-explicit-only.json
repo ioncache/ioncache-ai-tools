@@ -1,0 +1,11 @@
+{
+  "event": "PreToolUse",
+  "toolNames": ["Skill", "skill"],
+  "matcher": {
+    "type": "regex",
+    "field": "tool_input.skill",
+    "pattern": "(?i)^/?(?:ioncache-ai-tools:)?autonomous-development$"
+  },
+  "action": "deny",
+  "message": "autonomous-development is user-invoked only; do not load it through an assistant skill-tool call. Continue existing authorized work with ordinary tools and other applicable skills. Direct human slash invocation loads this skill through the host; do not require that invocation to continue unrelated work."
+}

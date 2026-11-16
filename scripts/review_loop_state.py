@@ -216,7 +216,9 @@ def start_fix(state, event):
         require(current_cycle(state)["complete"], "Advance the reviewed cycle before another fix")
     require(len(loop["cycles"]) < state["limits"]["inner"], "Inner limit reached; stop run")
     ids = strings(event["findings"])
-    strings(event["files"])
+    require(isinstance(event["files"], list), "Fix-file hints must be a list")
+    for name in event["files"]:
+        text(name)
     require(len(set(ids)) == len(ids), "Duplicate fix IDs")
     require(not any(item["validation"] == "pending" for item in state["findings"].values()),
             "Validate all findings before fixing")

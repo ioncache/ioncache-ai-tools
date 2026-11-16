@@ -1,9 +1,16 @@
 ---
 name: autonomous-development
-description: Prepares an idea or existing artifacts for bounded implementation and review-ready PRs. Use when explicitly asked to prepare, execute, or resume an autonomous development plan.
+description: User-invoked only. Prepares an idea or existing artifacts for bounded implementation and review-ready PRs. Never automatically load this skill based on a matching task.
+disable-model-invocation: true
+user-invocable: true
 ---
 
 # Autonomous development
+
+Activate only through the human's direct skill invocation, not an assistant's
+skill-tool call or inferred task match. Do not automatically load this skill
+for planning, implementation, review, or maintenance of its own source.
+Existing authorized work continues normally without invoking this skill.
 
 Loading this skill does not authorize execution, spending, commits, or publication.
 Humans approve the plan and retain PR approval and merge control. A user question
@@ -22,17 +29,24 @@ the assignment or stop workers. Hand-backs are not user questions.
    or update the intended artifacts. Reuse existing records; do not create duplicates.
    GitHub issues and Notion pages are optional destinations, not prerequisites.
 4. Establish task and PR boundaries, dependencies, exact acceptance commands,
-   allowed paths, compatibility, flags, intermediate states, rollout, rollback,
+   behavioral scope, compatibility, flags, intermediate states, rollout, rollback,
    and cleanup. Several tasks may form one PR.
 5. Read [CONTRACT.md](CONTRACT.md). Produce a human-readable plan and a manifest
    with private snapshots of requirements, design, and plan content. Present the
-   normalized interpretation and content identity for approval.
+   normalized interpretation and content identity for approval. For the packaged
+   Claude adapter, set `configuration.execution.provider` to exactly
+   `claude-workflows`. This identifier is not the workflow's display name.
+   Run provider-specific validation before presenting the identity.
 6. Resolve permissions and finite limits explicitly. Approval of document content
    is not native host permission. Do not infer publication or model budgets.
-   Preserve explicit review-role choices in the approved constraints. This
-   adapter uses configured models; unsupported overrides require their declared
-   configured fallback or leave execution incomplete. Size review allowances
-   for the enabled category roster, separate adjudication and owner calls.
+   Resolve native model and effort choices before launch under
+   [MODELS.md](MODELS.md), including the cheapest suitable bookkeeping choice
+   and the strongest suitable implementation, adjudication and fixing choices.
+   Present the role table, evidence, cost trade-offs and configured-only
+   limitations explicitly, not buried in constraints. Put explicit overrides in
+   `configuration.execution.models` or `configuration.execution.review_options`.
+   Size review allowances using the rule in CONTRACT.md, including independent
+   category, adjudication, validation, owner and correction calls.
    Include `permissions.publish_audit` explicitly in new manifests, proposing
    `true` for GitHub PRs. Explain the separate run-owned audit branch, public
    narrative review and PR comments before approval. A declined permission or
@@ -44,37 +58,84 @@ Run the helper by resolving `../../scripts/development_run.py` relative to this
 installed skill directory:
 
 ```sh
-python3 "/absolute/plugin/scripts/development_run.py" validate "/private/bundle/manifest.json"
+python3 "/absolute/plugin/scripts/development_run.py" validate "/private/bundle/manifest.json" \
+  --provider claude-workflows
 ```
 
 ## Execute
 
+Generic validation without `--provider` also accepts other execution providers,
+with a warning when no packaged adapter exists. It does not authorize Claude
+to execute that manifest.
+
 After explicit approval of the returned identity, initialize private state
-outside the repository. Keep the approved input bundle and raw evidence private.
+outside the launch repository and every planned worktree. Respect the project's
+worktree-location convention, including sibling directories. Keep the approved
+input bundle and raw evidence private.
 
 ```sh
 python3 "/absolute/plugin/scripts/development_run.py" init "/private/bundle/manifest.json" \
-  --approved "<approved-identity>" --root "/project" --store "/private/development-run"
+  --approved "<approved-identity>" --root "/project" --store "/private/development-run" \
+  --provider claude-workflows
 ```
 
 The packaged execution adapter is a Claude Workflow named
 `ioncache-ai-tools:autonomous-development-run`. In Claude, ask the main agent
-to run it with structured `store`, `pluginRoot`, and a unique `invocation` string.
+to run it with structured `store`, `pluginRoot`, a unique `invocation` string,
+and the complete resolved `models` role map from MODELS.md. Copy the effective
+control choice into that map before the first bookkeeping call.
 Do not launch it from a subagent or silently substitute an external CLI.
 The invocation string distinguishes a new launch from native replay.
 
 Preflight must establish actual artifact access, native permissions, fresh
 workers, independent review, result delivery, and cancellation. The adapter
-dispatches reviewers, adjudicators, validators, and fixers flat. No leaf
+dispatches independent read-only review leaves concurrently, with each fixer
+running alone between reader batches. All dispatch remains flat. No leaf
 launches another agent. Reviewers receive frozen single-purpose packets, with
 category controls independent of writing skills. [WORKERS.md](WORKERS.md)
 defines these assignments and the final category-coverage handoff.
+Host-loaded repository instructions may be present, but review workers must
+ignore them and use only their explicitly assigned ruleset. Disclose observed
+ambient sources; their presence must not stop execution, make coverage partial,
+or trigger replacements.
 
 The controller and adapter have offline checks, not completed live-host
 qualification. Obtain separate approval and resource limits for live trials.
 Copilot and Codex can prepare manifests and inspect state; they do not yet have
 packaged execution adapters. Do not imply cloud hosting or shared controls have
 been provisioned.
+
+## Watch from launch
+
+At launch, give the human the absolute store path and this exact command with
+the installed script path filled in. It works in another session or terminal
+with filesystem access to that store; no original host session is required:
+
+```sh
+python3 "/absolute/plugin/scripts/development_run.py" watch "/private/development-run"
+```
+
+The launching agent must also run this monitor immediately after launch.
+Verify its first output and check preflight early, using `--stale-after 60`
+for the initial watch. Continue watching through execution, rather than ending
+the turn and relying only on the workflow-completion notification. A native
+process-monitor tool may run this same command and deliver its output; do not
+replace it with repeated model calls or an independent monitoring protocol.
+
+Report promptly when the monitor reports blocked, interrupted, waiting,
+exhausted, complete, unavailable state, or no durable advancement. The default
+inactivity threshold is 300 seconds and can be changed with `--stale-after`.
+Inactivity is an observation, not proof of a dead worker. Inspect native status
+and outstanding effects before deciding whether recovery is needed. If the
+worker is still legitimately active, report that and restart the same monitor
+with a suitable threshold; never automatically cancel, retire, or relaunch it.
+Do not spin on repeated unchanged inactivity notices.
+
+Watching does not keep Claude running after its session exits. Current Claude
+documentation describes native replay within the original session, and does
+not document a cross-session `/workflows` visibility setting:
+https://code.claude.com/docs/en/workflows.
+The durable monitor is the supported cross-session view, not native run control.
 
 ## Resume and report
 

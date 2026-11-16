@@ -19,7 +19,7 @@ Each skill's file defines its scope, inputs, and stopping conditions.
 | [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within limits |
 | [../skills/triage-errors/SKILL.md](../skills/triage-errors/SKILL.md) | Fix related failures by root cause |
 | [../skills/create-worktree/SKILL.md](../skills/create-worktree/SKILL.md) | Create a worktree with repository setup applied |
-| [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | Prepare approved inputs and coordinate bounded development toward review-ready PRs |
+| [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | User-invoked only: prepare approved inputs and coordinate bounded development toward review-ready PRs |
 
 Writing and implementation guidance lives in [../skills/](../skills/):
 `answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
@@ -56,9 +56,26 @@ to the current export. See
 for privacy, retention, opt-out and recovery boundaries.
 
 Review-category controls and saved review options use the same helpers as
-standalone review. This adapter currently uses configured models: unsupported
-role overrides follow their declared fallback, never a silent substitution.
+standalone review. Native `model` and `effort` choices are resolved before launch,
+with explicit overrides and separately recorded observations under
+[../skills/autonomous-development/MODELS.md](../skills/autonomous-development/MODELS.md).
 Reported null identities remain visibility limitations, not fabricated worker IDs.
+Independent read-only leaves in an owner round run concurrently, while each
+fixer runs alone between reader batches.
+
+Use `configuration.execution.provider: "claude-workflows"` for the packaged
+adapter. Validate with `--provider claude-workflows` before approval; initialization
+and reservation support the same compatibility check without consuming work.
+Relative sibling and absolute worktree paths are supported, with resolved
+destinations pinned and the private store separated from every checkout.
+
+The launcher provides the store path and runs
+`python3 "/absolute/plugin/scripts/development_run.py" watch "/private/run"`.
+The same command works from any session or terminal with access to the store.
+It reports assignment and review progress, all stopped outcomes and inactivity,
+without taking controller locks or changing state. It is not native run control.
+The launcher checks preflight early and does not wait solely for the host's
+completion notification.
 
 Independent increments can be handed over early. Dependent PRs wait for observed
 human merges; this adapter does not implement stacked-branch maintenance.
@@ -89,7 +106,7 @@ commands. In Codex, replace only the leading `/` with `$`, keeping the
 /ioncache-ai-tools:review-triage-loop docs/architecture.md --max-rounds 8
 /ioncache-ai-tools:review-triage-loop --resume /absolute/private/run/REVIEW_LEDGER.md
 /ioncache-ai-tools:review-validate-fix-loop branch --max-loops 3 --max-fix-cycles 3
-/ioncache-ai-tools:review-validate-fix-loop --resume .review-loop/<run-id>/REVIEW_LEDGER.json
+/ioncache-ai-tools:review-validate-fix-loop --resume /absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json
 ```
 
 The read-only triage loop defaults to five rounds and stops after two
@@ -100,8 +117,12 @@ tree. Counters and checkpoints are skill instructions, not mechanically
 enforced by the review/fix ledger helper.
 
 The review/fix loop defaults to three review loops and three fix cycles per
-loop. It does not authorize commits, pushes, or PR comments. Keep
-`.review-loop/` artifacts private; they can contain source.
+loop. It does not authorize commits, pushes, or PR comments. Standalone ledgers
+and objects default to `~/.local/state/ioncache-ai-tools/reviews/`, honoring
+`XDG_STATE_HOME`. Development runs keep them in their external private store.
+Keep these artifacts private; they can contain source and survive worktree cleanup.
+Use the ledger helper's `migrate` command for legacy in-worktree records before
+deleting the checkout, and `inspect` for saved history without live acceptance.
 
 ### Review coordination
 

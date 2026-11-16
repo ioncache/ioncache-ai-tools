@@ -122,7 +122,7 @@ and return the path; the adjudicator reads the files rather than a retyped
 summary. This command creates neither a ledger nor a snapshot store.
 
 Fingerprints cover the whole worktree, so unrelated drift also invalidates
-them. They exclude ignored inputs and `.review-loop/`, store symlink target
+them. They exclude ignored inputs, store symlink target
 text rather than target content, and reject submodules and special files.
 Non-Git or required excluded inputs need an explicit alternative identity
 and coverage limitation; never present them as protected by this fingerprint.

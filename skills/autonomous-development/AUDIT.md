@@ -21,6 +21,20 @@ Retain both comments and previous commits. Do not delete the audit branch as
 part of ordinary worktree cleanup. Repository retention and access policies still
 apply; this is not a separate archival or tamper-proof service.
 
+Keep the private run store as well: new runs retain complete ledgers and objects
+under its `reviews/` directory, independently of all worktrees. After cleanup,
+produce a local historical export with a reviewed narrative:
+
+```sh
+python3 "/absolute/plugin/scripts/development_audit.py" archive "/private/run" \
+  --pr "<plan-pr-id>" --public "/private/public-narrative.json"
+```
+
+This reads saved snapshots and history, writes identity-addressed files under
+`<private-run-store>/archives/`, and performs no publication or live-worktree
+acceptance. It cannot substitute for a reserved audit assignment. Legacy migrated
+ledgers stay at their external migration destination; retain that storage too.
+
 ## What is exported
 
 The helper mechanically projects:
@@ -30,9 +44,19 @@ The helper mechanically projects:
 - Available review ledgers' iteration counts, findings, observations, decisions,
   fix results, check outcomes, event ordering, timestamps and evidence hashes.
 - Execution limits, consumed assignments and explicit unavailable metrics.
+- Requested native models/efforts and separately observed actual identities,
+  their observation source and an evidence digest, tied to assignment/role.
+  Control calls are run-level observations, not invented assignments.
 
 It does not copy input documents, source blobs, raw report bodies, prompts,
 private paths, diagnostic strings or arbitrary event reason/evidence fields.
+Review progress checkpoints remain private and are not exported as evidence.
+Model observations project only the fields above, not their raw private files.
+Their export-time snapshot stays fixed during acknowledgment; later observations
+do not revoke approval of unchanged published bytes.
+Model IDs, including private deployment identifiers, still need publication
+review. A selected alias does not prove which model ran; null actual values and
+unavailable model records remain gaps, not inferred successes.
 Unavailable or abandoned histories remain explicit gaps. No counts or findings
 are reconstructed from missing evidence. Worker hashes permit comparison of
 reported identities, not proof of independent contexts.

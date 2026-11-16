@@ -13,7 +13,7 @@ enforces bookkeeping; it does not review code, prove judgments, or grant permiss
 ## Invocation
 
 Accept a target plus `--max-loops N` and `--max-fix-cycles N` (both default
-to 3), or `--resume .review-loop/<run-id>/REVIEW_LEDGER.json`.
+to 3), or `--resume /absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json`.
 Examples: `review-validate-fix-loop branch --max-loops 4`,
 `review-validate-fix-loop repository --max-fix-cycles 2`.
 Also accept the shared role model, effort, selection, fallback, strategy, and

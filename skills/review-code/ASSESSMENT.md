@@ -42,6 +42,16 @@ The same defect can legitimately appear in several categories when each worker
 reaches it through its own applicable requirements; duplication alone is not a
 scope breach.
 
+Assess reported isolation breaches before recommending replacement. Reading a
+project standards file as necessary evidence, including another category's
+source reached through a plan reference, does not adopt its instructions.
+Distinguish that mistaken classification from actually applying another ruleset.
+When the original work otherwise satisfies the frozen assignment, return
+PACKETS.md's `isolation_assessments` record rather than requiring a new category
+pass. Verify the original coverage, required checks and caller constraints;
+zero findings alone establish none of these. Do not complete missing review
+work yourself, waive a read prohibition, or rewrite the original report.
+
 Return the compliance decision and evidence to the caller. The caller removes
 rejected attempts from the active map, without rewriting their original reports,
 and schedules fresh same-category replacements within the existing allowance.

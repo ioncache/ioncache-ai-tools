@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 import development_manifest as plan
+import development_models as models
 import review_ledger as review
 
 
@@ -62,6 +63,7 @@ def identity(value):
 def review_record(path):
     result = {"id": path.parent.name, "history_digest": None, "available": False}
     try:
+        path = review.ledger_path(None, str(path), allow_unavailable=True)
         if not path.is_symlink() and path.exists():
             result["history_digest"] = review.digest(path.read_bytes())
         closed = review.abandoned(path)
@@ -70,7 +72,6 @@ def review_record(path):
                           closure_digest=identity(closed))
             return result
         ledger, state = review.load(path)
-        review.ensure_owner(ledger, path.parent.parent.parent)
     except (ValueError, OSError, KeyError, TypeError):
         return result
     result.update(available=True, base=ledger["base"], snapshot=state["snapshot"],
@@ -136,23 +137,34 @@ def public_narrative(value, reviews):
     return value
 
 
-def build(state, assignment, public):
+def review_locations(state, assignment):
     root = Path(assignment["root"])
-    folder = review.safe_path(root, ".review-loop")
-    paths = sorted(folder.glob("*/REVIEW_LEDGER.json")) if folder.exists() else []
-    # Published run directories with a lost ledger must remain visible as gaps.
-    if folder.exists():
-        paths = sorted({*paths, *(item / "REVIEW_LEDGER.json" for item in folder.iterdir()
-                                 if re.fullmatch(r"[a-f0-9]{32}", item.name))})
-    records = [review_record(review.ledger_path(root, str(path.relative_to(root)), allow_unavailable=True))
-               for path in paths if re.fullmatch(r"[a-f0-9]{32}", path.parent.name)]
+    folders = []
+    referenced = {}
+    for item in state["history"]:
+        if item["pr"] != assignment["pr"] or item["role"] != "review":
+            continue
+        if item.get("review_storage"):
+            folders.append(Path(item["review_storage"]))
+        reference = item.get("report", {}).get("data", {}).get("ledger")
+        if isinstance(reference, str):
+            path = review.ledger_path(root, reference, allow_unavailable=True)
+            folders.append(path.parent.parent)
+            referenced[path.parent.name] = path
+    referenced.update({path.parent.name: path for path in review.review_paths(root, folders)})
+    return sorted(referenced.values(), key=lambda path: path.parent.name)
+
+
+def build(state, assignment, public, *, model_snapshot=None):
+    root = Path(assignment["root"])
+    records = [review_record(path) for path in review_locations(state, assignment)]
     for record in records:
         record["assignment_ids"] = []
         for item in state["history"]:
             reference = item.get("report", {}).get("data", {}).get("ledger")
             if item["pr"] == assignment["pr"] and item["role"] == "review" and isinstance(reference, str):
-                resolved = Path(os.path.abspath(Path(item["root"]) / reference))
-                if resolved == folder / record["id"] / "REVIEW_LEDGER.json":
+                resolved = review.ledger_path(root, reference, allow_unavailable=True)
+                if resolved.parent.name == record["id"]:
                     record["assignment_ids"].append(item["id"])
     history = []
     for item in state["history"]:
@@ -165,6 +177,8 @@ def build(state, assignment, public):
                         "report_digest": identity(item["report"]) if item.get("report") else None,
                         "audit_disabled": item.get("report", {}).get("data", {}).get("disabled") is True
                         if item["role"] in ROLES else None})
+    model_records, models_unavailable = (models.observations(state, assignment["pr"])
+                                       if model_snapshot is None else model_snapshot)
     return {"schema": 1, "run": state["id"], "pr": assignment["pr"], "assignment": assignment["id"],
             "stage": assignment["role"], "approval": state["approval"],
             "inputs": [{"role": item["role"], "digest": item["sha256"]}
@@ -172,6 +186,7 @@ def build(state, assignment, public):
             "code_commit": assignment["before"]["head"], "snapshot": identity(assignment["before"]),
             "limits": state["manifest"]["limits"], "consumed_assignments": len(state["history"]),
             "history": history, "reviews": records, "public": public_narrative(public, records),
+            "models": model_records, "models_unavailable": models_unavailable,
             "metrics": {"tokens": None, "cost": None, "worker_durations": None},
             "limitations": [
                 "Publication-reviewed narrative is supplied evidence, not independently proven truth.",
@@ -179,6 +194,8 @@ def build(state, assignment, public):
                 "Missing history remains unavailable; this is not a complete native execution log.",
                 "Hashes detect changed evidence but do not authenticate authors or prove isolation.",
                 "An empty regression list means no relationship was supplied, not no regressions.",
+                "Selected models are requests, not observations; null actual identities remain unknown.",
+                "Native model observations are supplied evidence, not independently authenticated.",
             ]}
 
 
@@ -229,11 +246,30 @@ def export(state, assignment, public):
             "branch": branch(state, assignment["pr"]), "files": list(FILES)}
 
 
+def archive(state, pr, public):
+    plan.require(pr in state["prs"], "Archive requires a known --pr")
+    saved = next((item for item in reversed(state["history"])
+                  if item["pr"] == pr and item.get("before") is not None), None)
+    plan.require(saved is not None, "No saved PR snapshot is available")
+    bundle = build(state, {**saved, "role": "archive"}, public)
+    bundle["limitations"].append(
+        "Historical export only: the worktree was not checked and this does not authorize publication.")
+    files = contents(bundle)
+    key = bundle_identity(files)
+    folder = review.external_directory(Path(state["store"]) / "archives" / pr / key)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name, data in files.items():
+        review.atomic_write(review.safe_path(folder, name), data)
+    return {"directory": str(folder), "identity": key, "files": list(FILES), "historical": True}
+
+
 def prepared(state, assignment):
     folder = directory(state, assignment)
     files = {name: review.safe_path(folder, name).read_bytes() for name in FILES}
     bundle = json.loads(files["audit.json"])
-    plan.require(bundle == build(state, assignment, bundle["public"]) and files == contents(bundle),
+    expected = build(state, assignment, bundle["public"],
+                     model_snapshot=(bundle["models"], bundle["models_unavailable"]))
+    plan.require(bundle == expected and files == contents(bundle),
                  "Audit evidence changed; regenerate and review a new export before publishing")
     return bundle, files
 
@@ -368,15 +404,21 @@ def main():
     import development_run as development
 
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("operation", choices=("export", "publish"))
+    cli.add_argument("operation", choices=("export", "publish", "archive"))
     cli.add_argument("store")
     cli.add_argument("--public", help="Publication-reviewed narrative JSON, required for export")
     cli.add_argument("--approved", help="Exact exported bundle identity, required for publish")
+    cli.add_argument("--pr", help="PR plan ID for a historical archive; never publishes")
     args = cli.parse_args()
     try:
         folder = Path(args.store).resolve()
         with development.locked(folder):
             state = development.load(folder)
+            if args.operation == "archive":
+                plan.require(args.public is not None, "Archive requires --public")
+                result = archive(state, args.pr, json.loads(Path(args.public).read_bytes()))
+                print(json.dumps(result, indent=2))
+                return 0
             settings = development.feature(Path(state["root"]))
             plan.require(development.audit_enabled(state, settings), "Audit publication is disabled or not approved")
             plan.validate(state["manifest"], folder / "inputs")

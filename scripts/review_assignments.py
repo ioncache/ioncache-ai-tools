@@ -348,7 +348,43 @@ def checked_attempt(plan, attempt):
     return attempt
 
 
-def checked_result(attempt):
+def isolation_assessments(handoff):
+    assessments = {}
+    for observer in handoff["other_workers"]:
+        require(isinstance(observer, dict), "Other worker must be an object")
+        records = observer.get("isolation_assessments", [])
+        require(isinstance(records, list), "Isolation assessments must be a list")
+        require(not records or observer["role"] == "adjudicator",
+                "Only the separate adjudicator can assess an isolation classification")
+        for record in records:
+            require(isinstance(record, dict), "Isolation assessment must be an object")
+            key = text(record.get("attempt"), "Assessed attempt")
+            require(key not in assessments, "Duplicate isolation assessment")
+            assessments[key] = record
+    return assessments
+
+
+def checked_isolation_assessment(attempt, assessment):
+    require(set(assessment) == {"attempt", "packet_identity", "result_identity", "kind",
+                               "sources", "assigned_ruleset_only", "otherwise_complete", "evidence"},
+            "Unknown or missing isolation assessment fields")
+    result, packet = attempt["result"], attempt["packet"]
+    require(isinstance(result, dict) and result.get("outcome") in ("complete", "partial") and
+            isinstance(result.get("coverage"), dict) and
+            result["coverage"].get("isolation") == "contaminated",
+            "Only an existing isolation-classification claim can be corrected")
+    require(assessment["packet_identity"] == packet["identity"] and
+            assessment["result_identity"] == digest(result),
+            "Isolation assessment is stale or belongs to another packet/result")
+    require(assessment["kind"] == "evidence-read-only" and
+            assessment["assigned_ruleset_only"] is True and assessment["otherwise_complete"] is True,
+            "Correction requires evidence-only reading, the assigned ruleset, and otherwise complete coverage")
+    require(bool(strings(assessment["sources"], "Assessed evidence sources")) and
+            bool(strings(assessment["evidence"], "Isolation assessment evidence")),
+            "Isolation correction needs source references and supporting evidence")
+
+
+def checked_result(attempt, assessed=False):
     packet, worker = attempt["packet"], attempt["worker"]
     result = attempt["result"]
     if result is not None:
@@ -368,11 +404,20 @@ def checked_result(attempt):
         require(isinstance(result.get("coverage"), dict), "Missing coverage record")
         require(result["coverage"].get("isolation") in
                 ("uncontaminated", "contaminated", "unknown"), "Missing isolation observation")
+        coverage = result["coverage"]
+        ambient = strings(coverage.get("ambient_sources", []), "Ambient project instruction sources")
+        strings(coverage.get("reference_sources", []), "Project sources read as evidence")
+        conflicts = strings(coverage.get("context_conflicts", []), "Conflicting review context")
+        require(not conflicts or coverage["isolation"] == "contaminated",
+                "Known context conflicts require contaminated, incomplete coverage")
+        require(assessed or not ambient or coverage["isolation"] != "contaminated" or conflicts,
+                "Ambient project instructions alone are not contamination; ignore them and use only "
+                "the assigned ruleset. Retain this report rather than silently rewriting it")
         owned = strings(result["coverage"].get("files"), "Coverage files")
         require(set(owned) == set(packet["scope_files"]), "Shard coverage differs from assignment")
 
 
-def attempt_index(plan, records, errors):
+def attempt_index(plan, records, errors, assessments):
     require(isinstance(records, list), "Attempts must be a chronological list")
     indexed, workers, paths, assignments, partitions, rounds = {}, set(), set(), set(), set(), {}
     owned = {}
@@ -391,7 +436,7 @@ def attempt_index(plan, records, errors):
                     "Repeated owned files require another replacement round, not renamed shards")
             require(number >= rounds.get(category, 0), "Category replacement round was reset")
             require(number <= rounds.get(category, -1) + 1, "Missing earlier attempt history")
-            indexed[key] = dict(attempt, result_error=None)
+            indexed[key] = dict(attempt, result_error=None, isolation_assessment=None)
             if worker is not None:
                 workers.add(worker)
             paths.add(packet["result_file"])
@@ -401,7 +446,11 @@ def attempt_index(plan, records, errors):
             rounds[category] = number
             try:
                 require(not reused_worker, "Observed worker context reused")
-                checked_result(attempt)
+                assessment = assessments.get(key)
+                if assessment is not None:
+                    checked_isolation_assessment(attempt, assessment)
+                checked_result(attempt, assessed=assessment is not None)
+                indexed[key]["isolation_assessment"] = assessment
             except (KeyError, TypeError, ValueError) as error:
                 indexed[key]["result_error"] = str(error)
         except (KeyError, TypeError, ValueError) as error:
@@ -426,14 +475,24 @@ def active_coverage(plan, active, indexed, errors, limitations):
                 complete = False
                 continue
             result = attempt["result"]
-            if result is None or result["outcome"] != "complete":
+            assessment = attempt["isolation_assessment"]
+            if result is None or (result["outcome"] != "complete" and assessment is None):
                 complete = False
                 continue
             coverage = result["coverage"]
             files.update(coverage["files"])
-            complete &= coverage["isolation"] != "contaminated"
+            complete &= coverage["isolation"] != "contaminated" or assessment is not None
+            if assessment is not None:
+                limitations.append(f"{category}: adjudicator corrected a read-only isolation classification "
+                                   f"for {key}; original report and attempt retained")
             if coverage["isolation"] == "unknown" or attempt["worker"] is None:
                 limitations.append(f"{category}: native identity or hidden-context visibility is limited")
+            if coverage.get("ambient_sources"):
+                limitations.append(f"{category}: ambient project instructions present but excluded from "
+                                   "the review ruleset: " + ", ".join(coverage["ambient_sources"]))
+            if coverage.get("reference_sources"):
+                limitations.append(f"{category}: project references read as evidence, not review instructions: " +
+                                   ", ".join(coverage["reference_sources"]))
             limitations.extend(result["limitations"])
         if not complete or files != set(plan["request"]["files"]):
             missing.append(category)
@@ -459,10 +518,13 @@ def check(plan, handoff):
                       "; completed categories and other authorized work remain available")
     if handoff["history_complete"] is not True:
         errors.append("Attempt history is incomplete; do not refund unknown spending")
-    indexed, workers, rounds = attempt_index(plan, handoff["attempts"], errors)
+    require(isinstance(handoff["other_workers"], list), "Other workers must be a list")
+    assessments = isolation_assessments(handoff)
+    indexed, workers, rounds = attempt_index(plan, handoff["attempts"], errors, assessments)
+    if not assessments.keys() <= indexed.keys():
+        errors.append("Isolation assessment refers to an unknown attempt")
     limitations.extend(f"{key}: unusable attempt retained: {attempt['result_error']}"
                        for key, attempt in indexed.items() if attempt["result_error"])
-    require(isinstance(handoff["other_workers"], list), "Other workers must be a list")
     roles = set()
     for other in handoff["other_workers"]:
         require(other["role"] in ("coordinator", "adjudicator", "validator"), "Invalid other-worker role")

@@ -2,18 +2,24 @@
 """Exercise development contracts and persisted execution without model or network calls."""
 
 import copy
+import fcntl
 import json
 import os
 from pathlib import Path
+import select
 import subprocess
 import sys
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import development_manifest as manifest
 import development_audit as audit
 import development_run as development
+import development_progress as monitoring
+import development_models as models
 import review_assignments as assignments
 
 
@@ -33,6 +39,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.bundle.mkdir()
         self.store = self.folder / "run"
         self.env = {**os.environ, "HOME": str(self.folder / "home"),
+                    "XDG_STATE_HOME": str(self.folder / "state"),
                     "CODEX_HOME": str(self.folder / "home/.codex"),
                     "COPILOT_HOME": str(self.folder / "home/.copilot"),
                     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -127,6 +134,18 @@ class DevelopmentRunTests(unittest.TestCase):
                                              "independent_review", "result_delivery", "cancellation",
                                              "audit_publication")})
 
+    def test_preflight_discloses_ambient_instructions_without_blocking_progress(self):
+        self.init()
+        self.assertEqual(self.next()["role"], "preflight")
+        data = {name: True for name in ("artifact_access", "native_permissions", "fresh_workers",
+                                       "independent_review", "result_delivery", "cancellation")}
+        data["ambient_sources"] = ["CLAUDE.md", "AGENTS.md", ".claude/rules/testing.md"]
+        self.finish(data)
+        self.assertEqual(self.state["outcome"], "running")
+        self.assertEqual(self.state["consumed_assignments"], 1)
+        self.assertEqual([item["role"] for item in development.load(self.store)["history"]], ["preflight"])
+        self.assertEqual(self.next()["role"], "prepare")
+
     def prepare(self):
         assignment = self.next()
         self.assertEqual(assignment["role"], "prepare")
@@ -181,6 +200,7 @@ class DevelopmentRunTests(unittest.TestCase):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
+                "--storage", assignment["review_storage"],
                 "--max-loops", str(self.plan["limits"]["review_loops"]),
                 "--max-fix-cycles", str(self.plan["limits"]["fix_cycles"])]
         result = self.review_cli(root, args)
@@ -266,8 +286,8 @@ class DevelopmentRunTests(unittest.TestCase):
         active = state["active"]
         self.git("push", "origin", f"HEAD:refs/heads/{self.plan['prs'][0]['branch']}",
                  root=Path(active["root"]))
-        records = [audit.review_record(path) for path in
-                   (Path(active["root"]) / ".review-loop").glob("*/REVIEW_LEDGER.json")]
+        with patch.dict(os.environ, self.env, clear=True):
+            records = [audit.review_record(path) for path in audit.review_locations(state, active)]
         public = {"summary": "Fixture process audit", "method": "Isolated offline category fixtures",
                   "verification": "Fixture checks passed; no native model was launched.",
                   "findings": [{"review": row["id"], "id": item["id"], "summary": "A fixture concern",
@@ -381,6 +401,66 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
+
+    def test_published_audit_survives_later_worker_and_control_model_observations(self):
+        self.start_audit_fixture()
+        active = self.state["assignment"]
+        observation = ("model-report", self.store, "--invocation", "audit-observations", "--call", "1",
+                       "--role", active["role"], "--assignment", active["id"],
+                       "--selected-model", "requested-audit", "--actual-model", "observed-audit",
+                       "--source", "native-context")
+        self.cli(*observation)
+        state, active, exported = self.audit_export()
+        files = {name: (Path(exported["directory"]) / name).read_bytes() for name in audit.FILES}
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            receipt = audit.publish(state, active, exported["identity"])
+        self.cli(*observation)
+        self.cli("model-report", self.store, "--invocation", "audit-observations", "--call", "2",
+                 "--role", "development-control", "--actual-model", "observed-control",
+                 "--source", "native-context")
+        self.finish(receipt)
+        self.assertEqual(len(self.audit_comments), 1)
+        self.assertEqual(files, {name: (Path(exported["directory"]) / name).read_bytes()
+                                 for name in audit.FILES})
+        records, unavailable = models.observations(development.load(self.store), "first")
+        self.assertFalse(unavailable)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(self.next()["role"], "review")
+
+    def test_complete_review_store_and_archive_survive_worktree_cleanup(self):
+        root = self.start_audit_fixture()
+        while self.state["assignment"]:
+            self.execute_fixture(self.state["assignment"])
+            self.next()
+        saved = development.load(self.store)
+        final = next(item for item in reversed(saved["history"]) if item["role"] == "audit-final")
+        public = self.store / "reports" / final["id"] / "public.json"
+        with patch.dict(os.environ, self.env, clear=True):
+            paths = audit.review_locations(saved, final)
+        originals = {path: path.read_bytes() for path in paths}
+        self.assertTrue(paths)
+        self.assertTrue(all(path.is_relative_to(self.store / "reviews") for path in paths))
+        self.assertFalse((root / ".review-loop").exists())
+        before = (self.store / "RUN.json").read_bytes()
+        comments = len(self.audit_comments)
+        self.git("worktree", "remove", str(root))
+        self.assertFalse(root.exists())
+        result = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        exported = json.loads((Path(result["directory"]) / "audit.json").read_bytes())
+        self.assertTrue(result["historical"])
+        self.assertEqual(exported["stage"], "archive")
+        self.assertTrue(all(record["available"] for record in exported["reviews"]))
+        self.assertEqual(originals, {path: path.read_bytes() for path in paths})
+        self.assertEqual(before, (self.store / "RUN.json").read_bytes())
+        self.assertEqual(comments, len(self.audit_comments))
+        self.assertIn("Reserve an audit", self.audit_cli("publish", "--approved", result["identity"], ok=False))
+        last_review = next(item for item in reversed(saved["history"]) if item["role"] == "review")
+        missing = Path(last_review["report"]["data"]["ledger"])
+        missing.parent.rename(self.store / ("missing-review-" + missing.parent.name))
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        records = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())["reviews"]
+        self.assertEqual(len(records), len(paths))
+        self.assertFalse(next(item for item in records if item["id"] == missing.parent.name)["available"])
 
     def test_audit_repository_identity_accepts_casing_but_rejects_other_targets(self):
         self.start_audit_fixture()
@@ -631,9 +711,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual(len(self.audit_comments), 2)
 
-    def workflow(self, scenario):
+    def workflow(self, scenario, expected_models=None):
         fixture = {"python": sys.executable, "store": str(self.store), "scenario": scenario,
-                   "invocation": f"offline-{self.state['revision']}"}
+                   "invocation": f"offline-{self.state['revision']}", "expected_models": expected_models}
         result = subprocess.run(
             ["node", str(SCRIPTS / "development_workflow_self_check.js"), "--persisted-controller"],
             input=json.dumps(fixture), cwd=self.root, env=self.env, capture_output=True, text=True)
@@ -648,28 +728,47 @@ class DevelopmentRunTests(unittest.TestCase):
                     "--shutdown-evidence", "The synchronous fixture process and workers exited")
         self.mutate("resume", "--reason", "Continue within the retained allowance")
 
-    def test_workflow_scope_denial_recovers_in_the_same_persisted_run(self):
-        self.plan["limits"]["attempts"] = 3
+    def test_workflow_accepts_required_files_absent_from_legacy_hints(self):
         self.init()
         self.preflight()
         root = self.prepare()
-        for attempt in (1, 2):
-            self.workflow("scope")
-            self.assertEqual(self.state["outcome"], "blocked")
-            self.assertIn("outside the approved scope", self.state["reason"])
-            self.assertEqual(self.state["assignment"]["attempt"], attempt)
-            self.assertEqual(self.workflow("complete"), ["development-control"])
-            self.mutate("resume", "--reason", "Worker still outstanding", ok=False)
-            if attempt == 2:
-                (root / "unapproved.txt").unlink()
-            self.retire_fixture()
-        self.workflow("complete")
+        self.workflow("scope")
         saved = json.loads((self.store / "RUN.json").read_bytes())
         implementations = [item for item in saved["history"] if item["role"] == "implement"]
-        self.assertEqual([item["outcome"] for item in implementations], ["retired", "retired", "complete"])
-        self.assertEqual(self.state["consumed_assignments"], 6)
+        self.assertEqual([item["outcome"] for item in implementations], ["complete"])
+        self.assertEqual(self.state["consumed_assignments"], 4)
         self.assertEqual(self.state["prs"]["first"]["position"], 2)
-        self.assertEqual((root / "app.txt").read_text(), "after\n")
+        self.assertEqual((root / "unapproved.txt").read_text(), "after\n")
+        self.assertEqual((root / "app.txt").read_text(), "before\n")
+        self.assertEqual(saved["manifest"]["tasks"][0]["paths"], ["app.txt"])
+
+    def test_tasks_without_predicted_paths_review_all_discovered_changes(self):
+        del self.plan["tasks"][0]["paths"]
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.assertNotIn("paths", self.next()["task_plan"])
+        (root / "dependency.txt").write_text("Required by the task\n")
+        self.finish()
+        self.next()
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_review_storage_recovery_moves_complete_evidence_without_another_attempt(self):
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        original = Path(data["ledger"])
+        alternate = self.folder / "other-reviews" / original.parent.parent.name / original.parent.name
+        alternate.parent.mkdir(parents=True)
+        original.parent.rename(alternate)
+        before = self.state["consumed_assignments"]
+        data["ledger"] = str(alternate / original.name)
+        self.assertIn("pinned review_storage", self.finish(data, ok=False))
+        alternate.rename(original.parent)
+        data["ledger"] = str(original)
+        self.finish(data)
+        self.assertEqual(self.state["consumed_assignments"], before)
+        self.assertEqual(self.next()["role"], "commit")
 
     def test_workflow_native_failures_preserve_workers_effects_and_allowance(self):
         self.plan["limits"]["attempts"] = 3
@@ -721,7 +820,8 @@ class DevelopmentRunTests(unittest.TestCase):
             self.assertEqual(self.state["assignment"]["attempt"], attempt)
             if scenario != "review-throw":
                 self.assertNotIn("reviewer", roles)
-            histories = list((root / ".review-loop").glob("*/REVIEW_LEDGER.json"))
+            with patch.dict(os.environ, self.env, clear=True):
+                histories = audit.review_locations(development.load(self.store), self.state["assignment"])
             self.assertEqual(len(histories), 1)
             ledger = histories[0]
             retained = ledger.read_bytes()
@@ -786,6 +886,471 @@ class DevelopmentRunTests(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "Artifact changed"):
             manifest.validate(self.plan, self.bundle)
 
+    def test_provider_diagnostics_preserve_identity_and_reject_before_reservation(self):
+        self.plan["configuration"]["execution"]["provider"] = "Claude Workflow ioncache-ai-tools:autonomous-development-run"
+        original = copy.deepcopy(self.plan)
+        self.path.write_bytes(manifest.encode(self.plan))
+        validated = self.cli("validate", self.path)
+        self.assertEqual(validated["identity"], manifest.digest(manifest.encode(original)))
+        self.assertEqual(validated["manifest"], original)
+        self.assertIn("claude-workflows", " ".join(validated["warnings"]))
+        self.assertIn("provider", self.cli("validate", self.path, "--provider", "claude-workflows", ok=False))
+        self.assertIn("provider", self.cli(
+            "init", self.path, "--approved", validated["identity"], "--root", self.root,
+            "--store", self.store, "--provider", "claude-workflows", ok=False))
+        self.assertFalse(self.store.exists())
+        self.init()
+        saved = (self.store / "RUN.json").read_bytes()
+        self.assertIn("provider", self.mutate("next", "--provider", "claude-workflows", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), saved)
+        self.workflow("provider-mismatch")
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.assertEqual(self.state["consumed_assignments"], 0)
+        self.assertIsNone(self.state["assignment"])
+        self.mutate("resume", "--reason", "Use an executor for the approved provider")
+        self.assertEqual(self.next()["role"], "preflight")
+
+    def test_external_worktree_supports_review_and_audit_lifecycle(self):
+        self.configure_audit()
+        self.plan["prs"][0]["worktree"] = "../project.worktrees/fixture"
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        assignment = self.next()
+        self.cli("model-report", self.store, "--invocation", "external-audit-fixture", "--call", "1",
+                 "--role", "implement", "--assignment", assignment["id"], "--selected-model", "requested",
+                 "--actual-model", "observed", "--source", "native-transcript")
+        self.execute_fixture(assignment)
+        with patch.dict(os.environ, self.audit_git_env):
+            self.env.update(self.audit_git_env)
+            self.assertEqual(root, self.folder / "project.worktrees/fixture")
+            while self.next():
+                self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual((self.root / "app.txt").read_text(), "before\n")
+        records = list((self.store / "reports").glob("*/audit/audit.json"))
+        self.assertEqual(len(records), 2)
+        for path in records:
+            exported = json.loads(path.read_bytes())
+            self.assertEqual(exported["models"][0]["selected_model"], "requested")
+            self.assertEqual(exported["models"][0]["actual_model"], "observed")
+            self.assertNotIn("external-audit-fixture", path.read_text())
+
+    def test_absolute_worktree_and_store_separation(self):
+        self.plan["prs"][0]["worktree"] = str(self.folder / "external")
+        self.path.write_bytes(manifest.encode(self.plan))
+        identity = self.cli("validate", self.path)["identity"]
+        for store in (self.folder / "external/private", self.folder / "external", self.folder):
+            error = self.cli("init", self.path, "--approved", identity, "--root", self.root,
+                             "--store", store, ok=False)
+            self.assertTrue("overlap" in error or "already exists" in error, error)
+        self.init()
+        self.preflight()
+        self.assertEqual(self.prepare(), self.folder / "external")
+
+    def test_external_worktree_aliases_and_path_drift_are_rejected(self):
+        parent = self.folder / "worktrees"
+        parent.mkdir()
+        alias = self.folder / "alias"
+        alias.symlink_to(parent, target_is_directory=True)
+        self.plan["prs"].append({**self.plan["prs"][0], "id": "second", "branch": "second",
+                                 "worktree": "../alias/first/nested"})
+        self.plan["prs"][0]["worktree"] = "../worktrees/first"
+        self.plan["tasks"].append({**self.plan["tasks"][0], "id": "second", "pr": "second"})
+        self.path.write_bytes(manifest.encode(self.plan))
+        identity = self.cli("validate", self.path)["identity"]
+        self.assertIn("overlap", self.cli("init", self.path, "--approved", identity,
+                                        "--root", self.root, "--store", self.store, ok=False))
+        self.plan["prs"].pop()
+        self.plan["tasks"].pop()
+        self.plan["prs"][0]["worktree"] = "../alias/first"
+        self.init()
+        self.preflight()
+        alias.unlink()
+        alias.symlink_to(self.folder / "elsewhere", target_is_directory=True)
+        self.assertIn("path changed", self.mutate("next", ok=False))
+        alias.unlink()
+        alias.symlink_to(parent, target_is_directory=True)
+        self.assertEqual(self.prepare(), parent / "first")
+
+    def test_external_metadata_alias_is_rejected_with_safe_sibling_recovery(self):
+        self.init()
+        self.preflight()
+        linked = self.prepare()
+        for index, target in enumerate((self.root / ".git", self.root / ".git/worktrees",
+                                        self.folder / ".review-loop")):
+            with self.subTest(target=target):
+                alias = self.folder / f"destination-{index}"
+                alias.symlink_to(target, target_is_directory=True)
+                candidate = copy.deepcopy(self.plan)
+                candidate["prs"][0]["worktree"] = str(alias / "child")
+                with self.assertRaisesRegex(manifest.ManifestError, "metadata"):
+                    development.worktree_targets(linked, candidate)
+                alias.unlink()
+        candidate["prs"][0]["worktree"] = str(self.folder / "siblings/child")
+        self.assertEqual(development.worktree_targets(linked, candidate),
+                         {"first": self.folder / "siblings/child"})
+        separate = self.folder / "separate-repository"
+        administration = self.folder / "administration"
+        subprocess.run(["git", "init", "-q", "--separate-git-dir", str(administration), str(separate)],
+                       env=self.env, check=True)
+        candidate["prs"][0]["worktree"] = str(administration / "child")
+        with self.assertRaisesRegex(manifest.ManifestError, "metadata"):
+            development.worktree_targets(separate, candidate)
+
+    def test_worktree_controls_and_options_do_not_relax_task_paths(self):
+        for value in (".", "/", "../.git/tree"):
+            with self.subTest(value=value):
+                candidate = copy.deepcopy(self.plan)
+                candidate["prs"][0]["worktree"] = value
+                with self.assertRaises(manifest.ManifestError):
+                    manifest.validate(candidate, self.bundle)
+        for value in ("-checkout", "bad\tpath", "bad" + chr(127)):
+            candidate = copy.deepcopy(self.plan)
+            candidate["prs"][0]["worktree"] = value
+            validated = manifest.validate(candidate, self.bundle)
+            self.assertEqual(validated["identity"], manifest.digest(manifest.encode(candidate)))
+            self.path.write_bytes(manifest.encode(candidate))
+            self.assertIn("Worktree path", self.cli(
+                "init", self.path, "--approved", validated["identity"], "--root", self.root,
+                "--store", self.store, ok=False))
+        self.plan["prs"][0]["worktree"] = "../external"
+        self.plan["tasks"][0]["paths"] = ["../outside"]
+        with self.assertRaises(manifest.ManifestError):
+            manifest.validate(self.plan, self.bundle)
+
+    def watch_process(self, *args):
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "development_run.py"), "watch", str(self.store),
+             "--interval", "0.02", *args], cwd=self.bundle, env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(self.stop_watch, process)
+        return process
+
+    def stop_watch(self, process):
+        if process.poll() is None:
+            process.terminate()
+        process.communicate(timeout=5)
+
+    def watch_line(self, process):
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        self.assertTrue(ready, "Monitor did not report promptly")
+        line = process.stdout.readline()
+        self.assertTrue(line, process.stderr.read() if process.poll() is not None else "Monitor closed stdout")
+        return json.loads(line)
+
+    def test_watch_reports_changes_and_stalls_without_state_or_config_writes(self):
+        self.init()
+        before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns)
+                  for base in (self.store, self.folder / "home")
+                  for path in base.rglob("*") if path.is_file()}
+        with (self.store / ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            watcher = self.watch_process("--stale-after", "0.1")
+            initial = self.watch_line(watcher)
+            self.assertEqual(initial["condition"], "running")
+            self.assertEqual(self.watch_line(watcher)["event"], "stalled")
+            self.assertEqual(watcher.wait(timeout=5), 3)
+        after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns)
+                 for base in (self.store, self.folder / "home")
+                 for path in base.rglob("*") if path.is_file() and path.name != ".lock"}
+        self.assertEqual(after, {key: value for key, value in before.items() if not key.endswith("/.lock")})
+        watcher = self.watch_process()
+        self.watch_line(watcher)
+        self.next()
+        self.assertEqual(self.watch_line(watcher)["assignment"]["role"], "preflight")
+        self.mutate("interrupt", "--reason", "Fixture native interruption")
+        terminal = self.watch_line(watcher)
+        self.assertEqual(terminal["condition"], "interrupted")
+        self.assertEqual(terminal["outcome"], "blocked")
+        self.assertEqual(watcher.wait(timeout=5), 1)
+
+    def start_review_fixture(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.finish()
+        self.next()
+        return root
+
+    def test_watch_hides_private_rejection_diagnostics_but_retains_recovery_reference(self):
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        path = Path(data["handoff"])
+        handoff = json.loads(path.read_bytes())
+        handoff["attempts"][0]["result"]["limitations"].append("PRIVATE-REVIEW-DIAGNOSTIC")
+        handoff["active"].pop("documentation")
+        path.write_bytes(manifest.encode(handoff))
+        error = self.finish(data, ok=False)
+        self.assertIn("PRIVATE-REVIEW-DIAGNOSTIC", error)
+        self.mutate("interrupt", "--reason", error)
+        process = self.watch_process()
+        output = self.watch_line(process)
+        self.assertNotIn("PRIVATE-REVIEW-DIAGNOSTIC", json.dumps(output))
+        self.assertEqual(output["diagnostic_reference"], str(self.store / "RUN.json") + "#/reason")
+        self.assertEqual(output["condition"], "interrupted")
+        self.assertEqual(process.wait(timeout=5), 1)
+        self.assertIn("PRIVATE-REVIEW-DIAGNOSTIC", self.cli("status", self.store)["reason"])
+
+    def test_watch_reconnect_uses_persisted_age_and_legacy_uses_observer_age(self):
+        self.init()
+        args = SimpleNamespace(interval=1, stale_after=5)
+        for legacy, clocks, sleeps in ((False, [0, 0], 0), (True, [0, 0, 6], 1)):
+            with self.subTest(legacy=legacy):
+                state = development.load(self.store)
+                if legacy:
+                    state.pop("updated_at")
+                else:
+                    state["updated_at"] = 990
+                original = copy.deepcopy(state)
+                with patch.object(monitoring.time, "time", return_value=1000), \
+                     patch.object(monitoring.time, "monotonic", side_effect=clocks), \
+                     patch.object(monitoring.time, "sleep") as sleep, \
+                     patch.object(monitoring, "emit") as emit:
+                    self.assertEqual(monitoring.watch(self.store, lambda _: state, args), 3)
+                self.assertEqual(sleep.call_count, sleeps)
+                self.assertEqual(emit.call_args.args[0]["event"], "stalled")
+                self.assertEqual(state, original)
+
+    def progress(self, dispatch, role, event, *args, ok=True):
+        return self.cli("progress", self.store, "--assignment", self.state["assignment"]["id"],
+                        "--dispatch", dispatch, "--role", role, "--event", event, *args, ok=ok)
+
+    def test_watch_reports_review_dispatches_cycles_and_unavailable_progress(self):
+        self.start_review_fixture()
+        watcher = self.watch_process()
+        self.watch_line(watcher)
+        original = (self.store / "RUN.json").read_bytes()
+        self.progress(1, "review-owner", "checkpoint", "--loop", 1, "--cycle", 1)
+        observed = self.watch_line(watcher)
+        self.assertEqual(observed["review_progress"][0]["cycle"], 1)
+        self.progress(2, "reviewer", "started", "--category", "correctness")
+        self.assertEqual(self.watch_line(watcher)["review_progress"][-1]["event"], "started")
+        self.progress(2, "reviewer", "reported", "--category", "correctness")
+        self.assertEqual(self.watch_line(watcher)["review_progress"][-1]["event"], "reported")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        self.assertIn("identity changed", self.progress(2, "fixer", "started", ok=False))
+        self.assertIn("allowance", self.progress(21, "reviewer", "started", ok=False))
+        path = self.store / "progress" / self.state["assignment"]["id"] / "000002.json"
+        private = self.folder / "private.json"
+        private.write_text('{"private":"DO-NOT-PRINT"}')
+        path.unlink()
+        path.symlink_to(private)
+        observed = self.watch_line(watcher)
+        self.assertIsNotNone(observed["progress_error"])
+        self.assertNotIn("DO-NOT-PRINT", json.dumps(observed))
+        self.assertEqual(watcher.wait(timeout=5), 2)
+        self.assertIn("Symlink", self.progress(2, "reviewer", "reported", "--category", "correctness", ok=False))
+        self.assertEqual(private.read_text(), '{"private":"DO-NOT-PRINT"}')
+        path.unlink()
+        self.progress(2, "reviewer", "reported", "--category", "correctness")
+        self.assertIsNone(monitoring.snapshot(development.load(self.store))["progress_error"])
+
+    def test_progress_opt_out_does_not_disable_execution_or_monitoring(self):
+        self.start_review_fixture()
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text(json.dumps({"features": {"autonomous-development-progress": False}}))
+        self.assertFalse(self.cli("status", self.store)["assignment"]["monitoring"]["enabled"])
+        self.assertFalse(self.progress(1, "review-owner", "started")["recorded"])
+        self.assertFalse((self.store / "progress").exists())
+        watcher = self.watch_process()
+        self.assertEqual(self.watch_line(watcher)["condition"], "running")
+        self.finish(outcome="blocked")
+        self.assertEqual(self.watch_line(watcher)["condition"], "blocked")
+        self.assertEqual(watcher.wait(timeout=5), 1)
+        self.mutate("resume", "--reason", "Continue without optional progress")
+        self.assertEqual(self.next()["attempt"], 2)
+
+    def test_watch_classifies_all_terminal_outcomes_and_unreadable_state(self):
+        self.init()
+        initial = development.load(self.store)
+        for outcome, reason, condition, code in (
+            ("completed", None, "complete", 0),
+            ("blocked", "Fixture blocked", "blocked", 1),
+            ("waiting", "Fixture prerequisite", "waiting", 1),
+            ("failed", "Assignment allowance exhausted: run:preflight:pr", "exhausted", 1),
+            ("failed", "Other failure", "failed", 1),
+        ):
+            with self.subTest(condition=condition):
+                development.save(self.store, {**initial, "outcome": outcome, "reason": reason})
+                process = self.watch_process()
+                self.assertEqual(self.watch_line(process)["condition"], condition)
+                self.assertEqual(process.wait(timeout=5), code)
+        (self.store / "RUN.json").write_text('{"unfinished":')
+        process = self.watch_process()
+        self.assertEqual(self.watch_line(process)["event"], "unavailable")
+        self.assertEqual(process.wait(timeout=5), 2)
+
+    def test_workflow_writes_private_progress_for_actual_flat_dispatches(self):
+        self.init()
+        self.preflight()
+        self.prepare()
+        self.next()
+        self.finish()
+        roles = self.workflow("review-complete")
+        self.assertIn("reviewer", roles)
+        saved = development.load(self.store)
+        review = next(item for item in saved["history"] if item["role"] == "review")
+        records, error = monitoring.records(saved, review)
+        self.assertIsNone(error)
+        self.assertEqual(len(records), roles.count("reviewer") + roles.count("review-owner"))
+        self.assertEqual(records[0]["role"], "review-owner")
+        self.assertEqual(records[-1]["role"], "review-owner")
+        self.assertTrue(all(item["event"] == "reported" for item in records))
+        self.assertEqual({item["category"] for item in records if item["role"] == "reviewer"},
+                         monitoring.category_names() - {"jsdoc"})
+        observations, unavailable = models.observations(saved, "first")
+        self.assertFalse(unavailable)
+        self.assertEqual(len(observations), len(roles))
+        for item in observations:
+            self.assertEqual(item["actual_model"], "observed-" + item["role"])
+            self.assertNotEqual(item["actual_model"], item["selected_model"])
+
+    def test_manifest_native_choices_and_review_overrides_keep_old_identity(self):
+        original = manifest.validate(self.plan, self.bundle)
+        self.assertEqual(original["identity"], manifest.digest(manifest.encode(self.plan)))
+        execution = self.plan["configuration"]["execution"]
+        execution["models"] = {
+            "development-control": {"model": "native-cheap", "effort": "low", "fallback": "fail"},
+            "implement": {"model": "native-capable", "effort": "high", "fallback": "fail"},
+        }
+        execution["review_options"] = {"reviewer_model": "native-reviewer", "reviewer_effort": "high"}
+        self.init()
+        self.next()
+        options = self.state["assignment"]["model_selection"]["review_options"]
+        self.assertEqual(options["roles"]["reviewer"]["model"], "native-reviewer")
+        self.assertEqual(options["roles"]["reviewer"]["fallback"], "fail")
+        self.assertIn("reviewer_model", options["specified"])
+        with self.assertRaises(manifest.ManifestError):
+            manifest.validate({**self.plan, "configuration": {
+                **self.plan["configuration"], "execution": {**execution, "models": {"unknown": {}}}
+            }}, self.bundle)
+
+    def test_native_model_observation_requires_a_source_and_stays_separate_from_selection(self):
+        self.init()
+        self.next()
+        args = ("model-report", self.store, "--invocation", "private-fixture", "--call", "1",
+                "--role", "preflight", "--assignment", self.state["assignment"]["id"],
+                "--selected-model", "requested-model", "--selected-effort", "high")
+        result = self.cli(*args)
+        path = Path(result["model_report"])
+        self.assertIsNone(json.loads(path.read_bytes())["actual_model"])
+        self.assertIn("native observation source", self.cli(*args, "--actual-model", "claimed-model", ok=False))
+        self.cli(*args, "--actual-model", "observed-model", "--source", "native-transcript")
+        self.cli(*args)
+        item = json.loads(path.read_bytes())
+        self.assertEqual(item["actual_model"], "observed-model")
+        self.assertEqual(item["selected_model"], "requested-model")
+        report_path = self.report(outcome="blocked")
+        report = json.loads(report_path.read_bytes())
+        report["model_report"] = str(path)
+        report_path.write_bytes(manifest.encode(report))
+        self.mutate("record", "--report", report_path)
+        records, unavailable = models.observations(development.load(self.store), "first")
+        self.assertFalse(unavailable)
+        self.assertEqual(records[0]["source"], "native-transcript")
+        self.assertNotIn("private-fixture", json.dumps(records))
+
+    def test_configured_model_recovery_is_counted_and_not_repeatable(self):
+        self.plan["limits"]["attempts"] = 3
+        self.plan["configuration"]["execution"]["models"] = {
+            "preflight": {"model": "native-explicit", "effort": "high", "fallback": "configured"}
+        }
+        self.init()
+        first = self.next()
+        args = ("--key", first["key"], "--role", "preflight", "--reason", "Native model rejected",
+                "--shutdown-evidence", "Native fixture exited without effects")
+        self.assertIn("Collect or retire", self.mutate("model-fallback", *args, ok=False))
+        self.finish(outcome="blocked")
+        self.mutate("model-fallback", *args)
+        self.mutate("resume", "--reason", "Use the permitted configured retry")
+        second = self.next()
+        self.assertEqual(second["configured_model_fallbacks"], ["preflight"])
+        self.assertEqual(second["attempt"], 2)
+        self.assertEqual(self.state["consumed_assignments"], 2)
+        self.finish(outcome="blocked")
+        self.assertIn("already scheduled", self.mutate("model-fallback", *args, ok=False))
+        self.mutate("resume", "--reason", "Keep other authorized recovery available")
+        self.assertEqual(self.next()["configured_model_fallbacks"], [])
+
+    def test_explicit_review_fallback_failure_cannot_be_waived(self):
+        self.plan["configuration"]["execution"]["review_options"] = {"fallback": "fail"}
+        self.start_review_fixture()
+        assignment = self.state["assignment"]
+        self.finish(outcome="blocked")
+        self.assertIn("requires failure", self.mutate(
+            "model-fallback", "--key", assignment["key"], "--role", "reviewer",
+            "--reason", "Model rejected", "--shutdown-evidence", "Fixture exited", ok=False))
+        self.assertEqual(self.state["consumed_assignments"], 4)
+
+    def test_launch_only_fallback_policy_survives_durable_recovery(self):
+        self.plan["limits"]["attempts"] = 3
+        self.init()
+        choices = {role: {"model": "native-" + role, "effort": "high", "fallback": "fail"}
+                   for role in models.ROLES}
+        self.mutate("next", "--models", json.dumps(choices))
+        first = self.state["assignment"]
+        self.finish(outcome="blocked")
+        flags = ("--key", first["key"], "--role", "preflight", "--reason", "Native model unavailable",
+                 "--shutdown-evidence", "The fixture worker exited without effects")
+        self.assertIn("requires failure", self.mutate("model-fallback", *flags, ok=False))
+        self.mutate("resume", "--reason", "Retry with the newly selected configured-fallback policy")
+        choices["preflight"]["fallback"] = "configured"
+        self.mutate("next", "--models", json.dumps(choices))
+        self.finish(outcome="blocked")
+        self.mutate("model-fallback", *flags)
+        self.mutate("resume", "--reason", "Consume the allowed configured retry")
+        self.mutate("next", "--models", json.dumps(choices))
+        self.assertEqual(self.state["assignment"]["configured_model_fallbacks"], ["preflight"])
+        self.assertEqual(self.state["consumed_assignments"], 3)
+
+    def model_optout_dispatch(self, feature):
+        self.plan["configuration"]["execution"]["models"] = {
+            "reviewer": {"model": "explicit-reviewer", "effort": "medium", "fallback": "fail"}}
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(parents=True)
+        config.write_bytes(manifest.encode({"features": {feature: False}}))
+        self.init()
+        self.preflight()
+        self.prepare()
+        implementation = ({} if feature == "autonomous-development-model-selection"
+                          else {"model": "fixture-implement", "effort": "high"})
+        observed = self.workflow("review-model-policy", {
+            "implement": implementation, "review-owner": {},
+            "reviewer": {"model": "explicit-reviewer", "effort": "medium"}})
+        self.assertIn("implement", observed)
+        self.assertIn("reviewer", observed)
+        self.assertEqual(observed[-2:], ["commit", "development-control"])
+
+    def test_review_model_optout_preserves_implementation_and_explicit_review_choices(self):
+        self.model_optout_dispatch("review-auto-model-selection")
+
+    def test_development_model_optout_preserves_explicit_review_choices(self):
+        self.model_optout_dispatch("autonomous-development-model-selection")
+
+    def test_model_observations_do_not_cross_pr_boundaries(self):
+        self.start_review_fixture()
+        state = development.load(self.store)
+        first = next(item for item in state["history"] if item["role"] == "implement")
+        second = {**first, "id": "A9000", "pr": "second"}
+        state["history"].append(second)
+        for call, assignment, role, actual in (
+            (1, first["id"], "implement", "first-pr-only"),
+            (2, second["id"], "implement", "second-pr-only"),
+            (3, None, "development-control", "shared-control"),
+        ):
+            models.write(state, SimpleNamespace(
+                call=call, invocation="multi-pr-models", assignment=assignment, role=role,
+                source="native-context", selected_model=None, selected_effort=None,
+                actual_model=actual, actual_effort=None))
+        for pr, expected in (("first", "first-pr-only"), ("second", "second-pr-only")):
+            records, unavailable = models.observations(state, pr)
+            self.assertFalse(unavailable)
+            self.assertEqual({item["actual_model"] for item in records}, {expected, "shared-control"})
+
     def test_category_handback_is_required_and_recoverable_without_resetting_work(self):
         self.init()
         self.preflight()
@@ -806,6 +1371,40 @@ class DevelopmentRunTests(unittest.TestCase):
         coverage = self.state["prs"]["first"]["review"]["coverage"]
         self.assertTrue(coverage["structurally_complete"])
         self.assertTrue(coverage["limitations"])
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_source_read_assessment_recovers_review_without_restarting_assignment(self):
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        path = Path(data["handoff"])
+        handoff = json.loads(path.read_text())
+        attempt = next(item for item in handoff["attempts"]
+                       if item["packet"]["review_type"] == "documentation")
+        report = attempt["result"]
+        source = ".github/instructions/swr.instructions.md"
+        report["outcome"] = "partial"
+        report["coverage"].update(isolation="contaminated", reference_sources=[source],
+                                  context_conflicts=["Read a project:swr source referenced by the plan"])
+        original = manifest.encode(report)
+        report_path = Path(attempt["packet"]["result_file"])
+        report_path.write_bytes(original)
+        path.write_bytes(manifest.encode(handoff))
+        frozen = Path(data["plan"]).read_bytes()
+        consumed = self.state["consumed_assignments"]
+        self.assertIn("Category review is incomplete", self.finish(data, ok=False))
+        handoff["other_workers"][0]["isolation_assessments"] = [{
+            "attempt": attempt["id"], "packet_identity": attempt["packet"]["identity"],
+            "result_identity": assignments.digest(report), "kind": "evidence-read-only",
+            "sources": [source], "assigned_ruleset_only": True, "otherwise_complete": True,
+            "evidence": ["Offline assessment: the original documentation pass is complete; "
+                         "only its classification of the reference read is mistaken."],
+        }]
+        path.write_bytes(manifest.encode(handoff))
+        self.finish(data)
+        self.assertEqual(report_path.read_bytes(), original)
+        self.assertEqual(Path(data["plan"]).read_bytes(), frozen)
+        self.assertEqual(self.state["consumed_assignments"], consumed)
+        self.assertTrue(self.state["prs"]["first"]["review"]["coverage"]["structurally_complete"])
         self.assertEqual(self.next()["role"], "commit")
 
     def test_legacy_review_requires_counted_reconciliation_before_commit(self):
@@ -989,9 +1588,10 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["revision"], revision)
         root = self.prepare()
         self.next()
-        (root / "unapproved.txt").write_text("outside scope")
-        self.assertIn("outside the approved scope", self.finish(ok=False))
-        (root / "unapproved.txt").unlink()
+        (root / "discovered.txt").write_text("required implementation dependency")
+        self.git("add", "discovered.txt", root=root)
+        self.assertIn("HEAD or staging", self.finish(ok=False))
+        self.git("restore", "--staged", "discovered.txt", root=root)
         path = self.report()
         report = json.loads(path.read_text())
         report["artifacts"]["design"] = "0" * 64
@@ -1317,6 +1917,7 @@ def workflow_review_fixture(fixture):
         else:
             status = worker.review_cli(root, [
                 "init", "--objective", "Persisted workflow review", "--scope", "fixture",
+                "--storage", assignment["review_storage"],
                 "--base", assignment["comparison_base"],
                 "--max-loops", str(worker.plan["limits"]["review_loops"]),
                 "--max-fix-cycles", str(worker.plan["limits"]["fix_cycles"])])

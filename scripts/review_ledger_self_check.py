@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -51,13 +52,22 @@ class ReviewLedgerTests(unittest.TestCase):
         """Isolate Git configuration and files so fixtures cannot affect a real project."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve()
+        self.folder = Path(self.temp.name).resolve()
+        self.root = self.folder / "repository"
+        self.root.mkdir()
         self.cwd = self.root
-        self.env = {**os.environ, "HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1",
+        self.env = {**os.environ, "HOME": str(self.folder / "home"),
+                    "XDG_STATE_HOME": str(self.folder / "state"),
+                    "CODEX_HOME": str(self.folder / "home/.codex"),
+                    "COPILOT_HOME": str(self.folder / "home/.copilot"), "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": os.devnull, "PYTHONDONTWRITEBYTECODE": "1"}
         for key in list(self.env):
             if key.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")):
                 self.env.pop(key)
+        environment = patch.dict(os.environ, self.env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.storage = review_ledger.storage(self.root)
         self.git("init", "-q")
         self.git("config", "user.name", "Ledger fixture")
         self.git("config", "user.email", "fixture@example.invalid")
@@ -623,7 +633,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.fix()
         for directory in (self.root, nested):
             self.cwd = directory
-            for ledger in (self.ledger, str(Path(self.ledger).relative_to(self.root))):
+            for ledger in (self.ledger, os.path.relpath(self.ledger, self.root)):
                 with self.subTest(directory=directory, ledger=ledger):
                     report = self.cli(["status", ledger])
                     self.assertEqual(report["ledger"], self.ledger)
@@ -643,29 +653,129 @@ class ReviewLedgerTests(unittest.TestCase):
                     self.assertIn("-before", differences[0]["diff"])
                     self.assertIn("+fixed", differences[0]["diff"])
 
-    def test_ledger_paths_reject_outside_worktree(self):
-        """Root-relative lookup must not admit traversal or another worktree."""
+    def test_ledger_paths_accept_external_storage_but_reject_another_owner(self):
+        """Storage is external; ownership still binds it to the original checkout."""
         nested = self.root / "source"
         nested.mkdir()
         self.init()
-        relative = Path(self.ledger).relative_to(self.root)
         self.cwd = nested
-        for ledger in (str(Path("..") / relative),
-                       str(self.root.parent / relative), str(nested / relative)):
+        self.assertEqual(self.cli(["status", self.ledger])["snapshot"], self.state["snapshot"])
+        for ledger in (self.storage.parent / ("a" * 64) / Path(self.ledger).parent.name / "REVIEW_LEDGER.json",
+                       self.root / "storage" / Path(self.ledger).parent.name / "REVIEW_LEDGER.json"):
             with self.subTest(ledger=ledger):
-                error = self.cli(["status", ledger], ok=False)
-                self.assertIn("Ledger must be", error)
+                error = self.cli(["status", str(ledger)], ok=False)
+                self.assertRegex(error, "different worktree|outside its repository")
 
     def test_ledger_paths_reject_symlink_run(self):
         """A valid-looking storage path cannot alias a run through a symlink."""
         self.init()
-        alias = self.root / ".review-loop" / "alias"
+        alias = self.storage / ("b" * 32)
         alias.symlink_to(Path(self.ledger).parent)
         for ledger in (alias / "REVIEW_LEDGER.json",
-                       alias.relative_to(self.root) / "REVIEW_LEDGER.json"):
+                       Path(os.path.relpath(alias, self.root)) / "REVIEW_LEDGER.json"):
             with self.subTest(ledger=ledger):
                 error = self.cli(["status", str(ledger)], ok=False)
                 self.assertIn("Symlink not allowed", error)
+
+    def test_external_storage_rejects_other_repositories_and_recovers(self):
+        other = self.folder / "other-repository"
+        subprocess.run(["git", "init", "-q", str(other)], env=self.env, check=True)
+        for destination in (self.root / "state", other / "state", other / ".git/state"):
+            with self.subTest(destination=destination):
+                self.env["XDG_STATE_HOME"] = str(destination)
+                self.assertIn("outside", self.cli(
+                    ["init", "--objective", "Fixture", "--scope", "repository"], ok=False))
+                self.assertFalse(destination.exists())
+        self.env["XDG_STATE_HOME"] = str(self.folder / "state")
+        self.init()
+        self.assertFalse(Path(self.ledger).is_relative_to(self.root))
+
+    def test_saved_history_and_diff_survive_missing_worktree(self):
+        self.init()
+        initial = self.state["snapshot"]
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        expected = self.cli(["diff", self.ledger, "--from", initial])
+        self.root.rename(self.folder / "removed-worktree")
+        self.cwd = self.folder
+        saved = self.cli(["inspect", self.ledger])
+        self.assertIsNone(saved["drift"])
+        self.assertEqual(len(saved["loops"][0]["cycles"]), 1)
+        self.assertEqual(expected, self.cli(["diff", self.ledger, "--from", initial]))
+        self.cli(["status", self.ledger], ok=False)
+
+    def legacy_run(self):
+        source = self.root / ".review-loop" / Path(self.ledger).parent.name
+        source.parent.mkdir(exist_ok=True)
+        Path(self.ledger).parent.rename(source)
+        return source
+
+    def test_legacy_migration_preserves_bytes_and_consumed_work(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        source = self.legacy_run()
+        original = review_ledger.stored_files(source)
+        legacy = str(source / "REVIEW_LEDGER.json")
+        self.assertIn("migrate", self.cli(["apply", legacy, "--revision", str(self.state["revision"])],
+                                        self.event("stop", outcome="interrupted"), ok=False))
+        self.assertIn("Legacy", self.cli(["init", "--objective", "Other", "--scope", "all"], ok=False))
+        migrated = self.cli(["migrate", legacy, "--shutdown-evidence", "Fixture workers are stopped"])
+        self.assertEqual(migrated["ledger"], self.ledger)
+        self.assertEqual(original, review_ledger.stored_files(Path(self.ledger).parent))
+        self.assertFalse((self.root / ".review-loop").exists())
+        self.assertEqual(self.cli(["status", legacy])["revision"], self.state["revision"])
+        (self.root / "discovered.txt").write_text("Necessary correction\n")
+        self.send("fix_done", results={"F001": {"result": "applied", "evidence": "Fixed dependency"}},
+                  checks=CHECKS)
+        self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
+
+    def test_migration_retry_keeps_newer_destination_events(self):
+        self.init()
+        source = self.legacy_run()
+        args = SimpleNamespace(ledger=str(source / "REVIEW_LEDGER.json"), shutdown_evidence="Stopped")
+        with patch("review_ledger.shutil.rmtree", side_effect=OSError("interrupted cleanup")):
+            with self.assertRaisesRegex(OSError, "interrupted cleanup"):
+                review_ledger.migrate(args, self.root)
+        self.assertTrue(source.exists())
+        self.send("start_review")
+        newer = Path(self.ledger).read_bytes()
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])
+        self.assertEqual(Path(self.ledger).read_bytes(), newer)
+        self.assertFalse(source.exists())
+        self.assertFalse(self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])["migrated"])
+        self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_migrated_abandonment_retains_unavailable_spending(self):
+        self.init()
+        Path(self.ledger).write_bytes(b"{damaged history")
+        self.cli(["abandon", self.ledger, "--reason", "Corrupt", "--evidence", "Fixture bytes",
+                  "--shutdown-evidence", "Stopped"])
+        source = self.legacy_run()
+        marker = source / "ABANDONED.json"
+        closed = json.loads(marker.read_bytes())
+        closed["ledger"] = str(source / "REVIEW_LEDGER.json")
+        marker.write_bytes(review_ledger.encode(closed))
+        original = review_ledger.stored_files(source)
+        self.cli(["migrate", closed["ledger"], "--shutdown-evidence", "Stopped"])
+        self.assertEqual(original, review_ledger.stored_files(Path(self.ledger).parent))
+        self.assertEqual(self.cli(["inspect", self.ledger])["allowance"], "unavailable")
+        self.reject("resume")
+        self.init()
+        self.send("start_review")
+
+    def test_tracked_review_loop_named_files_are_not_excluded(self):
+        path = self.root / ".review-loop/source.txt"
+        path.parent.mkdir()
+        path.write_text("Project code, not review storage\n")
+        self.git("add", "-f", ".review-loop/source.txt")
+        result = self.cli(["fingerprint"])
+        self.assertIn(".review-loop/source.txt", result["manifest"]["files"])
+        self.assertFalse(self.storage.exists())
 
     def test_verified_fix_then_final_full_review(self):
         """Completion needs both verified correction and a subsequent whole-scope review."""
@@ -826,8 +936,7 @@ class ReviewLedgerTests(unittest.TestCase):
                 before = self.state
                 history = json.loads(Path(self.ledger).read_text())["events"]
                 (self.root / "outside.txt").write_text(f"external {stopped}\n")
-                if stopped == "blocked":
-                    self.git("add", "outside.txt")
+                self.git("add", "outside.txt")
                 index = self.git("ls-files", "--stage", "-z")
                 self.reject("resume")
                 self.reject("reconcile", evidence=["Unexpected edits"])
@@ -897,21 +1006,25 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(files["link"]["mode"], "120000")
         self.assertFalse(any(name.startswith(".review-loop/") for name in files))
 
-    def test_unplanned_edits_and_index_changes_rejected(self):
-        """A declared correction cannot legitimize unrelated files or staging changes."""
+    def test_discovered_fix_files_are_captured_but_index_changes_are_rejected(self):
+        """Necessary discovered files enter the actual delta without authorizing staging."""
         self.init()
         self.review()
         self.finding()
         self.decide()
-        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        self.send("start_fix", findings=["F001"], files=[])
         (self.root / "other.txt").write_text("unplanned\n")
         results = {"F001": {"result": "applied", "evidence": "Attempt"}}
-        self.reject("fix_done", results=results, checks=CHECKS)
-        (self.root / "other.txt").unlink()
         self.git("add", "app.txt")
         (self.root / "app.txt").write_text("staged change\n")
         self.git("add", "app.txt")
         self.reject("fix_done", results=results, checks=CHECKS)
+        self.git("restore", "--staged", "app.txt")
+        self.send("fix_done", results=results, checks=CHECKS)
+        data = json.loads(Path(self.ledger).read_bytes())
+        before = data["initial"]
+        delta = self.cli(["diff", self.ledger, "--from", before])
+        self.assertEqual({item["file"] for item in delta}, {"app.txt", "other.txt"})
 
     def test_snapshot_diff_and_corrupt_object(self):
         """Saved deltas must remain inspectable, and damaged evidence must fail loudly."""
@@ -942,8 +1055,8 @@ class ReviewLedgerTests(unittest.TestCase):
         """Invalid initialization must not enable unbounded work or redirected storage."""
         self.cli(["init", "--objective", "Fixture", "--scope", "repository",
                   "--max-loops", "0"], ok=False)
-        (self.root / ".review-loop").rename(self.root / "storage")
-        (self.root / ".review-loop").symlink_to("storage")
+        self.storage.rename(self.folder / "storage")
+        self.storage.symlink_to(self.folder / "storage")
         self.cli(["init", "--objective", "Fixture", "--scope", "repository"], ok=False)
 
     def test_applied_fix_requires_actual_edits(self):
@@ -983,8 +1096,7 @@ class ReviewLedgerTests(unittest.TestCase):
         (self.root / "app.txt").unlink()
         os.mkfifo(self.root / "app.txt")
         self.cli(["init", "--objective", "Fixture", "--scope", "repository"], ok=False)
-        self.assertEqual(list((self.root / ".review-loop").iterdir()),
-                         [self.root / ".review-loop" / ".lock"])
+        self.assertEqual(list(self.storage.iterdir()), [self.storage / ".lock"])
 
     def interrupt_init(self, boundary):
         script = """
@@ -1021,7 +1133,7 @@ sys.exit(review_ledger.main())
 
     def test_interrupted_initial_snapshot_allows_retry(self):
         self.interrupt_init("object")
-        self.assertTrue(list((self.root / ".review-loop").glob("*/objects/*")))
+        self.assertTrue(list(self.storage.glob("*/objects/*")))
         self.init()
         self.review()
         self.send("advance")
@@ -1039,7 +1151,7 @@ sys.exit(review_ledger.main())
 
     def test_interruption_after_publication_preserves_the_run(self):
         self.interrupt_init("published")
-        ledgers = list((self.root / ".review-loop").glob("*/REVIEW_LEDGER.json"))
+        ledgers = list(self.storage.glob("*/REVIEW_LEDGER.json"))
         self.assertEqual(len(ledgers), 1)
         self.ledger = str(ledgers[0])
         self.state = self.cli(["status", self.ledger])
@@ -1090,7 +1202,7 @@ sys.exit(review_ledger.main())
                     if damage == "file-map":
                         before = ledger["initial"]
                         item = ledger["snapshots"].pop(before)
-                        item["files"] = []
+                        item["files"] = None
                         key = review_ledger.digest(review_ledger.encode(item))
                         ledger["snapshots"][key] = item
                         ledger["initial"] = key
@@ -1260,7 +1372,7 @@ sys.exit(review_ledger.main())
     def test_lock_blocks_concurrent_updates(self):
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()
-        with (self.root / ".review-loop" / ".lock").open("a") as handle:
+        with (self.storage / ".lock").open("a") as handle:
             review_ledger.fcntl.flock(handle, review_ledger.fcntl.LOCK_EX)
             self.reject("start_review")
         self.send("start_review")

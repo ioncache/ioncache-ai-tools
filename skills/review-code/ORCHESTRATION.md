@@ -367,14 +367,30 @@ Continue unaffected authorized work; no selection failure creates a tool fence.
 
 ## Failure, permissions, and drift
 
-Malformed, partial, failed, or missing results never count as completed
-coverage. Preserve available evidence, identify missing assignments, and
+Malformed, genuinely partial, failed, or missing work never counts as completed
+coverage. A source-read-only isolation label is assessed separately below.
+Preserve available evidence, identify missing assignments, and
 return an incomplete or blocked handback. A failed worker does not by itself
 prove the surrounding run is unrecoverable.
 
 Keep the caller-owned chronological attempt log and active map from PACKETS.md.
 The default is one automatic replacement round per failed category per phase,
 including shards, with a fresh context and result path for every attempt.
+This is a ceiling, not an instruction to repeat an unchanged failure. Before
+replacement, identify its cause and the concrete change that makes the retry
+viable. A known conflicting context needs changed instructions or launch
+conditions, not merely another worker or model. Ambient project instructions
+under PROTOCOL.md are ignored and disclosed, never applied to the review or
+used as a reason to stop, mark coverage partial, or trigger replacement.
+Necessary reads of project standards as evidence also do not import a review
+purpose, including files cited by the plan or used by another category.
+Send a claimed isolation-only failure to the existing adjudicator before
+replacing the worker. Use PACKETS.md's separately recorded assessment when the
+original work is otherwise complete and only the evidence-read classification
+was mistaken. Do not rewrite that report or spend a replacement to correct its
+label, even when findings are empty or replacements already exhausted.
+If the frozen instructions genuinely require correction, use the caller's
+counted new-phase reconciliation; never silently update an existing packet.
 Category-worker model fallback consumes that same replacement allowance; it is not an
 extra retry pool. Retain failed attempts and never reset the allowance by
 renaming, resuming or losing history. Exhaustion leaves coverage incomplete,

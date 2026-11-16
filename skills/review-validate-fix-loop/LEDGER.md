@@ -11,7 +11,7 @@ python3 "/installed plugin/scripts/review_ledger.py" init \
   --objective "Correct the branch's behavior" --scope "branch changes and callers" \
   --base "<resolved-commit>" --max-loops 3 --max-fix-cycles 3
 python3 "/installed plugin/scripts/review_ledger.py" status \
-  ".review-loop/<run-id>/REVIEW_LEDGER.json"
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json"
 ```
 
 `init` returns the ledger path and revision 0. `apply` accepts one JSON event
@@ -19,9 +19,61 @@ on stdin. Supply the revision from the latest successful response. A stale
 revision is rejected; inspect history before retrying rather than duplicating
 an event whose response was lost.
 
+## Storage and legacy migration
+
+Standalone runs default to
+`$XDG_STATE_HOME/ioncache-ai-tools/reviews/<worktree-identity>/<run-id>/`,
+or `~/.local/state/ioncache-ai-tools/reviews/` with the same suffix when
+`XDG_STATE_HOME` is unset. The worktree identity hashes its canonical root path;
+it does not place files there. The ledger and its `objects/` directory must stay
+outside every repository and Git metadata directory. Select an external
+`XDG_STATE_HOME` if the default is unsuitable.
+
+An autonomous-development assignment instead supplies its pinned `review_storage`
+inside the private development-run store. Pass `--storage "<review_storage>"` to
+`init`. Resume the absolute returned path, never another store or a fresh run to
+reset counters. Storage location and worktree ownership are separate: mutations
+and `status` still require the owning live checkout.
+
+`inspect` and `diff` read saved evidence without requiring that checkout:
+
+```sh
+python3 "/installed plugin/scripts/review_ledger.py" inspect "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json"
+python3 "/installed plugin/scripts/review_ledger.py" diff "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" \
+  --from "<saved-snapshot>"
+```
+
+Use the actual returned path. `inspect` reports unknown live drift (`null`), not a
+clean checkout, and cannot authorize acceptance. Keep the full run directory:
+the ledger alone cannot reproduce its saved snapshots.
+
+Older `.review-loop/<run-id>/` directories are read-only to current mutation
+commands. Before removing their worktree, stop the native workers and migrate:
+
+```sh
+python3 "/installed plugin/scripts/review_ledger.py" migrate \
+  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  --shutdown-evidence "Actual evidence that the old workers and processes exited"
+```
+
+Migration locks both stores, copies and verifies every file into external
+storage, publishes it before removing the source, and returns the new path.
+It preserves schema-1 bytes, IDs, snapshots, events, objects, closure records
+and consumed allowances. Corrupt evidence remains corrupt and unavailable.
+Stop using older helper versions for that run. Worktree cleanup is safe only
+after successful migration; already deleted history cannot be reconstructed.
+
+Retrying an interrupted migration never overwrites the destination. An unchanged
+copy or a verified continuation of its original history permits source cleanup;
+conflicting destination evidence is preserved and reported. Empty legacy storage
+is removed after the move. Old root-relative references resolve to the default
+external destination after migration; use the returned absolute path in new
+reports. Keep the same external state location when resolving old references.
+Ledger migration does not rewrite original development reports or their approval.
+
 Initialization publishes the run directory only after its baseline is complete.
-An interruption before publication may leave `.review-loop/.initializing-*`
-artifacts. They contain no published run and do not prevent retrying `init`.
+An interruption before publication may leave `.initializing-*` directories in
+the external store. They contain no published run and do not prevent retrying `init`.
 The helper preserves these abandoned artifacts; no manual cleanup is required
 to continue. If publication succeeded but the response was lost, `init` reports
 the existing run instead. Inspect that run with `status` and continue it rather
@@ -33,7 +85,7 @@ the run's native workers before closing it:
 
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" abandon \
-  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" \
   --reason "Complete history cannot be recovered" \
   --evidence "Inspected retained reports and objects; no complete ledger copy exists" \
   --shutdown-evidence "Native host confirms this run's workers and processes exited"
@@ -55,7 +107,7 @@ If the closure record is damaged but the ledger is readable, use:
 
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" recover-closure \
-  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" \
   --reason "The closure record cannot be restored" \
   --evidence "Inspected the damaged marker and validated the surviving history" \
   --shutdown-evidence "Native host confirms this run's workers and processes exited"
@@ -80,7 +132,7 @@ caller allowance. Other authorized work remains available.
 
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" apply \
-  ".review-loop/<run-id>/REVIEW_LEDGER.json" --revision 0 <<'JSON'
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" --revision 0 <<'JSON'
 {"type":"start_review","actor":"coordinator","reason":"Begin all applicable standards and correctness passes"}
 JSON
 ```
@@ -95,7 +147,7 @@ adds `snapshot`, `sequence`, and `time`; do not supply them.
 | `finding` | `key`, `summary`, `locations`, `severity`, `evidence` | Add a candidate or append a duplicate observation. |
 | `review_done` | `passes`, `checks` | Finish a full review and enter validation. |
 | `decision` | `id`, `validation`, `disposition`, `severity`, `evidence` | Record a reasoned judgment, risk acceptance, reopening, or verified fix outcome. |
-| `start_fix` | `findings`, `files` | Declare finding IDs and exact worktree-relative files; consume an inner cycle. |
+| `start_fix` | `findings`, `files` | Declare finding IDs and known worktree-relative file hints; consume an inner cycle. |
 | `fix_done` | `results`, `checks` | Record results for every attempted finding and enter review-fixes. |
 | `fixes_reviewed` | `passes` | Finish focused review and enter inner validation. |
 | `advance` | None | Finish validation, enforce limits, or finish the run. |
@@ -103,8 +155,10 @@ adds `snapshot`, `sequence`, and `time`; do not supply them.
 | `resume` | None | Reopen a blocked/interrupted run without changing allowances. |
 | `reconcile` | `evidence` | Invalidate evidence after drift or required coverage changes outside fixing; settle completed focused outcomes first, or retain interrupted focused outcomes for fresh full verification. |
 
-`locations`, `evidence`, `findings`, and `files` are non-empty string arrays.
-File declarations are exact paths, not globs. `severity` is `High`, `Medium`,
+`locations`, `evidence`, and `findings` are non-empty string arrays.
+`files` is a string array of normalized path hints, not globs or an edit allowlist;
+it may be empty. Necessary discovered files are saved and reviewed in the actual
+correction delta without changing finding IDs or allowances. `severity` is `High`, `Medium`,
 or `Low`. A finding key describes the underlying cause and affected behavior,
 not a changing line number. Reuse it only for the same issue.
 
@@ -282,7 +336,7 @@ validates structure and ordering, not those judgments.
 
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" diff \
-  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" \
   --from "<cycle-before-snapshot>" --to "<cycle-after-snapshot>"
 ```
 

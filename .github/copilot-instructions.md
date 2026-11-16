@@ -115,6 +115,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   instructions own conditional nested coordination or flat adjudication.
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
+  Store ledgers and objects outside repositories: standalone XDG state storage
+  or the development run's pinned private `reviews/` directory. Preserve
+  schema-1 history during legacy migration, and distinguish offline inspection
+  and audit archives from live acceptance. File hints are not edit allowlists;
+  review the actual correction delta while preserving HEAD/index ownership.
 - `review_assignments.py` freezes source-language evidence and all policy
   resources in schema-3 phase plans with unique report namespaces, separately
   from review switches and user exclusions. JSDoc requires
@@ -134,6 +139,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   single-purpose packets, not generic catalogs or the implementation context.
   Final acceptance reuses the shared category checker and pins its full-phase
   evidence to the completed ledger's root, base and snapshot.
+  Provider checks precede reservation; schema-1 approval content stays unchanged.
+  External worktree destinations are resolved and pinned with store separation.
+  `development_progress.py` owns private review checkpoints and the lock-free
+  `watch` reader. `development_models.py` validates native role choices and
+  records requested versus observed identities. Workflow read-only leaves run
+  concurrently with exclusive fixer barriers; never treat a selected model as
+  an observed identity or hardcode a model ranking.
 - `scripts/development_audit.py` exports selected process evidence and an explicitly
   reviewed public narrative. Its publisher runs only as an approved audit worker,
   not as controller bookkeeping. Keep the GitHub audit branch separate from the

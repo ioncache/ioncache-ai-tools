@@ -13,6 +13,7 @@ tests, commits, resets, or uploads data. The ledger is not a security boundary.
 """
 
 import argparse
+from contextlib import ExitStack
 import difflib
 import fcntl
 import hashlib
@@ -29,7 +30,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from review_loop_state import (
-    LedgerError, apply_event, check_reconcile_request, current_cycle, fields, replay, require, text,
+    LedgerError, apply_event, check_reconcile_request, fields, replay, require, text,
 )
 
 
@@ -50,8 +51,45 @@ def git(root, args):
 
 
 def worktree():
-    """Anchor storage at the canonical Git root, independent of launch directory."""
+    """Identify the owning checkout without coupling its lifetime to storage."""
     return Path(os.fsdecode(git(Path.cwd(), ["rev-parse", "--show-toplevel"])).strip()).resolve()
+
+
+def root_key(root):
+    return digest(os.fsencode(str(root)))
+
+
+def external_directory(path, root=None):
+    path = Path(os.path.abspath(path))
+    require(".git" not in path.parts, "Review storage must be outside Git metadata; choose external storage")
+    safe_path(Path(path.anchor), str(path.relative_to(path.anchor)))
+    require(root is None or not path.is_relative_to(root), "Review storage must be outside its repository")
+    probe = path
+    while not probe.exists():
+        probe = probe.parent
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")}
+    result = subprocess.run(["git", "-C", str(probe), "rev-parse", "--git-dir"],
+                            capture_output=True, env=environment)
+    require(result.returncode != 0,
+            "Review storage must be outside every repository and Git metadata directory; "
+            "set XDG_STATE_HOME to an external state directory")
+    return path
+
+
+def storage(root):
+    base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state").expanduser().resolve()
+    return external_directory(base / "ioncache-ai-tools/reviews" / root_key(root), root)
+
+
+def review_paths(root, folders=()):
+    paths = {}
+    for base in dict.fromkeys((safe_path(root, ".review-loop"), storage(root), *folders)):
+        if base.exists():
+            for entry in base.iterdir():
+                if re.fullmatch(r"[a-f0-9]{32}", entry.name):
+                    paths[entry.name] = entry / "REVIEW_LEDGER.json"
+    return sorted(paths.values())
 
 
 def safe_path(root, relative):
@@ -132,7 +170,7 @@ def file_entry(root, name, folder):
 
 
 def snapshot(root, folder=None):
-    """Capture tracked and non-ignored untracked files, excluding run artifacts.
+    """Capture all tracked and non-ignored untracked files.
 
     Symlinks record their target text without following it. Gitlinks and
     Git-enumerated special files fail explicitly. HEAD and index metadata detect
@@ -145,8 +183,6 @@ def snapshot(root, folder=None):
     files = {}
     for raw in sorted(set(names.split(b"\0")) - {b""}):
         name = os.fsdecode(raw)
-        if name == ".review-loop" or name.startswith(".review-loop/"):
-            continue
         entry = file_entry(root, name, folder)
         if entry is not None:
             files[name] = entry
@@ -192,6 +228,10 @@ def load_history(path):
         validate_snapshots(ledger, path.parent)
         state = replay(ledger, check_snapshot_transition)
         require(ledger["run_id"] == path.parent.name, "Run ID does not match ledger directory")
+        owner = Path(ledger["root"])
+        require(owner.is_absolute() and
+                (path.parent.parent == owner / ".review-loop" or
+                 path.parent.parent.name == root_key(owner)), "Storage belongs to a different worktree")
     except (LedgerError, OSError, ValueError, TypeError, KeyError) as error:
         raise LedgerError(f"Review history unavailable: {error}. Restore verified history, "
                           "or use abandon with --reason, --evidence and --shutdown-evidence "
@@ -214,8 +254,14 @@ def abandoned(path):
         value = json.loads(record.read_bytes())
         fields(value, "schema ledger root run_id outcome allowance reason evidence shutdown_evidence "
                       "error time previous_record")
-        require(value["schema"] == 1 and value["ledger"] == str(path) and
-                value["root"] == str(path.parent.parent.parent) and value["run_id"] == path.parent.name,
+        owner = Path(value["root"])
+        recorded = Path(value["ledger"])
+        require(value["schema"] == 1 and owner.is_absolute() and
+                recorded.name == path.name and recorded.parent.name == path.parent.name and
+                (recorded.parent.parent == owner / ".review-loop" or
+                 recorded.parent.parent.name == root_key(owner)) and
+                (path.parent.parent == owner / ".review-loop" or
+                 path.parent.parent.name == root_key(owner)) and value["run_id"] == path.parent.name,
                 "Abandonment belongs to a different run")
         require(value["outcome"] == "failed" and value["allowance"] == "unavailable",
                 "Abandonment cannot authorize completion or restore allowance")
@@ -302,11 +348,21 @@ def abandon(args, root):
 
 def ledger_path(root, argument, *, allow_unavailable=False):
     """Validate owned storage, retaining an unusable ledger entry only for inspection or closure."""
-    candidate = Path(os.path.abspath(root / argument))
-    base = safe_path(root, ".review-loop")
-    require(candidate.parent.parent == base and candidate.name == "REVIEW_LEDGER.json",
-            "Ledger must be .review-loop/<run-id>/REVIEW_LEDGER.json in this worktree")
-    folder = safe_path(root, str(candidate.parent.relative_to(root)))
+    candidate = Path(os.path.abspath((root or Path.cwd()) / argument))
+    require(candidate.name == "REVIEW_LEDGER.json" and
+            re.fullmatch(r"[a-f0-9]{32}", candidate.parent.name), "Invalid review ledger path")
+    legacy = candidate.parent.parent.name == ".review-loop"
+    if root is not None and legacy:
+        require(candidate.parent.parent == root / ".review-loop", "Ledger belongs to a different worktree")
+        if not candidate.parent.exists():
+            candidate = storage(root) / candidate.parent.name / candidate.name
+            legacy = False
+    if not legacy:
+        external_directory(candidate.parent.parent, root)
+        require(re.fullmatch(r"[a-f0-9]{64}", candidate.parent.parent.name) and
+                (root is None or candidate.parent.parent.name == root_key(root)),
+                "Ledger belongs to a different worktree")
+    folder = safe_path(Path(candidate.anchor), str(candidate.parent.relative_to(candidate.anchor)))
     return folder / candidate.name if allow_unavailable else safe_path(folder, candidate.name)
 
 
@@ -333,7 +389,10 @@ def assert_available(base):
 
 def init(args, root):
     """Create an isolated run; never reuse a session-wide or repository-wide ledger."""
-    base = safe_path(root, ".review-loop")
+    base = external_directory(Path(args.storage), root) if getattr(args, "storage", None) else storage(root)
+    require(base.name == root_key(root), "Storage directory must retain the worktree identity")
+    legacy = [path for path in review_paths(root) if path.parent.parent == root / ".review-loop"]
+    require(not legacy, "Legacy review records remain; run migrate on each ledger before starting a new run")
     assert_available(base)
     require(args.max_loops > 0 and args.max_fix_cycles > 0, "Limits must be positive")
     for value in (args.objective, args.scope):
@@ -370,8 +429,75 @@ def create_ledger(args, root, folder):
     return {"ledger": str(path), **replay(ledger)}
 
 
+def stored_files(folder):
+    entries = {}
+    for path in sorted(folder.rglob("*")):
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        if path.is_symlink():
+            entry = ("link", digest(os.fsencode(os.readlink(path))), mode)
+        elif path.is_file():
+            entry = ("file", digest(path.read_bytes()), mode)
+        else:
+            require(path.is_dir(), "Unsupported file in legacy review storage")
+            entry = ("directory", None, mode)
+        entries[str(path.relative_to(folder))] = entry
+    return entries
+
+
+def migration_preserved(source, target):
+    before, after = stored_files(source), stored_files(target)
+    if before == after:
+        return
+    require(all(after.get(name) == entry for name, entry in before.items()
+                if name != "REVIEW_LEDGER.json"), "Migration destination does not preserve the source files")
+    original, _ = load_history(source / "REVIEW_LEDGER.json")
+    current, _ = load_history(target / "REVIEW_LEDGER.json")
+    require(all(current[key] == value for key, value in original.items()
+                if key not in ("events", "snapshots")) and
+            current["events"][:len(original["events"])] == original["events"] and
+            all(current["snapshots"].get(key) == value for key, value in original["snapshots"].items()),
+            "Migration destination has conflicting history; preserve both records, never overwrite it")
+
+
+def migrate(args, root):
+    """Move complete legacy evidence, preserving newer destination history on retry."""
+    text(args.shutdown_evidence)
+    candidate = Path(os.path.abspath(root / args.ledger))
+    require(candidate.name == "REVIEW_LEDGER.json" and
+            candidate.parent.parent == root / ".review-loop" and
+            re.fullmatch(r"[a-f0-9]{32}", candidate.parent.name), "Migration requires a legacy run path")
+    source = safe_path(root, str(candidate.parent.relative_to(root)))
+    target = safe_path(storage(root), source.name)
+    if not source.exists():
+        require(target.is_dir(), "Legacy source and external destination are both missing")
+        return {"ledger": str(target / candidate.name), "migrated": False}
+    if not target.exists():
+        temporary = target.parent / f".initializing-{uuid4().hex}"
+        try:
+            shutil.copytree(source, temporary, symlinks=True)
+            migration_preserved(source, temporary)
+            for path in temporary.rglob("*"):
+                if not path.is_symlink() and path.is_file():
+                    with path.open("rb") as handle:
+                        os.fsync(handle.fileno())
+            for path in sorted(temporary.rglob("*"), key=lambda value: len(value.parts), reverse=True):
+                if not path.is_symlink() and path.is_dir():
+                    sync_directory(path)
+            sync_directory(temporary)
+            os.rename(temporary, target)
+            sync_directory(target.parent)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+    migration_preserved(source, target)
+    shutil.rmtree(source)
+    sync_directory(source.parent)
+    return {"ledger": str(target / candidate.name), "migrated": True,
+            "shutdown_evidence": args.shutdown_evidence}
+
+
 def check_snapshot_transition(ledger, state, event):
-    """Reject drift not allowed by the event's phase and declared fix files.
+    """Reject drift not allowed by the event's phase.
 
     Fix completion and fixing resumption must preserve HEAD and index metadata.
     Both append and replay use this check so saved history obeys the same rules.
@@ -380,11 +506,8 @@ def check_snapshot_transition(ledger, state, event):
     after = ledger["snapshots"][event["snapshot"]]
     kind = event["type"]
     if kind == "fix_done" or (kind == "resume" and state["phase"] == "fixing"):
-        cycle = current_cycle(state)
         require(before["head"] == after["head"] and before["index"] == after["index"],
                 "HEAD or index changed during fixing")
-        require(set(changed(before, after)) <= set(cycle["files"]),
-                "Changes outside declared fix files; stop and reconcile manually")
         if kind == "fix_done" and isinstance(event.get("results"), dict):
             applied = any(isinstance(item, dict) and item.get("result") == "applied"
                           for item in event["results"].values())
@@ -396,7 +519,7 @@ def check_snapshot_transition(ledger, state, event):
             require(isinstance(name, str) and str(Path(name)) == name, "Invalid fix path")
             parts = Path(name).parts
             require(parts and not Path(name).is_absolute() and
-                    all(part not in (".", "..", ".git", ".review-loop") for part in parts),
+                    all(part not in (".", "..", ".git") for part in parts),
                     "Unsafe fix path")
 
 
@@ -416,7 +539,6 @@ def append(args, root):
     if event.get("type") == "start_fix":
         for name in event.get("files", []):
             require(isinstance(name, str), "Invalid fix path")
-            require(not name.startswith(".review-loop"), "Cannot fix ledger artifacts")
             require(str(Path(name)) == name, "Fix paths must be normalized")
             safe_path(root, name)
     current = snapshot(root, path.parent)
@@ -440,12 +562,14 @@ def status(args, root):
     if closed is not None:
         return closed
     ledger, state = load(path)
-    ensure_owner(ledger, root)
-    current = snapshot(root)
+    if root is not None:
+        ensure_owner(ledger, root)
+    current = snapshot(root) if root is not None else None
     before = ledger["snapshots"][state["snapshot"]]
     return {"ledger": str(path), "objective": ledger["objective"],
             "scope": ledger["scope"], "base": ledger["base"], **state,
-            "drift": current != before, "changed_files": changed(before, current),
+            "drift": current != before if current is not None else None,
+            "changed_files": changed(before, current) if current is not None else None,
             "usage": "not_collected", "history": ledger["events"]}
 
 
@@ -458,7 +582,8 @@ def diff(args, root):
     """Show saved correction deltas without writing them into the working tree."""
     path = ledger_path(root, args.ledger)
     ledger, state = load(path)
-    ensure_owner(ledger, root)
+    if root is not None:
+        ensure_owner(ledger, root)
     after_key = args.to_snapshot or state["snapshot"]
     require(args.from_snapshot in ledger["snapshots"] and after_key in ledger["snapshots"],
             "Unknown snapshot")
@@ -480,13 +605,14 @@ def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("fingerprint", help="Hash the current worktree without storing snapshots")
-    create = commands.add_parser("init", help="Start a new run in the current worktree")
+    create = commands.add_parser("init", help="Start an externally stored run owned by this worktree")
     create.add_argument("--objective", required=True)
     create.add_argument("--scope", required=True)
     create.add_argument("--base", default="HEAD", help="Pinned comparison commit, not a moving PR")
     create.add_argument("--max-loops", type=int, default=3)
     create.add_argument("--max-fix-cycles", type=int, default=3)
-    for name in ("apply", "status", "diff", "abandon", "recover-closure"):
+    create.add_argument("--storage", help="Pinned external worktree storage directory returned by the controller")
+    for name in ("apply", "status", "inspect", "diff", "abandon", "recover-closure", "migrate"):
         command = commands.add_parser(name)
         command.add_argument("ledger", help="Absolute path or path relative to the worktree root")
         if name == "apply":
@@ -497,6 +623,8 @@ def parser():
         if name in ("abandon", "recover-closure"):
             for flag in ("reason", "evidence", "shutdown-evidence"):
                 command.add_argument("--" + flag, required=True)
+        if name == "migrate":
+            command.add_argument("--shutdown-evidence", required=True)
     return cli
 
 
@@ -504,16 +632,34 @@ def main():
     """Lock ledger mutations and keep JSON results separate from failure diagnostics."""
     args = parser().parse_args()
     try:
-        root = worktree()
+        root = None if args.command in ("inspect", "diff") else worktree()
+        if root is None and not Path(args.ledger).is_absolute():
+            try:
+                relative_root = worktree()
+            except LedgerError:
+                relative_root = Path.cwd()
+            args.ledger = str(relative_root / args.ledger)
         handlers = {"init": init, "apply": append, "status": status, "diff": diff,
-                    "fingerprint": fingerprint, "abandon": abandon, "recover-closure": recover_closure}
-        if args.command in ("init", "apply", "abandon", "recover-closure"):
-            base = safe_path(root, ".review-loop")
-            base.mkdir(exist_ok=True, mode=0o700)
-            lock = safe_path(base, ".lock")
-            with lock.open("a") as handle:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    "inspect": status, "migrate": migrate, "fingerprint": fingerprint,
+                    "abandon": abandon, "recover-closure": recover_closure}
+        if args.command in ("init", "apply", "abandon", "recover-closure", "migrate"):
+            base = (external_directory(Path(args.storage), root) if args.command == "init" and args.storage else
+                    storage(root) if args.command in ("init", "migrate") else
+                    ledger_path(root, args.ledger, allow_unavailable=True).parent.parent)
+            require(base != root / ".review-loop",
+                    "Legacy storage is read-only; run migrate with --shutdown-evidence, then retry")
+            require(base.name == root_key(root), "Storage directory must retain the worktree identity")
+            bases = [safe_path(root, ".review-loop"), base] if args.command == "migrate" else [base]
+            with ExitStack() as stack:
+                for folder in bases:
+                    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    handle = stack.enter_context(safe_path(folder, ".lock").open("a"))
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 result = handlers[args.command](args, root)
+            if args.command == "migrate" and set(bases[0].iterdir()) == {bases[0] / ".lock"}:
+                (bases[0] / ".lock").unlink()
+                bases[0].rmdir()
+                sync_directory(root)
         else:
             result = handlers[args.command](args, root)
         print(json.dumps(result, indent=2, ensure_ascii=True))
