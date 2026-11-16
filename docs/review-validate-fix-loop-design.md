@@ -411,7 +411,8 @@ maintaining a second authoritative document. Do not automatically stage
 or commit the ledger or other run artifacts.
 Standalone storage honors `XDG_STATE_HOME`, defaulting to
 `~/.local/state/ioncache-ai-tools/reviews/`. Autonomous development pins storage
-inside its external private run store. Resume the saved absolute path rather
+inside its external private run store or a run-specific recovery directory.
+Resume the saved absolute path rather
 than choosing another store to bypass an active run. The executable migration
 and offline inspection contracts are in `skills/review-validate-fix-loop/LEDGER.md`.
 

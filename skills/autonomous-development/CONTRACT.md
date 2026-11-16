@@ -146,8 +146,9 @@ It does not prove the truth of model reports or remote-operation receipts.
 
 Private storage contains `RUN.json`, `MANIFEST.json`, approved `inputs/`, `reports/`,
 optional review `progress/`, and native `models/` observations. It must be
-outside the launch repository and all worktrees, without either containing the
-other. Keep it durable for the chosen environment and do
+outside every repository and all worktrees, without either containing the
+other. Initialization checks review-storage locations before creating the run.
+Keep it durable for the chosen environment and do
 not upload it wholesale. The code does not provision shared cloud storage.
 Published state is atomic, revisions reject stale writers, and one outstanding
 assignment prevents overlapping writers within the run.
@@ -196,7 +197,18 @@ The ledger and all snapshot objects live there, so keeping the private store
 preserves the full review after worktree cleanup. Never place them inside a
 repository. Legacy migration and offline inspection are defined in
 `skills/review-validate-fix-loop/LEDGER.md`.
-The controller verifies its completion, base, current snapshot, exact allowances,
+
+If an existing run's private store is not a valid external location,
+new reviews use
+`$XDG_STATE_HOME/ioncache-ai-tools/development-recovery/<run-id>/reviews/<worktree-identity>/`,
+or the equivalent under `~/.local/state` when XDG state is unset. The returned
+assignment pins that path. Keep both locations: original reports, history,
+approval and used attempts stay in the original store and are not reset.
+Historical archives use the same recovery root. If that location is also inside
+a repository, set `XDG_STATE_HOME` to external storage and retry the same run.
+Existing ledgers are not moved; preserve their recorded storage as well.
+
+The controller verifies the reported ledger's completion, base, current snapshot, exact allowances,
 and passing named acceptance checks. It also runs the shared category-record
 checker and binds the full plan to that root, base and snapshot. Missing
 changed files, missing categories, missing adjudication or unresolved

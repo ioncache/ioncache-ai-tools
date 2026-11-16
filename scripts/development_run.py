@@ -122,6 +122,12 @@ def initialize(args):
     plan.require(not folder.exists() and not folder.is_symlink(), "Store already exists; inspect and resume it")
     plan.require(not folder.resolve().is_relative_to(root), "Keep run evidence outside the repository")
     separate_store(folder, root, targets)
+    for target in targets.values():
+        try:
+            review.external_directory(folder / "reviews" / review.root_key(target), target)
+        except review.LedgerError as error:
+            raise plan.ManifestError(
+                f"{error}; choose --store outside every repository before initialization") from error
     folder.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".initializing-development-", dir=folder.parent))
     try:
@@ -300,8 +306,9 @@ def reserve(state, settings, launch_models=None):
     assignment["launch_models"] = launch_models or {}
     assignment["model_selection"] = model_policy(state, settings)
     if role == "review":
+        storage = review.external_run_directory(Path(state["store"]), state["id"], root)
         assignment["review_storage"] = str(review.external_directory(
-            Path(state["store"]) / "reviews" / review.root_key(root), root))
+            storage / "reviews" / review.root_key(root), root))
     assignment["configured_model_fallbacks"] = models.consume_fallbacks(state, key)
     state["active"] = assignment
     state["history"].append(assignment)

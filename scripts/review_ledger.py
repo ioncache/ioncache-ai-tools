@@ -77,9 +77,22 @@ def external_directory(path, root=None):
     return path
 
 
-def storage(root):
+def state_directory():
     base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state").expanduser().resolve()
-    return external_directory(base / "ioncache-ai-tools/reviews" / root_key(root), root)
+    return base / "ioncache-ai-tools"
+
+
+def storage(root):
+    return external_directory(state_directory() / "reviews" / root_key(root), root)
+
+
+def external_run_directory(path, run_id, root):
+    try:
+        return external_directory(path, root)
+    except LedgerError:
+        require(isinstance(run_id, str) and re.fullmatch(r"[a-f0-9]{32}", run_id),
+                "Invalid development run identity")
+        return external_directory(state_directory() / "development-recovery" / run_id, root)
 
 
 def review_paths(root, folders=()):

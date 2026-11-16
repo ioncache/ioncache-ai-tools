@@ -706,6 +706,25 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(expected, self.cli(["diff", self.ledger, "--from", initial]))
         self.cli(["status", self.ledger], ok=False)
 
+    def test_external_run_recovery_keeps_different_runs_separate(self):
+        invalid = self.root / "private-run"
+        first = review_ledger.external_run_directory(invalid, "a" * 32, self.root)
+        first.mkdir(parents=True)
+        evidence = first / "retained.json"
+        evidence.write_text("Retained first-run evidence\n")
+        second = review_ledger.external_run_directory(invalid, "b" * 32, self.root)
+        self.assertNotEqual(first, second)
+        self.assertTrue(second.is_relative_to(Path(self.env["XDG_STATE_HOME"])))
+        self.assertFalse(second.exists())
+        self.assertFalse(invalid.exists())
+        self.assertEqual(evidence.read_text(), "Retained first-run evidence\n")
+
+    def test_external_run_recovery_preserves_checker_failure(self):
+        with patch("review_ledger.subprocess.run", side_effect=FileNotFoundError("Git unavailable")) as command:
+            with self.assertRaisesRegex(FileNotFoundError, "Git unavailable"):
+                review_ledger.external_run_directory(self.folder / "private-run", "a" * 32, self.root)
+        command.assert_called_once()
+
     def legacy_run(self):
         source = self.root / ".review-loop" / Path(self.ledger).parent.name
         source.parent.mkdir(exist_ok=True)

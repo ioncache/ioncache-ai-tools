@@ -128,8 +128,10 @@ not a shared instruction bundle for leaves.
 Initialize or resume one review ledger with the requested base and exact
 `review_loops`/`fix_cycles`. For initialization, pass `--storage` with the supplied
 absolute `review_storage`; keep the returned absolute ledger path in reports.
-This stores the ledger and objects outside the worktree, inside the private run
-store. For an existing legacy ledger, stop its workers and use `migrate` before
+This stores the ledger and objects outside every repository, normally inside the
+private run store. For recovered runs, use the supplied external path and retain
+it alongside the original store as described in `CONTRACT.md`.
+For an existing legacy ledger, stop its workers and use `migrate` before
 continuing; never initialize a replacement to relocate history.
 Use the supplied `comparison_base`: the original
 pre-implementation HEAD for a task or the prepared base for a full PR.

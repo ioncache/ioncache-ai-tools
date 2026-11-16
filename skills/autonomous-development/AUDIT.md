@@ -34,6 +34,17 @@ This reads saved snapshots and history, writes identity-addressed files under
 `<private-run-store>/archives/`, and performs no publication or live-worktree
 acceptance. It cannot substitute for a reserved audit assignment. Legacy migrated
 ledgers stay at their external migration destination; retain that storage too.
+If an existing run needed external-storage recovery, retain its assigned review
+storage too. While the original store remains invalid, new archives use
+`$XDG_STATE_HOME/ioncache-ai-tools/development-recovery/<run-id>/archives/`
+(under `~/.local/state` when XDG state is unset), without moving the private store.
+
+Discovery is limited to review storage pinned in this run's saved assignments
+and individual recorded ledger references. Legacy references can locate their
+migrated ledger by the same review ID; they do not include neighboring ledgers.
+Reusing a worktree path does not add the new occupant's reviews to an old archive.
+Missing recorded reviews remain explicit gaps rather than being replaced with
+other history found at that path.
 
 ## What is exported
 

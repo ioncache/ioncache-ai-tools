@@ -119,7 +119,8 @@ enforced by the review/fix ledger helper.
 The review/fix loop defaults to three review loops and three fix cycles per
 loop. It does not authorize commits, pushes, or PR comments. Standalone ledgers
 and objects default to `~/.local/state/ioncache-ai-tools/reviews/`, honoring
-`XDG_STATE_HOME`. Development runs keep them in their external private store.
+`XDG_STATE_HOME`. Development runs use their assigned external storage, normally
+inside their private store. Retain any recovery locations recorded in assignments.
 Keep these artifacts private; they can contain source and survive worktree cleanup.
 Use the ledger helper's `migrate` command for legacy in-worktree records before
 deleting the checkout, and `inspect` for saved history without live acceptance.

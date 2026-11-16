@@ -509,6 +509,65 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertFalse(foreign["available"])
         self.assertEqual(foreign["assignment_ids"], [recorded["id"]])
 
+    def archive_with_reused_worktree(self, legacy):
+        root = self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        public = self.store / "reports" / active["id"] / "public.json"
+        original = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
+        recorded = next(item for item in state["history"] if item["role"] == "review")
+        if legacy:
+            path = Path(recorded["report"]["data"]["ledger"])
+            with patch.dict(os.environ, self.env, clear=True):
+                target = development.review.storage(root) / path.parent.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.rename(target)
+            recorded.pop("review_storage")
+            recorded["report"]["data"]["ledger"] = str(
+                root / ".review-loop" / target.name / "REVIEW_LEDGER.json")
+            development.save(self.store, state)
+        self.git("worktree", "remove", str(root))
+        subprocess.run([sys.executable, str(SCRIPTS / "create-worktree.py"),
+                        str(root), self.plan["prs"][0]["branch"]],
+                       cwd=self.root, env=self.env, check=True, capture_output=True)
+        unrelated = self.review_cli(root, ["init", "--objective", "Unrelated review",
+                                          "--scope", "Another run", "--base", "HEAD"])
+        for event in (
+            {"type": "start_review", "reason": "Unrelated review"},
+            {"type": "finding", "key": "unrelated", "summary": "Not part of the saved run",
+             "locations": ["app.txt"], "severity": "Low", "evidence": ["Separate review"]},
+        ):
+            event["actor"] = "fixture-owner"
+            event.setdefault("reason", "Unrelated review")
+            unrelated = self.review_cli(
+                root, ["apply", unrelated["ledger"], "--revision", str(unrelated["revision"])], event)
+        before = (self.store / "RUN.json").read_bytes()
+        for operation in ("export", "archive"):
+            with self.subTest(operation=operation):
+                args = ("--pr", "first") if operation == "archive" else ()
+                result = self.audit_cli(operation, *args, "--public", str(public))
+                bundle = json.loads((Path(result["directory"]) / "audit.json").read_bytes())
+                self.assertEqual(bundle["reviews"], original["reviews"])
+                self.assertEqual(bundle["public"], original["public"])
+                self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        outside = Path(unrelated["ledger"]).parent
+        inside = root / ".review-loop" / outside.name
+        inside.parent.mkdir(exist_ok=True)
+        outside.rename(inside)
+        result = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        bundle = json.loads((Path(result["directory"]) / "audit.json").read_bytes())
+        self.assertEqual(bundle["reviews"], original["reviews"])
+        inside.rename(outside)
+        self.git("worktree", "remove", str(root))
+        result = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        bundle = json.loads((Path(result["directory"]) / "audit.json").read_bytes())
+        self.assertEqual(bundle["reviews"], original["reviews"])
+
+    def test_archive_excludes_unrelated_reviews_at_a_reused_worktree_path(self):
+        self.archive_with_reused_worktree(legacy=False)
+
+    def test_legacy_archive_uses_only_recorded_review_ids(self):
+        self.archive_with_reused_worktree(legacy=True)
+
     def test_audit_repository_identity_accepts_casing_but_rejects_other_targets(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -995,6 +1054,66 @@ class DevelopmentRunTests(unittest.TestCase):
         self.init()
         self.preflight()
         self.assertEqual(self.prepare(), self.folder / "external")
+
+    def test_initialization_rejects_review_storage_inside_another_repository(self):
+        other = self.folder / "another-repository"
+        self.git("init", "-q", str(other))
+        self.path.write_bytes(manifest.encode(self.plan))
+        identity = self.cli("validate", self.path)["identity"]
+        invalid = other / "private" / "run"
+        error = self.cli("init", self.path, "--approved", identity, "--root", self.root,
+                         "--store", invalid, ok=False)
+        self.assertIn("outside every repository", error)
+        self.assertFalse(invalid.parent.exists())
+        self.assertFalse((self.root / self.plan["prs"][0]["worktree"]).exists())
+        self.init()
+        self.assertEqual(self.state["consumed_assignments"], 0)
+        self.assertEqual(self.next()["role"], "preflight")
+
+    def test_existing_run_recovers_external_storage_without_resetting_history(self):
+        self.configure_audit()
+        other = self.folder / "another-repository"
+        self.store = other / "private-run"
+        self.init()
+        self.env.update(self.audit_git_env)
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        (root / "app.txt").write_text("after\n")
+        self.finish()
+        self.git("init", "-q", str(other))
+        saved = development.load(self.store)
+        original = (self.store / "RUN.json").read_bytes()
+        xdg = self.env["XDG_STATE_HOME"]
+        self.env["XDG_STATE_HOME"] = str(other / "state")
+        self.assertIn("outside every repository", self.mutate("next", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        self.env["XDG_STATE_HOME"] = xdg
+        assignment = self.next()
+        recovered = Path(assignment["review_storage"])
+        self.assertTrue(recovered.is_relative_to(Path(xdg)))
+        self.assertIn(saved["id"], recovered.parts)
+        self.assertFalse(recovered.is_relative_to(self.store))
+        self.assertEqual(self.state["consumed_assignments"], len(saved["history"]) + 1)
+        continued = development.load(self.store)
+        self.assertEqual(continued["history"][:-1], saved["history"])
+        self.assertEqual(continued["approval"], saved["approval"])
+        self.assertTrue(all(continued["attempts"][key] == value
+                            for key, value in saved["attempts"].items()))
+        while self.state["assignment"]:
+            self.execute_fixture(self.state["assignment"])
+            self.next()
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(self.audit_comments), 2)
+        final = next(item for item in reversed(development.load(self.store)["history"])
+                     if item["role"] == "audit-final")
+        public = self.store / "reports" / final["id"] / "public.json"
+        self.git("worktree", "remove", str(root))
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        self.assertTrue(Path(archived["directory"]).is_relative_to(Path(xdg)))
+        bundle = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())
+        self.assertTrue(bundle["reviews"])
+        self.assertTrue(all(item["available"] for item in bundle["reviews"]))
 
     def test_external_worktree_aliases_and_path_drift_are_rejected(self):
         parent = self.folder / "worktrees"

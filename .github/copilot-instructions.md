@@ -116,7 +116,7 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Keep ledger checks mechanical, not semantic judgments. Rich handbacks map
   to schema-1 evidence fields rather than adding event fields.
   Store ledgers and objects outside repositories: standalone XDG state storage
-  or the development run's pinned private `reviews/` directory. Preserve
+  or the development run's pinned private or recovery `reviews/` directory. Preserve
   schema-1 history during legacy migration, and distinguish offline inspection
   and audit archives from live acceptance. File hints are not edit allowlists;
   review the actual correction delta while preserving HEAD/index ownership.

@@ -142,6 +142,19 @@ def public_narrative(value, reviews):
     return value
 
 
+def stored_review_paths(root, folders):
+    for folder in dict.fromkeys(folders):
+        try:
+            folder = review.external_directory(folder, root)
+            plan.require(folder.name == review.root_key(root), "Review storage belongs to another worktree")
+            entries = list(folder.iterdir())
+        except (ValueError, OSError):
+            continue
+        for entry in entries:
+            if re.fullmatch(r"[a-f0-9]{32}", entry.name):
+                yield entry / "REVIEW_LEDGER.json"
+
+
 def review_locations(state, assignment):
     root = Path(assignment["root"])
     folders = []
@@ -156,11 +169,11 @@ def review_locations(state, assignment):
             path = Path(os.path.abspath(root / reference))
             try:
                 path = review.ledger_path(root, reference, allow_unavailable=True)
-                folders.append(path.parent.parent)
             except (ValueError, OSError, KeyError, TypeError):
                 pass
             referenced[review_identity(path)] = path
-    referenced.update({review_identity(path): path for path in review.review_paths(root, folders)})
+    for path in stored_review_paths(root, folders):
+        referenced.setdefault(review_identity(path), path)
     return sorted(referenced.values(), key=review_identity)
 
 
@@ -265,7 +278,8 @@ def archive(state, pr, public):
         "Historical export only: the worktree was not checked and this does not authorize publication.")
     files = contents(bundle)
     key = bundle_identity(files)
-    folder = review.external_directory(Path(state["store"]) / "archives" / pr / key)
+    storage = review.external_run_directory(Path(state["store"]), state["id"], Path(state["root"]))
+    folder = review.external_directory(storage / "archives" / pr / key)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name, data in files.items():
         review.atomic_write(review.safe_path(folder, name), data)
