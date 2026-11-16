@@ -4,6 +4,21 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.12.0 (2026-11-16)
+
+### New
+
+* add autonomous development workflow ([#51](https://github.com/ioncache/ioncache-ai-tools/issues/51)) ([d17e468](https://github.com/ioncache/ioncache-ai-tools/commit/d17e4683e91091d3907608f09c8b05efbf9b7081))
+* **review:** isolate categories and adapt checks to target stacks ([#54](https://github.com/ioncache/ioncache-ai-tools/issues/54)) ([0d07c36](https://github.com/ioncache/ioncache-ai-tools/commit/0d07c3660ccb78ea48b1033f9d5fc3e057b30b39))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* None.
+
 ## 1.11.3 (2026-11-13)
 
 ### New
