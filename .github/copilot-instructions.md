@@ -30,9 +30,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   native inputs and outputs. Use `userPromptTransformed`, not
   `userPromptSubmitted`, for reminders: Copilot drops the latter's command
   output. The adapter preserves transformed prompt content and adds context.
-  Prompt processing supplies stateless guidance; failures must not create fences.
-- Claude and Codex launch matching hooks concurrently. Emit question guidance
-  from one handler, without marker readers or stored classification state.
+  Prompt processing supplies guidance and records only the root question
+  marker; failures report unavailability and must not create fences.
+- Claude and Codex launch matching hooks concurrently. `guidance.py` is the
+  only prompt handler that classifies questions: it emits the question
+  contract and records or clears the root identity's question marker.
   Codex registers one adapter per prompt/tool event. Both adapters pass
   `apply_patch` to the shared hooks once using `tool_input.command`; the
   engine checks all targets and added lines with one rules/config load.
@@ -42,9 +44,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   merging. `plugin_config.py` reconciles and resolves the shipped catalog.
   Rules live in `hooks/rules/`; `guidance.py` supplies scope, question, and
   documentation instructions plus explicit skill opt-outs. It creates no task,
-  turn, launch, request-freshness, or root/child permission state.
-  `scope_review.py`, `copilot_history.py`, `turn_guard.py`, `turn_review.py`,
-  `block_pending_question.py`, and experimental claim checkers remain inactive
+  launch, request-freshness, or root/child permission state. Its only stored
+  state is the per-identity question marker described below.
+  `block_pending_question.py` is the registered question-turn `PreToolUse`
+  guard. `scope_review.py`, `copilot_history.py`, `turn_guard.py`,
+  `turn_review.py`, and experimental claim checkers remain inactive
   source, with no registered hooks or active import paths. The shared store
   must not import these modules. Do not restore authorization fallbacks when
   guidance is disabled or checking fails.
@@ -59,8 +63,19 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Assistant display and final text are not rewritten or gated. Stop hooks only
   deliver cache notices; Copilot does not scan final transcripts.
   `block_emdash_turn.py` is retained inactive source.
-  The retired `block_pending_question.py` CLI emits no decision even if an old
-  registration invokes it; its helpers remain only for inactive review code.
+  Question markers (`classify_question.marker_path`) are keyed by session and
+  agent identity. Only a root prompt (no `agent_id`) records one; subagent
+  prompts come from parents, and host-started turns clear it
+  (`guidance.HOST_TURN_PREFIXES`: task notifications, hand-backs, and other
+  sessions' messages). Those prefixes are inferred from observed Claude
+  transcripts, not a documented hook field. The clear runs before guidance
+  evaluation so slow guidance cannot keep a stale marker. The guard reads only the caller's own marker, never the root's,
+  so a root question cannot stop a running child. It denies `is_mutating`
+  matches and `WORK_CONTROL_TOOLS` (launching, messaging, or stopping workers;
+  task/todo creation) so the questioned agent cannot delegate around it.
+  Marker and settings failures report unavailability without a denial.
+  Do not restore the old root-marker fallback, request-ID or stale-parent
+  denials, or task approvals.
 - `hooks/scripts/docs_cache.py` shares distilled facts across Claude `WebFetch`,
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
@@ -255,10 +270,12 @@ construct the character with `chr(0x2014)` to pass this source check.
   shell parser. These guards intentionally catch common accidental actions,
   not deliberate obfuscation; preserve that scope rather than building an
   exhaustive shell interpreter.
-- `guidance.py` uses the pure question classifier for advisory text only.
-  Questions do not suspend existing assignments. Native identities are passed
-  through rather than mapped into shared permission storage; one agent's
-  conversation must never create a tool fence for another.
+- `guidance.py` uses the pure question classifier for the question contract
+  and the root identity's question marker. A question suspends the questioned
+  root's own work for that turn, including an existing assignment, and nothing
+  else. Native identities are passed through rather than mapped into shared
+  permission storage; one agent's conversation must never create a tool fence
+  for another.
 - Cache diagnostics use user-facing `systemMessage` or Copilot progress
   output, never repeated `additionalContext` or mandatory final-answer prose.
   Keep progress parsing at the Copilot boundary; shared handlers emit one JSON

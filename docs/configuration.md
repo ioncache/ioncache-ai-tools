@@ -40,7 +40,7 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Direct-answer guidance without cancelling existing assignments |
+| `answer-questions` | Answer-only question turns: the answer contract and the question-turn tool guard |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -54,9 +54,11 @@ remain after synchronization finishes.
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
 
-Scope and question settings control instructions, not permission gates.
-Disabling them does not disable independent action checks. The plugin stores
-no task approvals or shared root/child authorization state.
+Scope settings control instructions, not permission gates. Disabling
+`answer-questions` removes the question contract and releases any pending
+question-turn denial at the next tool call. Disabling either does not disable
+independent action checks. The plugin stores no task approvals or shared
+root/child authorization state.
 
 Skill opt-outs block explicit skill-tool loads and instruct the assistant not
 to apply the skill automatically or through slash commands. They do not remove

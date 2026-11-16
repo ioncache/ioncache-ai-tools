@@ -21,9 +21,13 @@ QUESTION_STARTERS = re.compile(
 )
 
 QUESTION_CONTRACT = (
-    'Question turn: answer and reasoning only; no unsolicited drafts, plans, '
-    'next steps, or actions. A work product belongs only when explicitly '
-    'requested by the question. Read-only research remains available.'
+    'Question turn: answer the question and its reasoning only. A WHY question needs '
+    'the supported cause, not a description of what happened; if the cause is unknown, '
+    'say what is unknown. No apologies, deflections, unsolicited recommendations, plans, '
+    'or offers of more work. A work product belongs only when the question explicitly '
+    'requests it. Read-only research remains available. Until the next non-question '
+    'instruction, this agent cannot edit, commit, create tasks, or launch, message, or '
+    'stop workers, even to continue an existing assignment. Other agents continue.'
 )
 
 
@@ -56,10 +60,13 @@ def set_marker(data, active, kind='question'):
 
 def has_marker(data, kind='question'):
     try:
-        marker_path(data, kind).lstat()
-        return True
+        info = marker_path(data, kind).lstat()
     except FileNotFoundError:
         return False
+    # Another account's file must not impose this account's restriction.
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError('unsafe question marker')
+    return True
 
 
 def has_question(text):

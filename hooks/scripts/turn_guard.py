@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 
-from block_pending_question import allows_review_metadata, is_mutating
+from block_pending_question import is_mutating
 from classify_question import QUESTION_CONTRACT, has_marker, has_question, set_marker
 from docs_cache import DISTILLER_ENV, TTL_SECONDS
 from evidence_store import EvidenceStore
@@ -36,6 +36,18 @@ DELEGATION_TOOLS = {
     'Agent', 'Task', 'task', 'spawn_agent', 'run_dynamic_workflow',
     'write_agent', 'send_input', 'resume_agent', 'SendMessage',
 }
+
+
+def allows_review_metadata(data):
+    from evidence_review import review_metadata_request
+    if data.get('tool_name') not in {'Write', 'Edit', 'MultiEdit', 'apply_patch'}:
+        return False
+    try:
+        with EvidenceStore(data) as store:
+            return review_metadata_request(data, store)
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+        print(f'pending-question: evidence review validation failed: {error}', file=sys.stderr)
+        return False
 
 
 def store_for(data):

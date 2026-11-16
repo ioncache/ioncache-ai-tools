@@ -1,23 +1,38 @@
 #!/usr/bin/env python3
-"""Legacy mutation helpers retained for inactive review implementations.
+"""Deny recognized state changes while this agent's own user question is pending.
 
-Executing this retired hook emits no decision, including for stale question
-markers. Active question handling lives in guidance.py.
+guidance.py records the question state when a user prompt reaches a root
+identity. Read-only research remains available. The next non-question prompt
+to the same identity clears the restriction. Child identities never consult
+another identity's marker, so a question to one agent does not stop another.
+Shell matching catches common accidental actions, not every possible
+interpreter or shell construct.
 """
 
+import json
 import os
 import re
 import shlex
-import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from classify_question import has_marker  # noqa: E402
+from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable  # noqa: E402
+from plugin_config import enabled  # noqa: E402
 from rule_engine import (  # noqa: E402
     is_shell_operator, tokenize_command, split_into_simple_commands, skip_wrappers,
     without_redirections,
 )
 
 ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
+
+# Launching, messaging, or stopping workers and recording new tasks are not
+# read-only research, and delegation would bypass this agent's restriction.
+WORK_CONTROL_TOOLS = {
+    'Agent', 'Task', 'task', 'spawn_agent', 'run_dynamic_workflow', 'Workflow',
+    'write_agent', 'send_input', 'resume_agent', 'SendMessage', 'TaskStop',
+    'TodoWrite', 'TaskCreate', 'TaskUpdate',
+}
 
 # Bash commands that change state - git/gh mutations, filesystem writes,
 # package installs, and arbitrary-code interpreters that can do any of the
@@ -231,14 +246,18 @@ def _mutating_shell_command(simple_command):
     return bool(BASH_MUTATION_PATTERNS.match(command))
 
 
+# Case is kept so a camelCase boundary (createIssue) counts as the end of the verb.
+MCP_MUTATION = re.compile(r'(?i:create|update|delete|edit|write|remove|merge|push)(?:[_.-]|[A-Z]|$)')
+
+
 def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
     if isinstance(tool_name, str) and tool_name.startswith('mcp'):
-        canonical = tool_name.lower().split('__', 2)
+        canonical = tool_name.split('__', 2)
         operation = (canonical[2] if len(canonical) == 3 and canonical[0] == 'mcp'
-                     else re.split(r'__|[.-]', tool_name.lower())[-1])
-        if re.match(r'^(create|update|delete|edit|write|remove|merge|push)(?:[_.-]|$)', operation):
+                     else re.split(r'__|[.-]', tool_name)[-1])
+        if MCP_MUTATION.match(operation):
             return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
@@ -263,14 +282,56 @@ def is_mutating(tool_name, tool_input):
     return False
 
 
-def allows_review_metadata(data):
-    from evidence_review import review_metadata_request
-    from evidence_store import EvidenceStore
-    if data.get('tool_name') not in {'Write', 'Edit', 'MultiEdit', 'apply_patch'}:
-        return False
+DENIAL_REASON = (
+    'BLOCKED: the current user prompt to this agent was classified as a question, so '
+    'this turn is answer-only. This tool call changes state, creates tasks, or starts '
+    'or directs other work. Read-only research remains available: answer the question '
+    'with its reasoning and end the turn instead of retrying this or another '
+    'state-changing call. A new non-question user instruction to this agent clears the '
+    'restriction. Other agents are unaffected.'
+)
+
+
+def is_question_blocked(tool_name, tool_input):
+    """Mutations plus actions that would hand the work to, or change, another worker."""
+    return tool_name in WORK_CONTROL_TOOLS or is_mutating(tool_name, tool_input)
+
+
+def evaluate(data):
+    if not isinstance(data, dict):
+        raise ValueError('hook input must be an object')
+    tool_name = data.get('tool_name')
+    if not isinstance(tool_name, str):
+        raise ValueError('missing tool_name')
+    # Only this identity's own marker: a root question must not stop children.
+    if not has_marker(data) or not enabled('answer-questions', data):
+        return None
+    if not is_question_blocked(tool_name, data.get('tool_input') or {}):
+        return None
+    return {'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+        'permissionDecisionReason': DENIAL_REASON,
+    }}
+
+
+def run_hook(data):
+    if os.environ.get('IONCACHE_DOCS_DISTILLER'):
+        return None
     try:
-        with EvidenceStore(data) as store:
-            return review_metadata_request(data, store)
-    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
-        print(f'pending-question: evidence review validation failed: {error}', file=sys.stderr)
-        return False
+        with invocation_deadline(4):
+            return evaluate(data)
+    except (InvocationDeadline, Exception) as error:
+        return unavailable('pending-question', error)
+
+
+def main():
+    try:
+        output = run_hook(json.load(sys.stdin))
+    except Exception as error:
+        output = unavailable('pending-question', error)
+    if output:
+        print(json.dumps(output))
+
+
+if __name__ == '__main__':
+    main()
