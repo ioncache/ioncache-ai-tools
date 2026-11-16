@@ -1,5 +1,5 @@
 {
-  "description": "Stateless guidance, recoverable action checks, and documentation caching",
+  "description": "Guidance, question-turn and recoverable action checks, and documentation caching",
   "hooks": {
     "SessionStart": [
       {
@@ -46,6 +46,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guidance.py\" PreToolUse",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block_pending_question.py\"",
             "timeout": 5
           }
         ]

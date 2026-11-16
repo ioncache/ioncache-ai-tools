@@ -76,8 +76,9 @@ for the caller; never commit or upload them. If permitted file handoff is
 unavailable, explicitly agree an in-context fallback or report blocked.
 
 Use the host's supported collection protocol and actual worker identities.
-Questions and background handbacks do not cancel existing assignments or create
-plugin permission gates. Honor explicit scope changes, pauses, and cancellation;
+Questions and background handbacks do not cancel existing assignments. A user
+question makes only the questioned agent answer-only for that turn; handbacks
+create no restriction. Honor explicit scope changes, pauses, and cancellation;
 never infer new authority from a report. A guidance-checker failure does not
 revoke the assignment, but missing review evidence still prevents completion.
 

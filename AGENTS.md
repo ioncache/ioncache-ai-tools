@@ -16,7 +16,13 @@ not become a permission state machine that stops a worker.
 A narrow action guard may deny an unchanged violation, but the worker must be
 able to take an allowed alternative and continue. Asking a human, restarting
 the session, or disabling the plugin is not sufficient recovery for an
-unattended worker. Scope and question instructions are guidance, not gates.
+unattended worker. Scope instructions are guidance, not gates.
+
+The question-turn guard is the one turn-scoped denial. It applies only to the
+root identity that received a user question, for that turn. Its recovery is
+the allowed alternative of read-only research and answering; the next prompt
+resets it. It must never apply to subagents or other agents, and a
+parent-written or host-started prompt must never create it.
 
 ## Design and review requirements
 

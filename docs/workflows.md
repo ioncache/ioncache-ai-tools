@@ -161,8 +161,9 @@ Pass results remain complete; shared records never substitute for fresh
 reasoning contexts or establish another worker's actual model.
 
 Give reviewers explicit assignments and permitted report paths. These are
-instructions, not plugin-maintained permissions. Questions and handbacks do
-not block other workers. Native host permissions and the review's snapshot
+instructions, not plugin-maintained permissions. A user question restricts
+only the agent that received it; handbacks and questions do not block other
+workers. Native host permissions and the review's snapshot
 checks still apply; the plugin does not judge semantic purpose or report evidence.
 
 The shared actionability policy reports worthwhile corrections (`Act`),

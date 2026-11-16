@@ -102,18 +102,30 @@ class CodexAdapterTests(unittest.TestCase):
             if output.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'
         ), {})
 
-    def test_autonomous_work_does_not_need_turn_or_task_permission_state(self):
+    def test_root_question_blocks_only_root_and_children_continue(self):
         (self.home / '.claude/ioncache-ai-tools.local.json').write_text('{"features": {}}')
+        self.marker.write_text('')
         self.prompt('Implement the requested change')
-        self.marker.write_text('stale question')
+        self.assertFalse(self.marker.exists(), 'a work instruction must clear an earlier question state')
         self.assertEqual(self.tool('spawn_agent', {'message': 'Implement the assigned change'}), {})
-        for identity in (None, 'first', 'second'):
-            self.invoke('UserPromptSubmit', agent_id=identity, prompt='Why did that change?')
-            self.invoke('PreCompact', agent_id=identity)
-            self.invoke('SessionStart', agent_id=identity, source='resume')
-            for worker in (None, 'first', 'second'):
-                self.assertEqual(self.invoke('PreToolUse', agent_id=worker, tool_name='apply_patch',
-                                             tool_input={'command': CLEAN_PATCH}), [{}])
+        for worker in ('first', 'second'):
+            # Parent-written assignments are not user questions, even when phrased as one.
+            self.invoke('UserPromptSubmit', agent_id=worker, prompt='Why did that change?')
+        self.prompt('Why did that change?')
+        for event, source in (('PreCompact', None), ('SessionStart', 'compact'), ('SessionStart', 'resume')):
+            self.invoke(event, source=source)
+            denied = self.tool('apply_patch', {'command': CLEAN_PATCH})
+            self.assertEqual(denied.get('permissionDecision'), 'deny')
+            self.assertIn('Read-only research remains available', denied['permissionDecisionReason'])
+        for name in ('spawn_agent', 'send_input'):
+            self.assertEqual(self.tool(name, {'message': 'Apply the change'}).get('permissionDecision'), 'deny')
+        self.assertEqual(self.tool('Bash', {'command': 'git diff --stat'}), {})
+        for worker in ('first', 'second'):
+            self.assertEqual(self.invoke('PreToolUse', agent_id=worker, tool_name='apply_patch',
+                                         tool_input={'command': CLEAN_PATCH}), [{}])
+        self.prompt('Apply the change')
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+        self.assertEqual(self.tool('spawn_agent', {'message': 'Implement the assigned change'}), {})
         self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
 
     def test_bounded_review_guidance_reaches_native_children_without_fences(self):
@@ -139,16 +151,18 @@ class CodexAdapterTests(unittest.TestCase):
             self.assertIn('codex_adapter.py', entries[0]['command'])
             self.assertTrue(entries[0]['command'].endswith(event))
 
-    def test_lifecycle_and_stop_do_not_create_question_permission_state(self):
+    def test_lifecycle_and_stop_preserve_question_state_until_next_instruction(self):
         self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='startup')))
-        self.assertEqual(self.prompt('Why does this happen?').count('Question guidance:'), 1)
+        self.assertEqual(self.prompt('Why does this happen?').count('Question turn:'), 1)
         output = self.invoke('Stop', last_assistant_message=f'Bad{EM_DASH}punctuation.')[0]
         self.assertEqual(output, {})
-        self.assertFalse(self.marker.exists())
+        self.assertTrue(self.marker.exists())
         self.invoke('PreCompact')
         self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='compact')))
         output = self.invoke('Stop', last_assistant_message='Corrected punctuation.', stop_hook_active=True)[0]
         self.assertEqual(output, {})
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}).get('permissionDecision'), 'deny')
+        self.prompt('Apply the patch')
         self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
 
     def test_scope_and_reply_checks_do_not_launch_a_reviewer(self):
@@ -296,9 +310,9 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         text = self.prompt('why is this different')
-        self.assertIn('Question guidance:', text)
-        self.assertFalse(self.marker.exists())
-        self.assertNotIn('Question guidance:', self.prompt('Implement the change'))
+        self.assertIn('Question turn:', text)
+        self.assertTrue(self.marker.exists())
+        self.assertNotIn('Question turn:', self.prompt('Implement the change'))
         self.assertFalse(self.marker.exists())
 
     def test_prompt_preserves_all_reminders_and_consumer_cwd(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-check for classify_question.py and block_pending_question.py.
+"""Self-check for question classification, state recording, and blocked tools.
 
 Run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
 
@@ -23,7 +23,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from classify_question import QUESTION_CONTRACT, has_question  # noqa: E402
-from block_pending_question import is_mutating  # noqa: E402
+from block_pending_question import WORK_CONTROL_TOOLS, is_mutating, is_question_blocked  # noqa: E402
 
 # (message, expected has_question() result, note). Real messages pulled
 # from this project's own Claude Code session history.
@@ -111,6 +111,24 @@ QUESTION_FIXTURES = [
         "what I want is an instruction telling it to NEVER use it's training data ever",
         True,
         'accepted false positive: declarative "what I want is X" opening with "what"',
+    ),
+    (
+        "ok I've just updated the ioncache-ai-tools plugin.  there is a new "
+        '/ioncache-ai-tools:autonomous-development skill in it.  is there a good github issue '
+        'we could use to test it?',
+        True,
+        'real question answered by writing a plan and run manifest in the same turn',
+    ),
+    (
+        'but I told you to finish.  that is part of the skil. you wer supposed to finish it.  put '
+        "up the pr and finish the work.  and what do you mean the hjelper won't run?",
+        True,
+        'accepted over-block: a mixed instruction and question stays answer-only until resubmitted',
+    ),
+    (
+        'ok this is broken in the skill too, it is supposed to use a generic location',
+        False,
+        'known gap: feedback without a question form is not answer-only',
     ),
 ]
 
@@ -388,6 +406,15 @@ MUTATION_FIXTURES = [
     ),
 ]
 
+# (tool_name, expected is_question_blocked() result): work control beyond mutations.
+WORK_CONTROL_FIXTURES = [
+    ('Agent', True), ('Task', True), ('task', True), ('Workflow', True), ('spawn_agent', True),
+    ('send_input', True), ('SendMessage', True), ('TaskStop', True), ('TaskCreate', True),
+    ('TaskUpdate', True), ('TodoWrite', True), ('run_dynamic_workflow', True),
+    ('write_agent', True), ('resume_agent', True), ('Read', False), ('Grep', False),
+    ('TaskList', False), ('WebFetch', False),
+]
+
 for option in ('--template', '-t', '--jq', '-q', '--header', '-H'):
     for operation, expected in (('query', False), ('mutation', True)):
         for value in ('-fquery=query { q }', '-foperationName=Read', '-f'):
@@ -450,7 +477,13 @@ def main():
         if got is not expected:
             failures.append(f'is_mutating mismatch ({note}): got {got}, expected {expected}')
 
-    # Exercise the actual protocol and verify classification has no permission state.
+    if {name for name, blocked in WORK_CONTROL_FIXTURES if blocked} != WORK_CONTROL_TOOLS:
+        failures.append('WORK_CONTROL_FIXTURES must cover every WORK_CONTROL_TOOLS name')
+    for tool_name, expected in WORK_CONTROL_FIXTURES:
+        if is_question_blocked(tool_name, {}) is not expected:
+            failures.append(f'is_question_blocked mismatch for {tool_name}: expected {expected}')
+
+    # Exercise the actual protocol: only a root user question records question state.
     session_id = f'self-check-{uuid.uuid4()}'
     flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
     with tempfile.TemporaryDirectory(prefix='question-check-') as home:
@@ -458,22 +491,32 @@ def main():
             settings = pathlib.Path(home) / '.claude/ioncache-ai-tools.local.json'
             settings.parent.mkdir()
             settings.write_text(json.dumps({'features': {}}))
-            result = subprocess.run(
-                [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
-                input=json.dumps({'session_id': session_id, 'cwd': home, 'prompt': 'why is this broken'}),
-                env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            output = json.loads(result.stdout)
-            hook_output = output.get('hookSpecificOutput') or {}
+
+            def classify(**fields):
+                result = subprocess.run(
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
+                    input=json.dumps({'session_id': session_id, 'cwd': home, **fields}),
+                    env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                return result.stdout
+
+            stdout = classify(prompt='why is this broken')
+            hook_output = json.loads(stdout).get('hookSpecificOutput') or {}
             if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
-                failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {result.stdout!r}')
-            if 'Question guidance:' not in hook_output.get('additionalContext', ''):
-                failures.append('classification must emit advisory question guidance')
+                failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {stdout!r}')
+            if QUESTION_CONTRACT not in hook_output.get('additionalContext', ''):
+                failures.append('a root question must emit the answer-only contract')
+            if not flag_path.exists():
+                failures.append('a root question must record its own question state')
+            classify(prompt='fix it')
             if flag_path.exists():
-                failures.append('classification must not create a question permission marker')
+                failures.append('a non-question instruction must clear the question state')
+            classify(prompt='why is this broken', agent_id='worker')
+            if flag_path.exists() or any(pathlib.Path('/tmp').glob(f'.ioncache-pending-question-{session_id}-*')):
+                failures.append('a parent-written child prompt must not record question state')
             manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'
             manifest = json.loads(manifest_path.read_text())
             commands = [hook['command'] for group in manifest['hooks']['UserPromptSubmit'] for hook in group['hooks']]
@@ -481,6 +524,8 @@ def main():
                 failures.append('a separate marker reader can race Claude prompt classification')
         finally:
             flag_path.unlink(missing_ok=True)
+            for child in pathlib.Path('/tmp').glob(f'.ioncache-pending-question-{session_id}-*'):
+                child.unlink(missing_ok=True)
 
     if failures:
         print(f'{len(failures)} failure(s):', file=sys.stderr)

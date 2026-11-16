@@ -17,6 +17,7 @@ from unittest import mock
 import uuid
 
 import plugin_config as config
+import block_pending_question
 import guidance
 from classify_question import marker_path
 from hook_adapter_common import run_shared_hooks
@@ -51,16 +52,21 @@ class ConfigurationTests(unittest.TestCase):
             signal.setitimer(signal.ITIMER_REAL, 0.01)
             time.sleep(1)
 
+        write = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'continued'}}
+        guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did it fail?'})
+        self.assertEqual(block_pending_question.run_hook(write)['hookSpecificOutput']['permissionDecision'], 'deny')
+        # A non-question instruction clears the marker even when guidance and settings both fail.
         with (
             mock.patch.object(guidance, 'feature_settings', side_effect=slow_settings),
+            mock.patch.object(config, 'synchronize', side_effect=OSError('settings unavailable')),
             mock.patch.object(sys, 'stderr', io.StringIO()),
         ):
             output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Implement the fix'})
         self.assertIn('invocation deadline', output['systemMessage'])
         self.assertNotIn('hookSpecificOutput', output)
-        self.assertIsNone(guidance.run_hook('PreToolUse', {
-            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'continued'},
-        }))
+        self.assertFalse(marker_path(self.data).exists())
+        self.assertIsNone(block_pending_question.run_hook(write))
+        self.assertIsNone(guidance.run_hook('PreToolUse', write))
         self.assertIn('additionalContext', guidance.run_hook('UserPromptSubmit', {
             **self.data, 'prompt': 'Implement the fix',
         })['hookSpecificOutput'])
@@ -295,21 +301,26 @@ class ConfigurationTests(unittest.TestCase):
     def test_question_guard_observes_configuration_changes_between_calls(self):
         path = config.paths(self.project)['claude'][0]
         prompt = {**self.data, 'prompt': 'Why did that change?'}
-        self.assertIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
         data = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'fix'}}
-        self.assertIsNone(guidance.run_hook('PreToolUse', data))
+        self.assertIn('Question turn:', str(guidance.run_hook('UserPromptSubmit', prompt)))
+        self.assertEqual(block_pending_question.run_hook(data)['hookSpecificOutput']['permissionDecision'], 'deny')
         self.write(path, {'features': {'answer-questions': False}})
-        self.assertNotIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
+        self.assertIsNone(block_pending_question.run_hook(data), 'opting out must release a pending question')
+        self.assertNotIn('Question turn:', str(guidance.run_hook('UserPromptSubmit', prompt)))
+        self.assertFalse(marker_path(self.data).exists())
         self.write(path, {'features': {'answer-questions': True}})
-        self.assertIn('Question guidance:', str(guidance.run_hook('UserPromptSubmit', prompt)))
-        self.assertIsNone(guidance.run_hook('PreToolUse', data))
+        self.assertIn('Question turn:', str(guidance.run_hook('UserPromptSubmit', prompt)))
+        self.assertEqual(block_pending_question.run_hook(data)['hookSpecificOutput']['permissionDecision'], 'deny')
+        guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Apply the fix'})
+        self.assertIsNone(block_pending_question.run_hook(data))
 
     def test_all_features_off_prevents_policy_and_tool_denials(self):
         global_path = config.paths(self.project)['claude'][0]
         self.write(global_path, {'features': {name: False for name in config.defaults()}})
         output = run_shared_hooks('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})
         self.assertIn('Disabled plugin skills:', str(output))
-        self.assertNotIn('answer-only', str(output))
+        self.assertNotIn('Question turn:', str(output))
+        self.assertFalse(marker_path(self.data).exists())
         self.assertEqual(run_shared_hooks('PreToolUse', {
             **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
         }), [])
@@ -389,27 +400,90 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
         self.assertEqual(config.synchronize(str(self.project), 'copilot', strict=True), disabled)
 
-    def test_retired_question_entrypoint_cannot_reactivate_stale_markers(self):
-        legacy = self.root / 'legacy-registration'
-        self.write(legacy / 'hooks/hooks.json', {'hooks': {'PreToolUse': [{
-            'hooks': [{'command': shlex.join([
-                sys.executable, str(ROOT / 'hooks/scripts/block_pending_question.py'),
-            ])}],
-        }]}})
-        for actor in (None, 'worker'):
-            data = {**self.data, 'agent_id': actor, 'tool_name': 'Write',
-                    'tool_input': {'file_path': 'target.py', 'content': 'requested'}}
-            marker = marker_path(data)
-            marker.touch()
-            self.addCleanup(lambda path=marker: path.unlink(missing_ok=True))
-            with self.subTest(actor=actor):
-                with mock.patch('hook_adapter_common.PLUGIN_ROOT', legacy):
-                    self.assertEqual(run_shared_hooks('PreToolUse', data), [])
-                self.assertEqual(run_shared_hooks('PreToolUse', data), [])
-                denial = run_shared_hooks('PreToolUse', {
-                    **data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
-                })
-                self.assertEqual(denial[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+    def test_question_marker_applies_only_to_the_questioned_identity(self):
+        root = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'requested'}}
+        child = {**root, 'agent_id': 'worker'}
+        self.addCleanup(lambda: marker_path(child).unlink(missing_ok=True))
+        # A child prompt is parent-written, so it records no question state.
+        output = str(guidance.run_hook('UserPromptSubmit', {**self.data, 'agent_id': 'worker', 'prompt': 'Why?'}))
+        self.assertFalse(marker_path(child).exists())
+        self.assertIn(guidance.CHILD_QUESTION_GUIDANCE, output)
+        self.assertIn(guidance.CHILD_BOOTSTRAP, output)
+        self.assertNotIn('Question turn:', output)
+        self.assertNotIn(guidance.BOOTSTRAP['answer-questions'], output)
+        output = str(guidance.run_hook('SubagentStart', {**self.data, 'agent_id': 'worker'}))
+        self.assertIn(guidance.CHILD_BOOTSTRAP, output)
+        self.assertNotIn(guidance.BOOTSTRAP['answer-questions'], output)
+        self.assertIn(guidance.BOOTSTRAP['answer-questions'],
+                      str(guidance.run_hook('SessionStart', self.data)))
+        guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did the worker change that?'})
+        self.assertTrue(marker_path(root).exists())
+        self.assertEqual(run_shared_hooks('PreToolUse', root)[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+        for tool, args in (('Agent', {'prompt': 'Apply the change'}), ('SendMessage', {'to': 'worker'}),
+                           ('Workflow', {'script': 'x'}), ('TaskCreate', {'subject': 'Apply it'}),
+                           ('TaskStop', {'task_id': 'worker'})):
+            with self.subTest(tool=tool):
+                output = run_shared_hooks('PreToolUse', {**self.data, 'tool_name': tool, 'tool_input': args})
+                self.assertEqual(output[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+        for tool, args in (('Read', {'file_path': 'target.py'}), ('Bash', {'command': 'git log -1'})):
+            self.assertEqual(run_shared_hooks('PreToolUse', {**self.data, 'tool_name': tool, 'tool_input': args}), [])
+        self.assertEqual(run_shared_hooks('PreToolUse', child), [])
+        self.assertEqual(run_shared_hooks('PreToolUse', {**child, 'tool_name': 'Agent', 'tool_input': {}}), [])
+        denial = run_shared_hooks('PreToolUse', {
+            **child, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
+        })
+        self.assertEqual(denial[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_host_started_turns_do_not_create_or_keep_question_state(self):
+        notices = (
+            '<task-notification>\n<summary>Where did the worker stop?</summary>\n</task-notification>',
+            # Observed Claude Code framing for subagent hand-backs and other sessions' messages.
+            'Another Claude session sent a message:\n<agent-message from="a85e39ab5b874ee52">\n'
+            '[Subagent hand-back] The report follows:\n  Is claim 7 true? Which version added it?\n'
+            '</agent-message>',
+        )
+        write = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'next step'}}
+        delegate = {**self.data, 'tool_name': 'Agent', 'tool_input': {'prompt': 'Run the next worker'}}
+        for notice in notices:
+            with self.subTest(notice=notice.split('\n')[0]):
+                output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': notice})
+                self.assertNotIn('Question turn:', str(output))
+                self.assertFalse(marker_path(self.data).exists())
+                self.assertEqual(run_shared_hooks('PreToolUse', write), [])
+                self.assertEqual(run_shared_hooks('PreToolUse', delegate), [])
+                guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why did it fail?'})
+                denied = run_shared_hooks('PreToolUse', delegate)
+                self.assertEqual(denied[0]['hookSpecificOutput']['permissionDecision'], 'deny')
+                # The host-started turn ends the question turn, so orchestration can resume.
+                guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': notice})
+                self.assertFalse(marker_path(self.data).exists())
+                self.assertEqual(run_shared_hooks('PreToolUse', delegate), [])
+
+    def test_question_state_failures_report_unavailability_without_denial(self):
+        data = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'x', 'content': 'y'}}
+        with mock.patch.object(guidance, 'set_marker', side_effect=OSError('marker unavailable')), \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})
+        self.assertIn('question-state checks unavailable', output['systemMessage'])
+        self.assertIn('Question turn:', output['hookSpecificOutput']['additionalContext'])
+        self.assertIsNone(block_pending_question.run_hook(data))
+        marker = marker_path(self.data)
+        marker.symlink_to(self.project / 'foreign-marker')
+        with mock.patch.object(sys, 'stderr', io.StringIO()):
+            output = block_pending_question.run_hook(data)
+        self.assertIn('pending-question checks unavailable', output['systemMessage'])
+        self.assertNotIn('permissionDecision', str(output))
+        marker.unlink()
+        marker.write_text('')
+        with mock.patch('classify_question.os.getuid', return_value=os.getuid() + 1), \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            output = block_pending_question.run_hook(data)
+        self.assertIn('pending-question checks unavailable', output['systemMessage'])
+        self.assertNotIn('permissionDecision', str(output))
+        marker.unlink()
+        with mock.patch.object(block_pending_question, 'has_marker', side_effect=OSError('unreadable')), \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            self.assertNotIn('permissionDecision', str(block_pending_question.run_hook(data)))
 
     def test_corrupt_config_allows_repair_then_restores_opt_out(self):
         path = config.paths(self.project)['claude'][0]
@@ -440,15 +514,16 @@ class ConfigurationTests(unittest.TestCase):
             'import importlib.abc,json,sys\n'
             'class NoClaims(importlib.abc.MetaPathFinder):\n'
             ' def find_spec(self,name,*args):\n'
-            '  if name in {"scope_guard","task_authorization","block_pending_question","turn_guard","turn_review","scope_review","copilot_history","claim_evidence","evidence_review","evidence_source","block_emdash_turn"}:\n'
+            '  if name in {"scope_guard","task_authorization","turn_guard","turn_review","scope_review","copilot_history","claim_evidence","evidence_review","evidence_source","block_emdash_turn"}:\n'
             '   raise AssertionError("Retired module loaded: "+name)\n'
             'sys.meta_path.insert(0,NoClaims())\n'
-            'import copilot_adapter,codex_adapter,guidance,docs_cache\n'
+            'import block_pending_question,copilot_adapter,codex_adapter,guidance,docs_cache\n'
             'from hook_adapter_common import run_shared_hooks\n'
             'data=json.loads(sys.argv[1])\n'
             'guidance.run_hook("SessionStart",data)\n'
             'guidance.run_hook("UserPromptSubmit",{**data,"prompt":"Implement the change"})\n'
             'guidance.run_hook("PreToolUse",{**data,"tool_name":"Write","tool_input":{"file_path":"x","content":"claim"}})\n'
+            'block_pending_question.run_hook({**data,"tool_name":"Write","tool_input":{"file_path":"x","content":"claim"}})\n'
             'guidance.run_hook("PostToolUse",{**data,"tool_name":"Read","tool_input":{},"tool_response":"output"})\n'
             'run_shared_hooks("Stop",{**data,"last_assistant_message":"The tests passed."})\n'
             'url="https://example.com/api"\n'

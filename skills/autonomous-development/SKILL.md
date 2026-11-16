@@ -6,8 +6,9 @@ description: Prepares an idea or existing artifacts for bounded implementation a
 # Autonomous development
 
 Loading this skill does not authorize execution, spending, commits, or publication.
-Humans approve the plan and retain PR approval and merge control. Questions do
-not cancel an existing assignment. Use native permissions, not a turn-based gate.
+Humans approve the plan and retain PR approval and merge control. A user question
+makes the questioned controller answer-only for that turn; it does not cancel
+the assignment or stop workers. Hand-backs are not user questions.
 
 ## Prepare
 

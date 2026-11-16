@@ -81,28 +81,47 @@ class CopilotAdapterTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config))
 
-    def test_autonomous_work_continues_across_questions_and_stale_state(self):
+    def test_root_question_blocks_only_root_and_children_continue(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
+        self.marker.write_text('')
         self.prompt('Implement the requested report with two independent workers')
-        self.marker.write_text('stale question')
-        actors = ({}, {'sessionId': 'worker-a', 'agentId': 'worker-a',
-                       'parentAgentId': self.payload['sessionId']},
-                  {'sessionId': 'worker-b', 'agentId': 'worker-b',
-                   'parentAgentId': self.payload['sessionId']})
+        self.assertFalse(self.marker.exists(), 'a work instruction must clear an earlier question state')
         self.assertEqual(self.tool('task', {'prompt': 'Write the requested report'}), {})
-        for index, actor in enumerate(actors):
-            self.invoke('userPromptTransformed', **actor,
+        root = {}
+        suffix = uuid.uuid4().hex
+        workers = tuple({'sessionId': f'worker-{name}-{suffix}', 'agentId': f'worker-{name}',
+                         'parentAgentId': self.payload['sessionId']} for name in ('a', 'b'))
+        for worker in workers:
+            for kind in ('question', 'prompt'):
+                path = marker_path(copilot_adapter.shared_input({**self.payload, **worker}), kind)
+                self.addCleanup(path.unlink, missing_ok=True)
+            # Parent-written assignments are not user questions, even when phrased as one.
+            self.invoke('userPromptTransformed', **worker,
                         prompt='What have you found?', transformedPrompt='What have you found?')
-            self.invoke('preCompact', **actor)
-            self.invoke('sessionStart', **actor, source='resume')
-            for worker in actors:
-                self.assertEqual(self.invoke('preToolUse', **worker, toolName='create',
-                                            toolArgs={'path': f'report-{index}.txt', 'file_text': 'continued'})[0], {})
+        self.prompt('What have you found?')
+        self.assertTrue(self.marker.exists())
+        for event in ('preCompact', 'sessionStart'):
+            self.invoke(event, **root, source='resume')
+            denied = self.invoke('preToolUse', toolName='create',
+                                 toolArgs={'path': 'report-root.txt', 'file_text': 'continued'})[0]
+            self.assertEqual(denied['permissionDecision'], 'deny')
+            self.assertIn('Read-only research remains available', denied['permissionDecisionReason'])
+        for delegation in (('task', {'prompt': 'Finish the report'}),
+                           ('bash', {'command': 'git commit -m "Finish the report"'})):
+            self.assertEqual(self.tool(*delegation)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('view', {'path': 'report-root.txt'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'git status --short'}), {})
+        for index, worker in enumerate(workers):
             command = f'printf "continued" > report-{index}.txt'
-            self.assertEqual(self.invoke('preToolUse', **actor, toolName='bash',
+            self.assertEqual(self.invoke('preToolUse', **worker, toolName='create',
+                                         toolArgs={'path': f'report-{index}.txt', 'file_text': 'continued'})[0], {})
+            self.assertEqual(self.invoke('preToolUse', **worker, toolName='bash',
                                          toolArgs={'command': command})[0], {})
             subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
             self.assertEqual((self.project / f'report-{index}.txt').read_text(), 'continued')
+        self.prompt('Write the root report')
+        self.assertEqual(self.tool('create', {'path': 'report-root.txt', 'file_text': 'continued'}), {})
+        self.assertEqual(self.tool('task', {'prompt': 'Finish the report'}), {})
         self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
 
     def test_checker_failure_does_not_require_human_recovery(self):
@@ -172,7 +191,7 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_default_reads_do_not_need_a_command_or_tool_allowlist(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
-        self.prompt('What changed in this checkout?')
+        self.prompt('Inspect this checkout')
         (self.project / 'input.txt').write_text('inspection fixture\n')
         for command in (
             'find . -type f',
@@ -270,7 +289,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertFalse(capture.exists())
         self.prompt('Why did that change?')
-        self.assertEqual(self.tool('bash', command), {})
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
         self.assertEqual(self.tool('view', {'path': 'source.py'}), {})
         self.prompt('Commit the requested fix')
         self.assertEqual(self.tool('bash', command), {})
@@ -493,15 +512,17 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('preCompact')[0], {})
         self.assertIn('documentation-backed', self.prompt('Continue')['modifiedTransformedPrompt'])
 
-    def test_stop_does_not_retry_visible_text_or_gate_tools(self):
+    def test_stop_does_not_retry_visible_text_or_clear_question_state(self):
         self.prompt('Why is this different?')
         path = self.write_events(self.transcript_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
         self.assertEqual(output, {})
-        self.assertFalse(self.marker.exists())
-        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
         self.write_events(self.transcript_events('Corrected punctuation.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
+        self.prompt('Create the file')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
     def test_web_fetch_served_from_docs_cache_and_corruption_recovers(self):
         url = 'https://git-scm.com/docs/git-commit'
@@ -841,7 +862,7 @@ class CopilotAdapterTests(unittest.TestCase):
             mock.patch.object(hook_adapter_common.subprocess, 'run', return_value=result) as run,
         ):
             hook_adapter_common.run_shared_hooks('PreToolUse', {'cwd': str(self.project)})
-        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1])
+        self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [5, 2, 1, 0.5])
 
 
 if __name__ == '__main__':

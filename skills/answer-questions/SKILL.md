@@ -1,21 +1,26 @@
 ---
 name: answer-questions
-description: Reference for this plugin's direct-answer guidance and handling of existing assignments. Use when inspecting or changing that policy, not as a required per-question loading step.
+description: Reference for this plugin's answer-only question turns and their tool guard. Use when inspecting or changing that policy, not as a required per-question loading step.
 ---
 
 # Question Response Standards
 
 ## CRITICAL RULE (NEVER VIOLATE)
 
-When the user asks a question, answer it directly with its reasoning.
-Answering does not authorize unrelated work. Read-only research is permitted
-when needed to answer accurately. A side question does not cancel an existing
-assignment: answer it and continue that work unless the user asks to pause,
-stop, or change it. Never stop another agent merely because a question arrived.
+A user question asks for information so the user can decide what to do. The
+reply is the answer and its reasoning. The agent that received the question
+must not make that decision or start implementing it in the same turn.
+
+- Read-only research is permitted when needed to answer accurately.
+- An existing assignment does not permit answering and then continuing the
+  implementation in the same question turn.
+- A question to one agent does not pause, cancel, or stop other agents or
+  their authorized work.
 
 **Forbidden in the reply:**
 
-- Unrequested code, drafts, designs, plans, next steps, or offers to do more
+- Unrequested code, drafts, designs, plans, next steps, recommendations, or
+  offers to do more
 - Apologizing ("I'm sorry", "You're right", "I apologize")
 - Acknowledging ("Good question", "You make a fair point", "Noted", "That's
   fair")
@@ -24,25 +29,23 @@ stop, or change it. Never stop another agent merely because a question arrived.
 **Required:**
 
 - Answer every question explicitly and in detail
-- State WHY for every answer, not just what, but the reasoning behind it
-- Answer all questions fully, without inventing an unrelated task
+- Answer WHY with a supported causal explanation, not a description of WHAT
+  happened
+- If the cause is unknown, say what is unknown instead of inventing a reason
 
 **Why:** Deflections, apologies, and acknowledgements do not answer what the
 user asked. They waste time and signal avoidance instead of reasoning.
 
-## Work product: distinguish new work from existing assignments
+## Work product: only when the question itself asks for it
 
-Before starting new work in response to a question, ask whether it can be fully
+Test before writing anything beyond plain text: can this question be fully
 answered without producing new work product (a design, a draft, code, a
 rewritten document)? If yes, answer with only that text. Do not draft,
 design, or implement anything pre-emptively, even something you're
 confident the user will ask for next. If no, meaning the question's own
 literal content is a request to produce something ("design a better X and
 show me," "draft a Y," "what would Z look like"), producing that thing
-*is* the direct answer, and doing so is expected, not scope creep.
-
-This restriction does not suspend work already requested. Keep the answer to
-the side question distinct from progress on that existing assignment.
+*is* the direct answer, and producing it in the reply is expected.
 
 **Why:** Drafting is real work the user pays for
 whether or not anything gets saved to disk. Answering "why did X happen"
@@ -54,13 +57,27 @@ without needing to guess intent: it doesn't block a genuine "design this
 for me" request, and it doesn't let an unrelated question smuggle in
 unrequested design work.
 
-## Checklist
+## Tool guard
 
-An unrelated question does not withdraw an existing assignment. Root and child
-workers may continue their authorized work without another approval exchange.
-These are instructions, not turn-wide tool restrictions or stored task permissions.
+When a root agent's user prompt is classified as a question, the plugin denies
+that agent's recognized state-changing tool calls until the next non-question
+prompt. Denied calls include file edits, recognized shell mutations such as
+commits and file writes, task or todo creation, and launching, messaging, or
+stopping workers. Read-only research stays available. After a denial, answer
+from what read-only research can establish and end the turn.
+
+The guard covers recognized operations, not every possible state change. It
+also does not check the reply text: the rules above about WHY, apologies, and
+recommendations remain instructions. Prompts that subagents receive from
+their parent are not treated as user questions, and their work is not
+blocked. Host-started turns, such as worker hand-backs and task
+notifications, end the question turn instead of starting one.
+
+## Checklist
 
 - [ ] Did the user ask a question?
 - [ ] Does the answer address the questions with explicit reasoning?
+- [ ] Does each WHY answer give a supported cause, or state what is unknown?
 - [ ] No apologies, no acknowledgements, no deflections in the response?
-- [ ] Any work product was requested by the question or an existing assignment?
+- [ ] No implementation, decisions, recommendations, or offers that the
+      question did not request?

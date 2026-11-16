@@ -131,7 +131,7 @@ provide standards for the requested work, not standalone test or audit tools.
 | `/ioncache-ai-tools:unit-tests` | Write or review unit tests using the target language and framework |
 | `/ioncache-ai-tools:jsdoc` | Write or review JavaScript JSDoc, not TypeScript or other languages |
 | `/ioncache-ai-tools:security` | Apply input-validation, authentication, and secret-handling standards |
-| `/ioncache-ai-tools:answer-questions` | Inspect question-answering guidance; not required before asking ordinary questions |
+| `/ioncache-ai-tools:answer-questions` | Inspect the answer-only question policy; not required before asking ordinary questions |
 
 Full skill instructions are in [skills/](skills/).
 
@@ -260,17 +260,25 @@ for configuration examples.
 
 ## Automatic guardrails
 
-Hooks run without a skill invocation. Scope and questions supply guidance,
-not task approvals or turn-wide permission gates. Questions and messages do
-not create blocking state for the receiving worker or other agents. Native
-host permissions still apply.
+Hooks run without a skill invocation. Scope supplies guidance, not task
+approvals. Native host permissions still apply.
+
+A user question makes that turn answer-only for the agent that received it.
+Until the next non-question prompt, that agent can research with read-only
+tools but cannot make recognized edits, commits, or shell writes, create tasks,
+or launch, message, or stop workers. Other agents continue their work.
+Prompts a subagent receives from its parent are not treated as user questions,
+and host-started turns, such as worker hand-backs, end the question turn.
+The guard recognizes common operations, not every state change, and does not
+check the reply text. See
+[docs/guardrails.md#question-turns](docs/guardrails.md#question-turns).
 
 Action checks block direct lockfile edits, broad process termination, and raw
 worktree creation. Recovery uses the package manager, an exact owned process
 target, or the setup helper respectively, without a plugin approval exchange.
 Checks also fix or reject em-dashes in file edits and shell input.
 
-Guidance covers scope, direct answers, documentation-backed
+Guidance covers scope, answer content, documentation-backed
 research, and engineering judgment. Hooks do not use model reviews to judge
 authorization or reply content. Checker failures report unavailability rather
 than stopping the worker or granting host permission.
