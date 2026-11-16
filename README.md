@@ -207,8 +207,10 @@ without changing the run. Worktrees may follow the project's sibling-directory
 convention; the private store must remain separate from every worktree.
 
 When approved, runs automatically publish initial and final process audit bundles
-on a separate branch in the same GitHub repository and link immutable versions
-from PR comments. Private inputs and raw reports stay local. The public narrative
+in the modified repository's wiki, update its newest-first
+`Automated-Pull-Request-Audits` table, and add report/data/index links to the PR
+body. The wiki must already be initialized and writable. No audit branch or
+manual upload is used. Private inputs and raw reports stay local. The public narrative
 requires publication review. Set `autonomous-development-audit` to `false` to
 disable this independently. See [skills/autonomous-development/AUDIT.md](skills/autonomous-development/AUDIT.md).
 

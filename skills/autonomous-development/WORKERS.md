@@ -89,10 +89,13 @@ https://code.claude.com/docs/en/sub-agents#frontmatter-reference.
 The workflow does not promise an instruction-free host or change its settings;
 it defines which explicit ruleset the review is allowed to use.
 When audit publication is approved and enabled, also verify Git and authenticated
-`gh` access to the same GitHub repository, creation/update of the run-owned audit
-branch, and PR comments. Check branch rules, signing requirements and native
-permissions without publishing a probe. Record `audit_publication: true` only
-when these capabilities are established. The helper does not provision access.
+`gh` access to the same GitHub repository, its initialized and writable wiki,
+and PR-body editing. Read the wiki's advertised default branch and existing
+`Automated-Pull-Request-Audits` table, if present. Check signing requirements
+and native permissions without publishing a probe. Record
+`audit_publication: true` only when these capabilities are established.
+Do not infer wiki access from repository access or from the wiki setting alone.
+The helper does not provision access or initialize GitHub wikis.
 
 `prepare` checks prerequisite PRs are actually merged. If not, return `waiting`
 before creating anything. Resolve the approved target base and preserve the
@@ -269,9 +272,11 @@ reports audit publication disabled, return `data: {"disabled": true}` without
 exporting or publishing. Otherwise, verify the accepted implementation commit
 is pushed to the existing PR's owned branch, then export, inspect and publish
 the permitted audit bundle. Return the helper's exact receipt as `data`.
-Only these workers may push the run-owned audit branch. Never force-push,
+Only these workers may publish audit pages, update the wiki index and edit the
+managed PR-body audit links. Use the wiki of the repository being modified,
+not a fixed repository or an implementation-repository audit branch. Never force-push,
 change code, upload the private store, or turn a failed publication into success.
-On failure preserve exports, existing commits/comments and diagnostics; return
+On failure preserve exports, existing wiki pages/rows, PR text and diagnostics; return
 blocked or recover the same operation from observed state without duplicating it.
 
 `ready` verifies current code, checks, review evidence, artifact freshness, and
@@ -280,8 +285,10 @@ description/evidence, and mark ready. Never approve, merge, deploy, or activate
 production flags. Publication data includes `commit`, `url`, `state` (`draft`
 or `ready`), and `evidence` identifying the actual observed remote state.
 When audit publication is enabled, verify the retained final receipt and its PR
-comment refer to this same code commit before marking ready. Keep the initial
-and final audit comments; neither is a review approval. When disabled, disclose
+links refer to the final wiki audit for this same code commit before marking ready.
+Preserve the managed `Audit` link block when updating the description, along with
+existing human text. Keep initial and final wiki files; neither is a review approval.
+When disabled, disclose
 that no final audit was published rather than presenting initial evidence as final.
 
 `evidence` uses approved startup commands, fixtures, and native browser tools.

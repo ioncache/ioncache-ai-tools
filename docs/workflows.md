@@ -48,10 +48,13 @@ Publication remains an assigned worker operation under native permissions.
 The helper does not independently verify the truth of remote receipts.
 With approved audit publication, separate initial and final assignments export
 selected process evidence and a publication-reviewed narrative. The audit helper
-publishes versioned files on a run-owned branch and links them from PR comments,
-without changing the implementation snapshot. It verifies the observed GitHub
-PR head, audit ref and comment response; the controller binds the retained receipt
-to the current export. See
+publishes separately named files in the modified repository's wiki and links them
+from the PR body's `Audit` section, without changing the implementation snapshot.
+It automatically puts that PR's current record at the top of the
+`Automated-Pull-Request-Audits` table while preserving other rows. Preflight
+requires an initialized, writable wiki. The publisher verifies the observed
+GitHub PR head, wiki commit and PR-body links; the controller binds the retained
+receipt to the current export. See
 [../skills/autonomous-development/AUDIT.md](../skills/autonomous-development/AUDIT.md)
 for privacy, retention, opt-out and recovery boundaries.
 

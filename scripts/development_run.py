@@ -56,8 +56,9 @@ def require_final_audit(state, pr, commit, settings):
     if audit_enabled(state, settings):
         published = state["prs"][pr].get("audits", [{}])[-1]
         plan.require(published.get("stage") == "audit-final" and
-                     published.get("code_commit") == commit and not published.get("disabled"),
-                     "Final audit is missing or stale; reconcile for a counted review and audit")
+                     published.get("code_commit") == commit and not published.get("disabled") and
+                     published.get("index_url") == audit.wiki_index(state) and published.get("wiki_commit"),
+                     "Final audit is missing, stale or not in the wiki; reconcile for a counted review and audit")
 
 
 def common_directory(root):
@@ -472,7 +473,7 @@ def complete_role(state, assignment, data, settings):
         if audit_enabled(state, settings):
             audit.repository(state["manifest"]["repository"]["url"])
             plan.require(data.get("audit_publication") is True,
-                         "Verify GitHub audit-branch and PR-comment publication before execution")
+                         "Verify the initialized GitHub wiki, wiki write access and PR-body editing before execution")
     elif role == "prepare":
         prepare_result(state, assignment, data)
     elif role == "implement":
@@ -531,7 +532,7 @@ def request(state, settings):
             },
             "progress": progress_summary(state["prs"][assignment["pr"]]) if assignment["pr"] else None,
             "audit": {"enabled": audit_enabled(state, settings),
-                      "branch": audit.branch(state, assignment["pr"]) if assignment["pr"] else None},
+                      "index_url": audit.wiki_index(state) if audit_enabled(state, settings) else None},
             "monitoring": {"enabled": monitoring.enabled(settings)},
             "model_selection": assignment.get("model_selection", model_policy(state, settings)),
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}

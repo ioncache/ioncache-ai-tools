@@ -7,19 +7,44 @@ native permission. Missing permission in an older manifest means no publication.
 
 ## Storage and lifetime
 
-Publish only `AUDIT.md` and `audit.json` on the run-owned branch
-`ioncache-audit/<run-id>/<pr-id>` in the same GitHub repository. The first commit
-has no implementation ancestors; later versions fast-forward that audit branch.
-The implementation worktree, index, HEAD and review fingerprint remain unchanged.
+Publish the reviewed `AUDIT.md` and `audit.json` to the wiki of the repository
+being modified. The wiki is a separate Git repository at
+`https://github.com/<owner>/<repo>.wiki.git` (or its SSH equivalent).
+Push only its existing default branch. Never create an audit branch in the
+implementation repository. Its worktree, index, HEAD and review fingerprint
+remain unchanged, and deleting an implementation branch does not delete the wiki.
 This adapter supports github.com HTTPS and SSH repository URLs, not another
 hosting provider, GitHub Enterprise Server, or cross-repository PRs.
 
-Each publication adds a PR comment linking both files by immutable commit ID.
-The initial comment follows draft creation. A final comment follows full-PR
-review, the accepted commit and any approved UI evidence, before readiness.
-Retain both comments and previous commits. Do not delete the audit branch as
-part of ordinary worktree cleanup. Repository retention and access policies still
-apply; this is not a separate archival or tamper-proof service.
+Each publication creates separately named report and JSON files:
+`Audit-PR-<number>-run-<run-id>-<assignment-id>-<bundle-identity>.md` and `.json`.
+The initial publication follows draft creation. The final publication follows
+full-PR review, the accepted commit and any approved UI evidence, before readiness.
+The helper never overwrites different bytes at an existing publication path.
+Retain both versions and the wiki history. Repository access, deletion and
+retention policies still apply; the wiki is not tamper-proof archival storage.
+
+Update the `Automated-Pull-Request-Audits` wiki page automatically. Create that
+page if it is absent from an initialized wiki. Its table has `Date`,
+`Pull request`, and `Audit records` columns, with one row per PR. Prepend the
+newest publication and replace that PR's previous row, leaving other rows and
+surrounding content intact. Use the UTC publication date, PR number/title/link,
+and links to the report and JSON. Repeating the same publication leaves its
+existing row in place rather than duplicating or reordering it.
+
+Update an `Audit` section in the PR body with `Report`, `Data (audit.json)`, and
+`Automated Pull Request Audits` links, as in the wiki index. Preserve the rest of
+the description, including an existing checklist and human notes. The helper
+owns only the link block between `ioncache-audit:start` and `ioncache-audit:end`
+HTML comments. Initial and final publication update that block; they do not post
+conversation comments or require manual uploads.
+
+An initialized, writable wiki is a deployment prerequisite. GitHub documents
+creating its initial page before cloning; enabling the repository's wiki setting
+alone does not establish this capability. Verify the wiki and publication access
+during preflight, before implementation. The helper does not initialize GitHub
+wikis, change repository settings, or silently choose another destination when
+the wiki is unavailable.
 
 Keep the private run store as well: new runs retain complete ledgers and objects
 under its `reviews/` directory, independently of all worktrees. After cleanup,
@@ -134,28 +159,39 @@ binds both files, not just the JSON. Changed evidence or edited output requires
 a new export and inspection. Neither the exporter nor publisher edits `RUN.json`.
 Return the complete publisher receipt as the development report's `data`.
 
-The publisher uses a temporary private Git repository, an explicit non-force
-push to the audit ref, and authenticated `gh api` calls. It checks the PR's
+The publisher uses a temporary private wiki checkout, a non-force push to its
+advertised default branch, and authenticated `gh api` calls. It checks the PR's
 repository, owned branch, open state and exact code commit before publication.
 Repository identities are case-insensitive; branch names remain case-sensitive.
-It resolves the authenticated actor through GraphQL before pushing, supporting
-both user and GitHub App installation tokens without relying on `GET /user`.
-Before pushing, it verifies that the Git commit contains exactly the two
-approved files with their approved bytes. Filters or commit hooks cannot silently
-change the published bundle or add files.
-It respects Git signing configuration. Branch rules or missing credentials
-produce failure, not a fallback to another repository or publication destination.
+HTTPS Git operations use `gh auth git-credential` in the temporary checkout;
+SSH URLs retain Git's SSH authentication. Verify the chosen credential's actual
+wiki access rather than inferring it from access to the implementation repository.
+Before pushing, the helper verifies the two approved files and generated index
+bytes, and rejects any unrelated changed files. Existing wiki files remain
+untouched. Filters or commit hooks cannot silently change the published bundle.
+It respects Git signing configuration. Missing access or signing failures
+produce failure, not a fallback destination or a false successful receipt.
 
 ## Recovery and limitations
 
-If a response is lost, inspect the existing export, audit branch and PR comments.
-Repeating the same publication reuses identical committed files and the matching
-comment by the authenticated caller. Markers include the run, assignment and
+If a response is lost, inspect the existing export, wiki files and PR body.
+Repeating the same publication reuses matching files and links without creating
+another row, commit or PR update. Page names include the run, assignment and
 export identities. Different assignments retain distinct publication records.
-The helper scans all comment pages. It does not overwrite another person's
-comment or a modified matching comment.
+Concurrent wiki pushes are retried at most three times by fetching the new head
+and rebuilding the table edit; never force-push or discard another writer's rows.
+If contention continues, retry the same export within the assignment's limits.
 
-Resolve credentials, signing, filter/hook compatibility or permitted branch-rule
+If the table or managed PR link block was edited into an unsupported shape,
+preserve the human content and repair only the structure before retrying.
+Move human notes outside the managed link block; do not discard them. Consolidate
+duplicate rows for this PR without deleting their audit records.
+The publisher rereads the PR after pushing the wiki and verifies its body after
+updating it. GitHub's body update is not an atomic compare-and-swap: avoid
+concurrent PR-description writers, since an edit between the final read and
+PATCH can still race. A missing confirmation remains incomplete, not success.
+
+Resolve credentials, signing, filter/hook compatibility or permitted wiki-access
 issues without bypassing required safeguards, then retry the same
 known operation. Unknown live workers still require native shutdown/reconciliation
 before retirement. A blocked development assignment resumes as a counted retry;
@@ -165,8 +201,13 @@ existing counted review reconciliation path before publishing a new final audit.
 If the approved operation remains impossible within its limits, preserve the
 initial PR and private evidence and report incomplete work.
 
+Older audit-branch receipts remain historical evidence; do not delete their
+publications or rewrite saved history. They cannot satisfy wiki publication for
+a pending readiness step. Use counted reconciliation to publish a current wiki
+audit without resetting approvals or consumed assignments.
+
 The bundle records its publication assignment as reserved: it is captured before
-the controller acknowledges publication. Its PR comment and retained receipt
+the controller acknowledges publication. Its wiki files, PR links and retained receipt
 record that external effect. It does not claim subsequent readiness or merging.
 Native tool transcripts, complete control-event history, actual model usage,
 cost and reliable worker durations are not automatically captured.
@@ -175,5 +216,5 @@ Original private evidence remains useful for a deeper authorized investigation.
 Protocol references:
 https://git-scm.com/docs/git-push
 https://cli.github.com/manual/gh_api
-https://docs.github.com/en/rest/issues/comments
-https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
+https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages
+https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request

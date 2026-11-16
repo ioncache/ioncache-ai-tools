@@ -127,8 +127,11 @@ Control workers and host-native retries also consume model usage. Establish
 available native resource controls during preflight and disclose gaps.
 
 `publish_audit: true` authorizes the selected worker to publish a reviewed export
-to `ioncache-audit/<run-id>/<pr-id>` in the same GitHub repository and link each
-version in a PR comment. It does not authorize uploading raw private evidence.
+to the modified repository's GitHub wiki, prepend or update its PR's row in
+`Automated-Pull-Request-Audits`, and link the report, JSON and index in the PR body.
+The wiki must already be initialized and writable. This does not authorize
+uploading raw private evidence, changing repository settings, or creating an
+audit branch in the implementation repository.
 Older schema-1 manifests without this field retain their original identity and
 sequence; absence means false, never retroactive publication consent.
 `autonomous-development-audit` is an independent, enabled-by-default feature
@@ -228,11 +231,13 @@ Commit accounting uses the first implementation baseline, not the latest retry.
 Additions left by failed attempts must be included; unchanged setup files need
 not be committed.
 Readiness requires that same accepted content and a current publication receipt.
-Audit receipts contain `stage`, `code_commit`, `bundle`, `audit_commit`, `branch`,
-`url`, and `comment_url`. The controller checks them against the retained exported
+Audit receipts contain `stage`, `code_commit`, `bundle`, `wiki_commit`, `url`,
+`data_url`, `index_url`, and `pr_url`. The controller checks them against the retained exported
 bytes and helper receipt. The publication helper verifies GitHub's observed PR
-head, the pushed audit ref and the comment response. This is not independent
-authentication of a hand-edited local receipt.
+head, the pushed wiki commit and the PR body's links. This is not independent
+authentication of a hand-edited local receipt. Older branch/comment receipts
+remain in history but cannot satisfy a pending wiki-publication readiness step;
+reconcile for a counted review and audit.
 
 ## Durable monitoring
 

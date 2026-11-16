@@ -148,10 +148,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   an observed identity or hardcode a model ranking.
 - `scripts/development_audit.py` exports selected process evidence and an explicitly
   reviewed public narrative. Its publisher runs only as an approved audit worker,
-  not as controller bookkeeping. Keep the GitHub audit branch separate from the
-  implementation branch, preserve immutable PR links, and exclude raw private
+  not as controller bookkeeping. Publish to the modified repository's wiki,
+  prepend one current row per PR to `Automated-Pull-Request-Audits`, preserve
+  other wiki content and PR-body text, and exclude raw private
   inputs, prompts and reports. Extend the development self-check's isolated Git
-  and fake-API publication fixtures; never publish to GitHub during offline checks.
+  wiki remotes and fake-API publication fixtures; never publish to GitHub during
+  offline checks. Wiki access and initialization are preflight prerequisites;
+  never fall back to an audit branch or a manual upload.
 - The `create-worktree` skill invokes `scripts/create-worktree.py`, which requires
   Node.js 22.12.0+ and checks its version before launching the sibling
   `create-worktree.js` helper.

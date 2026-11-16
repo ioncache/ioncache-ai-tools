@@ -48,8 +48,9 @@ the assignment or stop workers. Hand-backs are not user questions.
    Size review allowances using the rule in CONTRACT.md, including independent
    category, adjudication, validation, owner and correction calls.
    Include `permissions.publish_audit` explicitly in new manifests, proposing
-   `true` for GitHub PRs. Explain the separate run-owned audit branch, public
-   narrative review and PR comments before approval. A declined permission or
+   `true` for GitHub PRs. Explain the repository wiki, newest-first audit index,
+   public narrative review and PR-body links before approval. Confirm that the
+   wiki is initialized and writable. A declined permission or
    the independent audit opt-out leaves publication disabled, not implied.
    Budget two additional assignments per PR plus any publication retries.
    See [AUDIT.md](AUDIT.md) for the export and publication contract.

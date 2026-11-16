@@ -276,9 +276,27 @@ class DevelopmentRunTests(unittest.TestCase):
         self.git("remote", "set-url", "origin", self.plan["repository"]["url"])
         self.remote = self.folder / "audit-remote.git"
         self.git("init", "--bare", "-q", str(self.remote))
-        self.audit_git_env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.file://{self.remote}.insteadOf",
-                              "GIT_CONFIG_VALUE_0": self.plan["repository"]["url"]}
-        self.audit_comments = []
+        self.wiki_remote = self.folder / "wiki-remote.git"
+        self.git("init", "--bare", "-q", "-b", "docs", str(self.wiki_remote))
+        self.wiki = self.folder / "wiki"
+        self.wiki.mkdir()
+        self.git("init", "-q", "-b", "docs", root=self.wiki)
+        self.git("config", "user.name", "Wiki fixture", root=self.wiki)
+        self.git("config", "user.email", "fixture@example.invalid", root=self.wiki)
+        (self.wiki / "Home.md").write_text("Existing wiki content\n")
+        self.git("add", "Home.md", root=self.wiki)
+        self.git("commit", "-qm", "Existing wiki", root=self.wiki)
+        self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+        self.wiki_initial = self.git("rev-parse", "HEAD", root=self.wiki)
+        self.audit_git_env = {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": f"url.file://{self.remote}.insteadOf",
+            "GIT_CONFIG_VALUE_0": self.plan["repository"]["url"],
+            "GIT_CONFIG_KEY_1": f"url.file://{self.wiki_remote}.insteadOf",
+            "GIT_CONFIG_VALUE_1": "https://github.com/fixture/project.wiki.git",
+        }
+        self.audit_body = "# Fixture PR\n\nA human description.\n\n## Checklist\n\n- [ ] Human check\n"
+        self.audit_body_updates = []
         self.lose_audit_response = False
 
     def audit_export(self):
@@ -308,26 +326,19 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         return json.loads(result.stdout) if ok else result.stderr
 
-    def audit_api(self, endpoint, *, data=None, paginate=False):
-        if endpoint == "graphql":
-            self.assertEqual(data, {"query": "query { viewer { login } }"})
-            return {"data": {"viewer": {"login": "fixture-bot"}}}
-        if endpoint == "repos/fixture/project/pulls/1":
-            head = self.git("ls-remote", "origin", "refs/heads/fixture-feature").split()[0]
-            return {"state": "open", "head": {"sha": head, "ref": "fixture-feature",
-                                              "repo": {"full_name": "fixture/project"}}}
-        if paginate:
-            self.assertEqual(endpoint, "repos/fixture/project/issues/1/comments?per_page=100")
-            return [copy.deepcopy(self.audit_comments)]
-        self.assertEqual(endpoint, "repos/fixture/project/issues/1/comments")
-        self.assertIsNotNone(data)
-        comment = {"body": data["body"], "user": {"login": "fixture-bot"},
-                   "html_url": f"https://github.com/fixture/project/pull/1#issuecomment-{len(self.audit_comments) + 1}"}
-        self.audit_comments.append(comment)
-        if self.lose_audit_response:
-            self.lose_audit_response = False
-            raise OSError("Fixture lost response after comment creation")
-        return copy.deepcopy(comment)
+    def audit_api(self, endpoint, *, data=None, method=None):
+        self.assertEqual(endpoint, "repos/fixture/project/pulls/1")
+        if data is not None:
+            self.assertEqual(method, "PATCH")
+            self.assertEqual(set(data), {"body"})
+            self.audit_body = data["body"]
+            self.audit_body_updates.append(copy.deepcopy(data))
+            if self.lose_audit_response:
+                self.lose_audit_response = False
+                raise OSError("Fixture lost response after PR update")
+        head = self.git("ls-remote", "origin", "refs/heads/fixture-feature").split()[0]
+        return {"state": "open", "title": "Fixture pull request", "body": self.audit_body,
+                "head": {"sha": head, "ref": "fixture-feature", "repo": {"full_name": "fixture/project"}}}
 
     def start_audit_fixture(self):
         self.configure_audit()
@@ -361,28 +372,41 @@ class DevelopmentRunTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "lost response"):
                 audit.publish(state, active, exported["identity"])
             self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
-            first = self.git("ls-remote", "origin", "refs/heads/" + exported["branch"])
+            first = self.git("ls-remote", str(self.wiki_remote), "HEAD")
             receipt = audit.publish(state, active, exported["identity"])
-            self.assertEqual(first, self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]))
-        self.assertEqual(len(self.audit_comments), 1)
+            self.assertEqual(first, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+        self.assertEqual(len(self.audit_body_updates), 1)
         self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
+        self.assertTrue(self.audit_body.startswith("# Fixture PR\n\nA human description.\n"))
+        self.assertTrue(self.audit_body.endswith("## Checklist\n\n- [ ] Human check\n"))
+        self.assertIn(receipt["url"], self.audit_body)
         self.finish(receipt)
         while self.next():
             self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
-        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual(len(self.audit_body_updates), 2)
         self.assertEqual([item["stage"] for item in self.state["prs"]["first"]["audits"]], list(audit.ROLES))
-        self.assertIn(receipt["audit_commit"], self.audit_comments[0]["body"])
         final = self.state["prs"]["first"]["audits"][-1]
-        self.assertNotEqual(receipt["audit_commit"], final["audit_commit"])
+        self.assertNotEqual(receipt["wiki_commit"], final["wiki_commit"])
+        self.assertNotEqual(receipt["url"], final["url"])
+        self.assertNotIn(receipt["url"], self.audit_body)
+        self.assertIn(final["url"], self.audit_body)
         self.assertEqual(final["code_commit"], self.git("rev-parse", "HEAD", root=root))
-        tree = subprocess.run(["git", "--git-dir", str(self.remote), "ls-tree", "-r", "--name-only",
-                               receipt["audit_commit"]], env=self.env, capture_output=True, text=True, check=True)
-        self.assertEqual(set(tree.stdout.splitlines()), set(audit.FILES))
-        parents = subprocess.run(["git", "--git-dir", str(self.remote), "rev-list", "--parents", "-n", "1",
-                                  receipt["audit_commit"]], env=self.env, capture_output=True,
-                                 text=True, check=True)
-        self.assertEqual(parents.stdout.strip(), receipt["audit_commit"])
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        table = self.git("show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md", root=self.wiki)
+        self.assertEqual(table.count("](https://github.com/fixture/project/pull/1)"), 1)
+        self.assertIn(final["url"], table)
+        self.assertNotIn(receipt["url"], table)
+        self.assertEqual(self.git("show", "FETCH_HEAD:Home.md", root=self.wiki), "Existing wiki content")
+        for published in (receipt, final):
+            page = published["url"].rsplit("/", 1)[1]
+            content = self.git("show", f"FETCH_HEAD:{page}.json", root=self.wiki)
+            self.assertEqual(json.loads(content)["stage"], published["stage"])
+            self.assertNotIn("PRIVATE-AUDIT-SENTINEL", content)
+        self.assertEqual(self.git("for-each-ref", "--format=%(refname)", root=self.remote),
+                         "refs/heads/fixture-feature")
+        self.git("push", "origin", "--delete", "fixture-feature")
+        self.assertIn(final["wiki_commit"], self.git("ls-remote", str(self.wiki_remote), "HEAD"))
 
     def test_failed_audit_retries_without_refunding_or_consuming_the_final_audit_attempt(self):
         root = self.start_audit_fixture()
@@ -419,7 +443,7 @@ class DevelopmentRunTests(unittest.TestCase):
                  "--role", "development-control", "--actual-model", "observed-control",
                  "--source", "native-context")
         self.finish(receipt)
-        self.assertEqual(len(self.audit_comments), 1)
+        self.assertEqual(len(self.audit_body_updates), 1)
         self.assertEqual(files, {name: (Path(exported["directory"]) / name).read_bytes()
                                  for name in audit.FILES})
         records, unavailable = models.observations(development.load(self.store), "first")
@@ -442,7 +466,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(all(path.is_relative_to(self.store / "reviews") for path in paths))
         self.assertFalse((root / ".review-loop").exists())
         before = (self.store / "RUN.json").read_bytes()
-        comments = len(self.audit_comments)
+        updates = len(self.audit_body_updates)
         self.git("worktree", "remove", str(root))
         self.assertFalse(root.exists())
         result = self.audit_cli("archive", "--pr", "first", "--public", str(public))
@@ -452,7 +476,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(all(record["available"] for record in exported["reviews"]))
         self.assertEqual(originals, {path: path.read_bytes() for path in paths})
         self.assertEqual(before, (self.store / "RUN.json").read_bytes())
-        self.assertEqual(comments, len(self.audit_comments))
+        self.assertEqual(updates, len(self.audit_body_updates))
         self.assertIn("Reserve an audit", self.audit_cli("publish", "--approved", result["identity"], ok=False))
         last_review = next(item for item in reversed(saved["history"]) if item["role"] == "review")
         missing = Path(last_review["report"]["data"]["ledger"])
@@ -609,55 +633,172 @@ class DevelopmentRunTests(unittest.TestCase):
                     with self.assertRaisesRegex(manifest.ManifestError, "accepted implementation commit"):
                         audit.publish(state, active, exported["identity"])
         receipt_path = Path(exported["directory"]) / "receipt.json"
-        for key, value in (("comment_url", receipt["comment_url"].replace("Fixture/PROJECT", "fixture/other")),
+        for key, value in (("pr_url", receipt["pr_url"].replace("fixture/project", "fixture/other")),
                            ("url", receipt["url"].replace("fixture/project", "fixture/other")),
-                           ("branch", receipt["branch"].upper())):
+                           ("index_url", receipt["index_url"].replace("fixture/project", "fixture/other")),
+                           ("data_url", receipt["data_url"].replace("Audit-PR-1", "Audit-PR-2"))):
             with self.subTest(receipt_field=key):
                 changed = {**receipt, key: value}
                 receipt_path.write_bytes(manifest.encode(changed))
                 with self.assertRaisesRegex(manifest.ManifestError, "receipt does not match"):
                     audit.validate_receipt(state, active, changed)
 
-    def test_installation_actor_lookup_precedes_publication_and_preserves_author_recovery(self):
+    def test_unavailable_wiki_recovers_without_changing_the_pr_or_consuming_an_assignment(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
-        actor = "fixture-installation[bot]"
-        unavailable = True
+        before = (self.store / "RUN.json").read_bytes()
+        saved = self.folder / "unavailable-wiki.git"
+        self.wiki_remote.rename(saved)
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with self.assertRaises(manifest.ManifestError):
+                audit.publish(state, active, exported["identity"])
+            self.assertEqual(self.audit_body_updates, [])
+            self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
+            self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+            saved.rename(self.wiki_remote)
+            receipt = audit.publish(state, active, exported["identity"])
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.finish(receipt)
 
-        def installation_api(endpoint, *, data=None, paginate=False):
-            if endpoint == "user":
-                raise OSError("Installation tokens cannot use GET /user")
-            if endpoint == "graphql":
-                self.assertEqual(data, {"query": "query { viewer { login } }"})
-                if unavailable:
-                    return {"errors": [{"message": "Fixture actor lookup unavailable"}]}
-                return {"data": {"viewer": {"login": actor}}}
-            try:
-                result = self.audit_api(endpoint, data=data, paginate=paginate)
-            finally:
-                if data is not None and self.audit_comments:
-                    self.audit_comments[-1]["user"]["login"] = actor
-            if data is not None:
-                result["user"]["login"] = actor
+    def test_wiki_index_keeps_other_rows_and_prepends_one_current_row_per_pr(self):
+        publication = {
+            "title": "Fix | [links] <safely>\nwithout an extra row",
+            "pr_url": "https://github.com/fixture/project/pull/1",
+            "url": "https://github.com/fixture/project/wiki/Audit-PR-1-initial",
+            "data_url": "https://github.com/fixture/project/wiki/Audit-PR-1-initial.json",
+        }
+        previous = ("| 2026-01-01 | [#9 Existing PR](https://github.com/fixture/project/pull/9) | "
+                    "[Related PR](https://github.com/fixture/project/pull/1) |\n")
+        original = f"Human introduction\n\n{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n{previous}\nHuman footer\n"
+        initial = audit.index_entry(original, publication)
+        self.assertTrue(initial.startswith("Human introduction\n\n"))
+        self.assertTrue(initial.endswith(previous + "\nHuman footer\n"))
+        self.assertLess(initial.index(publication["pr_url"]), initial.index("/pull/9"))
+        self.assertIn(r"Fix &#124; \[links\] &lt;safely&gt; without an extra row", initial)
+        self.assertEqual(audit.index_entry(initial, publication), initial)
+        final = {**publication, "url": publication["url"].replace("initial", "final"),
+                 "data_url": publication["data_url"].replace("initial", "final")}
+        updated = audit.index_entry(initial, final)
+        self.assertEqual(updated.count("[#1 "), 1)
+        self.assertNotIn(publication["url"], updated)
+        self.assertIn(final["url"], updated)
+        self.assertTrue(updated.endswith(previous + "\nHuman footer\n"))
+        with self.assertRaisesRegex(manifest.ManifestError, "restore one"):
+            audit.index_entry("Human notes without an audit table", publication)
+
+    def test_wiki_concurrent_update_is_preserved_and_pr_body_is_reread(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        original = audit.command
+        raced = False
+        other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
+
+        def concurrent_update(argv, **kwargs):
+            nonlocal raced
+            if argv[1] == "push" and not raced:
+                raced = True
+                (self.wiki / (audit.INDEX_PAGE + ".md")).write_text(
+                    f"Existing introduction\n\n{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n"
+                    f"{other_row}\nExisting footer\n")
+                (self.wiki / "Other-page.md").write_text("Concurrent wiki edit\n")
+                self.git("add", ".", root=self.wiki)
+                self.git("commit", "-qm", "Another wiki publication", root=self.wiki)
+                self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+                self.audit_body += "\nHuman edit during wiki publication.\n"
+            return original(argv, **kwargs)
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api), \
+                patch.object(audit, "command", side_effect=concurrent_update):
+            receipt = audit.publish(state, active, exported["identity"])
+            repeated = audit.publish(state, active, exported["identity"])
+        self.assertTrue(raced)
+        self.assertEqual(receipt, repeated)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.assertTrue(self.audit_body.endswith("Human edit during wiki publication.\n"))
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        index = self.git("show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md", root=self.wiki)
+        self.assertTrue(index.startswith("Existing introduction\n"))
+        self.assertIn(other_row, index)
+        self.assertTrue(index.endswith("Existing footer"))
+        self.assertLess(index.index("/pull/1)"), index.index("/pull/9)"))
+        self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent wiki edit")
+        self.finish(receipt)
+
+    def test_wiki_contention_stops_after_three_attempts_and_can_resume(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        original = audit.command
+        pushes = 0
+
+        def concurrent_update(argv, **kwargs):
+            nonlocal pushes
+            if argv[1] == "push":
+                pushes += 1
+                (self.wiki / f"Concurrent-{pushes}.md").write_text(f"Concurrent edit {pushes}\n")
+                self.git("add", ".", root=self.wiki)
+                self.git("commit", "-qm", "Concurrent wiki update", root=self.wiki)
+                self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+            return original(argv, **kwargs)
+
+        before = (self.store / "RUN.json").read_bytes()
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with patch.object(audit, "command", side_effect=concurrent_update):
+                with self.assertRaisesRegex(manifest.ManifestError, "Wiki kept changing"):
+                    audit.publish(state, active, exported["identity"])
+            self.assertEqual(pushes, 3)
+            self.assertEqual(self.audit_body_updates, [])
+            self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+            receipt = audit.publish(state, active, exported["identity"])
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        for number in range(1, 4):
+            self.assertEqual(self.git("show", f"FETCH_HEAD:Concurrent-{number}.md", root=self.wiki),
+                             f"Concurrent edit {number}")
+        self.finish(receipt)
+
+    def test_lost_wiki_push_response_does_not_duplicate_the_publication(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        original = audit.command
+
+        def lost_push(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[1] == "push":
+                raise OSError("Lost wiki push response")
             return result
 
-        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", installation_api):
-            with self.assertRaisesRegex(manifest.ManifestError, "actor"):
-                audit.publish(state, active, exported["identity"])
-            self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]), "")
-            self.assertEqual(self.audit_comments, [])
-            unavailable = False
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with patch.object(audit, "command", side_effect=lost_push):
+                with self.assertRaisesRegex(OSError, "Lost wiki push"):
+                    audit.publish(state, active, exported["identity"])
+            first = self.git("ls-remote", str(self.wiki_remote), "HEAD")
+            self.assertEqual(self.audit_body_updates, [])
             receipt = audit.publish(state, active, exported["identity"])
-            self.audit_comments[0]["user"]["login"] = "another-publisher"
-            self.lose_audit_response = True
-            with self.assertRaisesRegex(OSError, "lost response"):
-                audit.publish(state, active, exported["identity"])
-            recovered = audit.publish(state, active, exported["identity"])
-            self.assertEqual(receipt["audit_commit"], recovered["audit_commit"])
-            self.assertNotEqual(receipt["comment_url"], recovered["comment_url"])
-            self.assertEqual(len(self.audit_comments), 2)
-            self.assertEqual(self.audit_comments[0]["user"]["login"], "another-publisher")
-        self.finish(recovered)
+            self.assertEqual(first, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.finish(receipt)
+
+    def test_pr_audit_block_preserves_manual_text_and_allows_repair(self):
+        publication = {
+            "url": "https://github.com/fixture/project/wiki/Audit-PR-1-first",
+            "data_url": "https://github.com/fixture/project/wiki/Audit-PR-1-first.json",
+            "index_url": "https://github.com/fixture/project/wiki/Automated-Pull-Request-Audits",
+        }
+        body = "## Audit\n\nExisting human notes.\n\n## Checklist\n\n- [ ] Keep me\n"
+        initial = audit.pr_body(body, publication)
+        self.assertEqual(initial.count("## Audit\n"), 1)
+        self.assertTrue(initial.endswith(body[len("## Audit"):]))
+        changed = initial.replace(audit.LINK_END, "Human addition\n" + audit.LINK_END)
+        with self.assertRaisesRegex(manifest.ManifestError, "preserve manual text"):
+            audit.pr_body(changed, publication)
+        repaired = initial + "\nHuman addition\n"
+        final = {**publication, "url": publication["url"].replace("first", "final"),
+                 "data_url": publication["data_url"].replace("first", "final")}
+        updated = audit.pr_body(repaired, final)
+        self.assertNotIn(publication["url"], updated)
+        self.assertIn(final["url"], updated)
+        self.assertTrue(updated.endswith("Human addition\n"))
+        self.assertIn("Existing human notes.", updated)
+        self.assertEqual(audit.pr_body(updated, final), updated)
 
     def mutation_during_settings_failure(self, command, *extra):
         original = development.feature_settings
@@ -733,7 +874,8 @@ class DevelopmentRunTests(unittest.TestCase):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
         original = audit.command
-        for name in ("AUDIT.md", "unexpected.txt"):
+        page = audit.publication_links(state, active, exported["identity"])["page"]
+        for name in (page + ".md", "Home.md", "unexpected.txt"):
             with self.subTest(file=name):
                 def changed_by_hook(argv, **kwargs):
                     if argv[1] == "commit":
@@ -747,8 +889,8 @@ class DevelopmentRunTests(unittest.TestCase):
                         patch.object(audit, "command", side_effect=changed_by_hook):
                     with self.assertRaisesRegex(manifest.ManifestError, "inspect .*hooks"):
                         audit.publish(state, active, exported["identity"])
-                self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + exported["branch"]), "")
-                self.assertEqual(self.audit_comments, [])
+                self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+                self.assertEqual(self.audit_body_updates, [])
 
     def test_audit_export_requires_complete_narrative_and_exact_publication_approval(self):
         self.start_audit_fixture()
@@ -794,8 +936,9 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
         self.assertTrue(all(item["disabled"] for item in self.state["prs"]["first"]["audits"]))
-        self.assertEqual(self.audit_comments, [])
+        self.assertEqual(self.audit_body_updates, [])
         self.assertEqual(self.git("ls-remote", "origin"), "")
+        self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
 
     def test_reenabled_audit_requires_counted_reconciliation_before_readiness(self):
         self.start_audit_fixture()
@@ -815,7 +958,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertEqual(self.state["assignment"]["attempt"], 2)
             self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
-        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual(len(self.audit_body_updates), 2)
 
     def workflow(self, scenario, expected_models=None):
         fixture = {"python": sys.executable, "store": str(self.store), "scenario": scenario,
@@ -1033,7 +1176,7 @@ class DevelopmentRunTests(unittest.TestCase):
             while self.next():
                 self.execute_fixture(self.state["assignment"])
         self.assertEqual(self.state["outcome"], "completed")
-        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual(len(self.audit_body_updates), 2)
         self.assertEqual((self.root / "app.txt").read_text(), "before\n")
         records = list((self.store / "reports").glob("*/audit/audit.json"))
         self.assertEqual(len(records), 2)
@@ -1104,7 +1247,7 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(self.state["assignment"])
             self.next()
         self.assertEqual(self.state["outcome"], "completed")
-        self.assertEqual(len(self.audit_comments), 2)
+        self.assertEqual(len(self.audit_body_updates), 2)
         final = next(item for item in reversed(development.load(self.store)["history"])
                      if item["role"] == "audit-final")
         public = self.store / "reports" / final["id"] / "public.json"
