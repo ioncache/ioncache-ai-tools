@@ -196,7 +196,7 @@ class DevelopmentRunTests(unittest.TestCase):
             Path(paths[key]).write_bytes(manifest.encode(value))
         return paths, phase
 
-    def review(self, root, *, record=True, files=None, finding=False):
+    def review(self, root, *, record=True, files=None, finding=False, advance=True):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
@@ -223,6 +223,8 @@ class DevelopmentRunTests(unittest.TestCase):
                 {"type": "decision", "id": "F001", "validation": "invalid", "disposition": "ignored",
                  "severity": "Low", "evidence": ["PRIVATE-AUDIT-SENTINEL"]},
             ]
+        if not advance:
+            events.pop()
         subprocess.run([sys.executable, "-c", "assert True"], env=self.env, cwd=root, check=True)
         for event in events:
             event.update(actor="fixture-owner")
@@ -1044,6 +1046,142 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish(data)
         self.assertEqual(self.state["consumed_assignments"], before)
         self.assertEqual(self.next()["role"], "commit")
+
+    def test_active_review_recovers_ineligible_storage_without_another_attempt(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False, finding=True, advance=False)
+        original = Path(data["ledger"])
+        before = development.load(self.store)
+        files = development.review.stored_files(original.parent)
+        self.git("init", "-q", str(self.store.parent))
+        self.assertIn("recover-review-storage", self.finish(data, ok=False))
+        self.mutate("recover-review-storage", "--ledger", str(original),
+                    "--reason", "Storage became a repository", "--shutdown-evidence", "Workers exited")
+        recovered = Path(self.state["assignment"]["recovered_ledger"])
+        self.assertTrue(recovered.is_relative_to(Path(self.env["XDG_STATE_HOME"])))
+        self.assertEqual(development.review.stored_files(recovered.parent), files)
+        after = development.load(self.store)
+        self.assertEqual(after["attempts"], before["attempts"])
+        self.assertEqual(after["approval"], before["approval"])
+        self.assertEqual(after["manifest"], before["manifest"])
+        self.assertEqual(after["history"][:-1], before["history"][:-1])
+        self.assertEqual(after["active"]["id"], before["active"]["id"])
+        self.assertEqual(after["active"], after["history"][-1])
+        self.assertEqual(self.state["consumed_assignments"], len(before["history"]))
+        saved = self.review_cli(root, ["status", str(recovered)])
+        self.review_cli(root, ["apply", str(recovered), "--revision", str(saved["revision"])],
+                        {"type": "advance", "actor": "fixture-owner", "reason": "Resume retained review"})
+        data["ledger"] = str(recovered)
+        self.finish(data)
+        self.assertEqual(self.state["consumed_assignments"], len(before["history"]))
+        self.assertEqual(self.next()["role"], "commit")
+        with patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaisesRegex(development.review.LedgerError, "outside every repository"):
+                development.review.ledger_path(root, str(original))
+        self.assertEqual(development.review.stored_files(original.parent), files)
+
+    def test_active_storage_recovery_retries_after_run_save_failure(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False, finding=True)
+        original = Path(data["ledger"])
+        files = development.review.stored_files(original.parent)
+        run_bytes = (self.store / "RUN.json").read_bytes()
+        self.git("init", "-q", str(self.store.parent))
+        args = SimpleNamespace(command="recover-review-storage", revision=self.state["revision"],
+                               ledger=str(original), reason="Storage moved", shutdown_evidence="Workers exited")
+        with patch.dict(os.environ, self.env, clear=True), patch.object(
+                development, "save", side_effect=OSError("Interrupted state publication")):
+            with self.assertRaisesRegex(OSError, "Interrupted state publication"):
+                development.mutate(args, self.store)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), run_bytes)
+        self.mutate("recover-review-storage", "--ledger", str(original),
+                    "--reason", args.reason, "--shutdown-evidence", args.shutdown_evidence)
+        recovered = Path(self.state["assignment"]["recovered_ledger"])
+        self.assertEqual(development.review.stored_files(recovered.parent), files)
+        self.assertEqual(len(self.state["assignment"]["storage_recoveries"]), 1)
+        self.assertEqual(development.review.stored_files(original.parent), files)
+        data["ledger"] = str(recovered)
+        self.finish(data)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_active_storage_recovery_rejects_corruption_and_invalid_destination(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        original = Path(data["ledger"])
+        run_bytes = (self.store / "RUN.json").read_bytes()
+        self.git("init", "-q", str(self.store.parent))
+        arguments = ("--ledger", str(original), "--reason", "Storage moved",
+                     "--shutdown-evidence", "Workers exited")
+        xdg = self.env["XDG_STATE_HOME"]
+        self.env["XDG_STATE_HOME"] = str(self.store.parent / "state")
+        self.assertIn("outside every repository", self.mutate(
+            "recover-review-storage", *arguments, ok=False))
+        self.env["XDG_STATE_HOME"] = xdg
+        blob = next((original.parent / "objects").iterdir())
+        contents = blob.read_bytes()
+        blob.write_bytes(b"corrupt")
+        self.assertIn("history unavailable", self.mutate("recover-review-storage", *arguments, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), run_bytes)
+        blob.write_bytes(contents)
+        self.mutate("recover-review-storage", *arguments)
+        data["ledger"] = self.state["assignment"]["recovered_ledger"]
+        self.finish(data)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_active_storage_recovery_requires_owned_ineligible_storage_and_enabled_feature(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        original = Path(data["ledger"])
+        arguments = ("--reason", "Storage moved", "--shutdown-evidence", "Workers exited")
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("already eligible", self.mutate(
+            "recover-review-storage", "--ledger", str(original), *arguments, ok=False))
+        other = self.folder / "other" / original.parent.parent.name / original.parent.name
+        development.shutil.copytree(original.parent, other)
+        self.assertIn("pinned review_storage", self.mutate(
+            "recover-review-storage", "--ledger", str(other / original.name), *arguments, ok=False))
+        self.git("init", "-q", str(self.store.parent))
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        for setting in ("autonomous-development", "skill:autonomous-development"):
+            config.write_text(json.dumps({"features": {setting: False}}))
+            self.assertIn("disabled", self.mutate(
+                "recover-review-storage", "--ledger", str(original), *arguments, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        config.write_text('{"features": {}}')
+        self.mutate("recover-review-storage", "--ledger", str(original), *arguments)
+        data["ledger"] = self.state["assignment"]["recovered_ledger"]
+        self.finish(data)
+
+    def test_active_storage_recovery_preserves_busy_source_and_conflicting_destination(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        original = Path(data["ledger"])
+        before = (self.store / "RUN.json").read_bytes()
+        self.git("init", "-q", str(self.store.parent))
+        arguments = ("--ledger", str(original), "--reason", "Storage moved",
+                     "--shutdown-evidence", "Workers exited")
+        destination = (Path(self.env["XDG_STATE_HOME"]) / "ioncache-ai-tools/development-recovery" /
+                       self.state["run"] / "reviews" / original.parent.parent.name / original.parent.name)
+        with (original.parent.parent / ".lock").open("rb") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.mutate("recover-review-storage", *arguments, ok=False)
+            self.assertFalse(destination.exists())
+        destination.mkdir(parents=True)
+        conflicting = destination / original.name
+        conflicting.write_bytes(b"Retained conflicting evidence\n")
+        self.assertIn("conflicts", self.mutate("recover-review-storage", *arguments, ok=False))
+        self.assertEqual(conflicting.read_bytes(), b"Retained conflicting evidence\n")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.env["XDG_STATE_HOME"] = str(self.folder / "recovery-state")
+        self.mutate("recover-review-storage", *arguments)
+        data["ledger"] = self.state["assignment"]["recovered_ledger"]
+        self.finish(data)
+        self.assertEqual(conflicting.read_bytes(), b"Retained conflicting evidence\n")
 
     def test_workflow_native_failures_preserve_workers_effects_and_allowance(self):
         self.plan["limits"]["attempts"] = 3

@@ -74,7 +74,9 @@ def external_directory(path, root=None):
                             capture_output=True, env=environment)
     require(result.returncode != 0,
             "Review storage must be outside every repository and Git metadata directory; "
-            "set XDG_STATE_HOME to an external state directory")
+            "set XDG_STATE_HOME to an external state directory. For an existing development review, "
+            "stop its workers and use development_run.py recover-review-storage; do not initialize "
+            "a replacement ledger")
     if result.returncode != 128 or not result.stderr.startswith(b"fatal: not a git repository (or any "):
         detail = result.stderr.decode(errors="replace").strip() or f"Git exited with status {result.returncode}"
         raise OSError(f"Git storage check unavailable: {detail}")
@@ -101,7 +103,7 @@ def external_run_directory(path, run_id, root):
 
 def review_paths(root, folders=()):
     paths = {}
-    for base in dict.fromkeys((safe_path(root, ".review-loop"), storage(root), *folders)):
+    for base in dict.fromkeys((safe_path(root, ".review-loop"), *folders)):
         if base.exists():
             for entry in base.iterdir():
                 if re.fullmatch(r"[a-f0-9]{32}", entry.name):
@@ -502,6 +504,26 @@ def migration_checkpoint(path, source, target):
     return {"files": record["files"], "ledger": record["ledger"]}
 
 
+def copy_run_evidence(source, target, baseline):
+    temporary = target.parent / f".initializing-{uuid4().hex}"
+    try:
+        shutil.copytree(source, temporary, symlinks=True)
+        migration_preserved(baseline, temporary)
+        for path in temporary.rglob("*"):
+            if not path.is_symlink() and path.is_file():
+                with path.open("rb") as handle:
+                    os.fsync(handle.fileno())
+        for path in sorted(temporary.rglob("*"), key=lambda value: len(value.parts), reverse=True):
+            if not path.is_symlink() and path.is_dir():
+                sync_directory(path)
+        sync_directory(temporary)
+        os.rename(temporary, target)
+        sync_directory(target.parent)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
 def migrate(args, root):
     """Move complete legacy evidence, preserving newer destination history on retry."""
     text(args.shutdown_evidence)
@@ -522,23 +544,7 @@ def migrate(args, root):
     if checkpoint.exists():
         require(target.is_dir(), "Verified migration destination is missing; restore it before retrying cleanup")
     if not target.exists():
-        temporary = target.parent / f".initializing-{uuid4().hex}"
-        try:
-            shutil.copytree(source, temporary, symlinks=True)
-            migration_preserved(baseline, temporary)
-            for path in temporary.rglob("*"):
-                if not path.is_symlink() and path.is_file():
-                    with path.open("rb") as handle:
-                        os.fsync(handle.fileno())
-            for path in sorted(temporary.rglob("*"), key=lambda value: len(value.parts), reverse=True):
-                if not path.is_symlink() and path.is_dir():
-                    sync_directory(path)
-            sync_directory(temporary)
-            os.rename(temporary, target)
-            sync_directory(target.parent)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
+        copy_run_evidence(source, target, baseline)
     migration_preserved(baseline, target)
     require(all(baseline["files"].get(name) == entry for name, entry in stored_files(source).items()),
             "Legacy source changed after verification; preserve the new evidence before retrying cleanup")

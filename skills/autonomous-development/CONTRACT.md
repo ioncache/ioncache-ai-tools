@@ -211,6 +211,32 @@ Historical archives use the same recovery root. If that location is also inside
 a repository, set `XDG_STATE_HOME` to external storage and retry the same run.
 Existing ledgers are not moved; preserve their recorded storage as well.
 
+If storage becomes ineligible during an active review, stop its native workers
+and recover the existing ledger instead of retiring the assignment:
+
+```sh
+python3 "/absolute/plugin/scripts/development_run.py" recover-review-storage "/private/run" \
+  --revision 8 --ledger "/original/reviews/<worktree-identity>/<review-id>/REVIEW_LEDGER.json" \
+  --reason "A repository was created around the review storage" \
+  --shutdown-evidence "Native host confirms this review's workers and processes exited"
+```
+
+Use the current controller revision and original ledger path. The command
+validates and copies the complete review directory into the external recovery
+location above, then updates the same assignment's storage pin. Original evidence
+stays untouched. Resume the returned `assignment.recovered_ledger`, not a new
+ledger. Review history, revision, findings and allowances do not change; only the
+controller revision advances to record the new pin and supplied recovery evidence.
+Assignment identity, attempts and consumed dispatches are retained. The command
+uses the existing autonomous-development opt-outs and does not stop or verify
+native workers itself.
+
+An identical copy left by an interrupted controller save can be reused on retry.
+Different destination evidence is preserved, not overwritten; choose another
+external `XDG_STATE_HOME` and retry. After a lost response, read `status` first:
+if the assignment already has the recovered path, continue from it. Do not copy
+back into rejected storage or rewrite `RUN.json` manually.
+
 The controller verifies the reported ledger's completion, base, current snapshot, exact allowances,
 and passing named acceptance checks. It also runs the shared category-record
 checker and binds the full plan to that root, base and snapshot. Missing

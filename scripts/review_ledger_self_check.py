@@ -6,6 +6,7 @@ from itertools import count, product
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -690,6 +691,20 @@ class ReviewLedgerTests(unittest.TestCase):
         self.init()
         self.assertFalse(Path(self.ledger).is_relative_to(self.root))
 
+    def test_explicit_storage_does_not_require_an_eligible_default(self):
+        invalid = self.root / "state"
+        self.env["XDG_STATE_HOME"] = str(invalid)
+        self.init("--storage", str(self.storage))
+        self.assertEqual(self.cli(["status", self.ledger])["revision"], 0)
+        self.assertFalse(invalid.exists())
+        self.assertIn("outside", self.cli(
+            ["init", "--objective", "Fixture", "--scope", "repository"], ok=False))
+        source = self.legacy_run()
+        self.assertIn("Legacy review records remain", self.cli(
+            ["init", "--objective", "Fixture", "--scope", "repository",
+             "--storage", str(self.storage)], ok=False))
+        self.assertTrue((source / "REVIEW_LEDGER.json").is_file())
+
     def test_saved_history_and_diff_survive_missing_worktree(self):
         self.init()
         initial = self.state["snapshot"]
@@ -724,6 +739,18 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.assertEqual(self.cli(command), result)
         self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), original)
         self.assertIn("outside every repository", self.reject("stop", outcome="interrupted"))
+        old_ledger = self.ledger
+        destination = self.folder / "recovered" / self.storage.name / Path(old_ledger).parent.name
+        shutil.copytree(Path(old_ledger).parent, destination)
+        self.ledger = str(destination / "REVIEW_LEDGER.json")
+        restored = self.cli(["status", self.ledger])
+        self.assertEqual(restored["revision"], self.state["revision"])
+        self.assertEqual(restored["loops"], self.state["loops"])
+        self.send("stop", outcome="interrupted")
+        self.assertIn("outside every repository", self.cli(
+            ["apply", old_ledger, "--revision", str(restored["revision"])],
+            self.event("stop", outcome="interrupted"), ok=False))
+        self.assertEqual(review_ledger.stored_files(Path(old_ledger).parent), original)
 
     def test_offline_reads_follow_migrated_legacy_references(self):
         self.init()

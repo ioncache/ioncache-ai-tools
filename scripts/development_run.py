@@ -6,7 +6,7 @@ remain authoritative. JSON results use stdout; errors use stderr and exit 2.
 """
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import fcntl
 import json
 import os
@@ -394,6 +394,46 @@ def review_result(state, assignment, data):
     progress["review"] = report
 
 
+def recover_review_storage(state, args):
+    active = state["active"]
+    plan.require(active is not None and active["role"] == "review" and active.get("review_storage"),
+                 "Recovery requires an active review with pinned storage")
+    plan.text(args.reason)
+    plan.text(args.shutdown_evidence)
+    root = Path(active["root"])
+    path = review.ledger_path(root, args.ledger, historical=True)
+    source = path.parent.parent
+    plan.require(source == Path(active["review_storage"]), "Ledger is outside the pinned review_storage")
+    recovery = review.external_run_directory(source, state["id"], root)
+    plan.require(recovery != source, "Review storage is already eligible; resume its existing ledger")
+    destination = review.external_directory(recovery / "reviews" / review.root_key(root), root)
+    target = review.safe_path(destination, path.parent.name)
+    with ExitStack() as locks:
+        source_lock = review.safe_path(source, ".lock")
+        if source_lock.exists():
+            handle = locks.enter_context(source_lock.open("rb"))
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        ledger, _ = review.load(path)
+        review.ensure_owner(ledger, root)
+        baseline = review.migration_snapshot(path.parent)
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        handle = locks.enter_context(review.safe_path(destination, ".lock").open("a"))
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not target.exists():
+            review.copy_run_evidence(path.parent, target, baseline)
+        plan.require(review.migration_snapshot(path.parent) == baseline,
+                     "Source evidence changed; stop its writers and retry recovery")
+        plan.require(review.stored_files(target) == baseline["files"],
+                     "Recovery destination conflicts with retained evidence; preserve both copies "
+                     "and choose another external XDG_STATE_HOME")
+        active.setdefault("storage_recoveries", []).append({
+            "source": str(path), "ledger": str(target / path.name),
+            "reason": args.reason, "shutdown_evidence": args.shutdown_evidence,
+        })
+        active["review_storage"] = str(destination)
+        state["history"][-1] = active
+
+
 def commit_result(state, assignment, data):
     root = Path(assignment["root"])
     before = assignment["before"]
@@ -515,7 +555,9 @@ def request(state, settings):
     progress = state["prs"].get(assignment["pr"], {})
     comparison = (progress.get("task_bases", {}).get(assignment["task"]) if assignment["task"]
                   else progress.get("base"))
+    recoveries = assignment.get("storage_recoveries", [])
     return {**assignment, "before": before_identity, "comparison_base": comparison,
+            "recovered_ledger": recoveries[-1]["ledger"] if recoveries else None,
             "store": state["store"], "approval": state["approval"],
             "manifest_file": str(Path(state["store"]) / "MANIFEST.json"),
             "objective": manifest["objective"], "configuration": manifest["configuration"],
@@ -639,6 +681,9 @@ def mutate(args, folder):
             state["outcome"] = "blocked"
         elif args.command == "reconcile":
             reconcile(state, args, settings)
+        elif args.command == "recover-review-storage":
+            feature(Path(state["root"]), settings)
+            recover_review_storage(state, args)
         elif args.command == "model-fallback":
             feature(Path(state["root"]), settings)
             models.schedule_fallback(state, args)
@@ -660,7 +705,8 @@ def parser():
     initialize.add_argument("--provider", help="Refuse incompatible packaged execution before creating state")
     for name in ("approved", "root", "store"):
         initialize.add_argument("--" + name, required=True)
-    for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile", "model-fallback"):
+    for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile",
+                 "model-fallback", "recover-review-storage"):
         command = commands.add_parser(name)
         command.add_argument("store")
         if name != "status":
@@ -671,10 +717,12 @@ def parser():
                                  help="Complete JSON launch choices, retained without changing the manifest")
         if name == "record":
             command.add_argument("--report", required=True)
-        if name in ("interrupt", "resume", "retire", "reconcile", "model-fallback"):
+        if name in ("interrupt", "resume", "retire", "reconcile", "model-fallback", "recover-review-storage"):
             command.add_argument("--reason", required=True)
-        if name in ("retire", "model-fallback"):
+        if name in ("retire", "model-fallback", "recover-review-storage"):
             command.add_argument("--shutdown-evidence", required=True)
+        if name == "recover-review-storage":
+            command.add_argument("--ledger", required=True)
         if name == "model-fallback":
             command.add_argument("--key", required=True)
             command.add_argument("--role", choices=models.ROLES, required=True)

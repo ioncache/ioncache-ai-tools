@@ -31,8 +31,10 @@ outside every repository and Git metadata directory. Select an external
 
 An autonomous-development assignment instead supplies its pinned `review_storage`
 inside the private development-run store. Pass `--storage "<review_storage>"` to
-`init`. Resume the absolute returned path, never another store or a fresh run to
-reset counters. Storage location and worktree ownership are separate: mutations
+`init`. An explicit destination does not require the unused default store to be
+eligible; unmigrated legacy records still require migration first.
+Resume the same run using its absolute returned path, never a fresh run to reset
+counters. Storage location and worktree ownership are separate: mutations
 and `status` still require the owning live checkout.
 
 `inspect` and `diff` read saved evidence without requiring that checkout:
@@ -49,6 +51,16 @@ the ledger alone cannot reproduce its saved snapshots.
 If a repository is later created around retained storage, these offline reads
 remain available. Live `status` and mutations still reject that location.
 Offline reads retain path, symlink, ownership and snapshot-integrity checks.
+
+For a standalone active run whose storage becomes ineligible, stop its writers
+and copy its complete run directory to an unused external destination, retaining
+the `<worktree-identity>/<run-id>/` suffix. Include every file and `objects/`.
+Use the copied ledger's absolute path with `status`, then continue with `apply`
+at its retained revision. Do not initialize a new run or abandon readable history
+just to relocate it. Keep the original evidence; writes there remain rejected.
+For a development-controller assignment, use `recover-review-storage` from
+`skills/autonomous-development/CONTRACT.md` instead: its storage pin must also
+be updated before the copied evidence can be accepted.
 
 Older `.review-loop/<run-id>/` directories are read-only to current mutation
 commands. Before removing their worktree, stop the native workers and migrate:

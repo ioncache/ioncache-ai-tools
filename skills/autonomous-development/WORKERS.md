@@ -134,6 +134,11 @@ absolute `review_storage`; keep the returned absolute ledger path in reports.
 This stores the ledger and objects outside every repository, normally inside the
 private run store. For recovered runs, use the supplied external path and retain
 it alongside the original store as described in `CONTRACT.md`.
+If the active assignment's storage becomes ineligible, stop its native workers
+and use the controller's `recover-review-storage` command from `CONTRACT.md`.
+Resume the returned `recovered_ledger` with the same assignment and remaining
+allowance. Do not initialize a replacement or retire the assignment just to
+change its storage.
 For an existing legacy ledger, stop its workers and use `migrate` before
 continuing; never initialize a replacement to relocate history.
 Use the supplied `comparison_base`: the original
