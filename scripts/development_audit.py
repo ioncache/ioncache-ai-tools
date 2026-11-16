@@ -60,10 +60,15 @@ def identity(value):
     return plan.digest(plan.encode(value))
 
 
-def review_record(path):
-    result = {"id": path.parent.name, "history_digest": None, "available": False}
+def review_identity(path):
+    name = path.parent.name
+    return name if re.fullmatch(r"[a-f0-9]{32}", name) else identity(str(path))
+
+
+def review_record(path, root=None):
+    result = {"id": review_identity(path), "history_digest": None, "available": False}
     try:
-        path = review.ledger_path(None, str(path), allow_unavailable=True)
+        path = review.ledger_path(root, str(path), allow_unavailable=True)
         if not path.is_symlink() and path.exists():
             result["history_digest"] = review.digest(path.read_bytes())
         closed = review.abandoned(path)
@@ -148,23 +153,27 @@ def review_locations(state, assignment):
             folders.append(Path(item["review_storage"]))
         reference = item.get("report", {}).get("data", {}).get("ledger")
         if isinstance(reference, str):
-            path = review.ledger_path(root, reference, allow_unavailable=True)
-            folders.append(path.parent.parent)
-            referenced[path.parent.name] = path
-    referenced.update({path.parent.name: path for path in review.review_paths(root, folders)})
-    return sorted(referenced.values(), key=lambda path: path.parent.name)
+            path = Path(os.path.abspath(root / reference))
+            try:
+                path = review.ledger_path(root, reference, allow_unavailable=True)
+                folders.append(path.parent.parent)
+            except (ValueError, OSError, KeyError, TypeError):
+                pass
+            referenced[review_identity(path)] = path
+    referenced.update({review_identity(path): path for path in review.review_paths(root, folders)})
+    return sorted(referenced.values(), key=review_identity)
 
 
 def build(state, assignment, public, *, model_snapshot=None):
     root = Path(assignment["root"])
-    records = [review_record(path) for path in review_locations(state, assignment)]
+    records = [review_record(path, root) for path in review_locations(state, assignment)]
     for record in records:
         record["assignment_ids"] = []
         for item in state["history"]:
             reference = item.get("report", {}).get("data", {}).get("ledger")
             if item["pr"] == assignment["pr"] and item["role"] == "review" and isinstance(reference, str):
-                resolved = review.ledger_path(root, reference, allow_unavailable=True)
-                if resolved.parent.name == record["id"]:
+                path = Path(os.path.abspath(root / reference))
+                if review_identity(path) == record["id"]:
                     record["assignment_ids"].append(item["id"])
     history = []
     for item in state["history"]:

@@ -178,16 +178,31 @@ If progress is disabled or unavailable, report the limitation and continue the a
 }
 
 /**
+ * Compares reserved JSON requests independently of object-key ordering.
+ * @param {object} request - Complete owner-supplied leaf request
+ * @returns {string} Stable request identity
+ * @example
+ * const identity = reviewRequestIdentity(request)
+ */
+function reviewRequestIdentity(request) {
+  return JSON.stringify(request, (_key, value) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+      : value)
+}
+
+/**
  * Validates a whole round before any leaf starts.
  * @param {object} assignment - Durable review assignment
  * @param {object[]} requests - Owner's leaf requests
- * @param {Set<string>} resultPaths - Previously assigned paths
+ * @param {Map<string, object>} reservations - Reserved requests and launch state
  * @returns {object[]} Validated requests with purpose-only instructions
  * @throws {Error} For unsupported roles, reused paths or invalid category packets
  * @example
- * const requests = prepareReviewRound(assignment, owner.requests, resultPaths)
+ * const requests = prepareReviewRound(assignment, owner.requests, reservations)
  */
-function prepareReviewRound(assignment, requests, resultPaths) {
+function prepareReviewRound(assignment, requests, reservations) {
+  const paths = new Set()
   return requests.map(request => {
     if (!['reviewer', 'adjudicator', 'validator', 'fixer'].includes(request.role)) {
       throw new Error('Unsupported review role')
@@ -195,9 +210,14 @@ function prepareReviewRound(assignment, requests, resultPaths) {
     if (!privateReport(request.result_file, assignment)) {
       throw new Error('Review result path is outside the assigned private directory')
     }
-    if (resultPaths.has(request.result_file)) throw new Error('Review reports must have distinct paths')
-    resultPaths.add(request.result_file)
-    if (request.role !== 'reviewer') return { ...request, instructions: request.prompt }
+    if (paths.has(request.result_file)) throw new Error('Review reports must have distinct paths')
+    paths.add(request.result_file)
+    const identity = reviewRequestIdentity(request)
+    const reservation = reservations.get(request.result_file) || { identity, started: false }
+    if (reservation.started || reservation.identity !== identity) {
+      throw new Error('Review report path belongs to a launched worker or a different reservation')
+    }
+    if (request.role !== 'reviewer') return { ...request, reservation, instructions: request.prompt }
     const packet = request.packet
     if (!packet || !packet.identity || !packet.review_type ||
         packet.instruction_set?.category !== packet.review_type ||
@@ -206,7 +226,7 @@ function prepareReviewRound(assignment, requests, resultPaths) {
         packet.result_file !== request.result_file) {
       throw new Error('Reviewer request must carry its frozen single-purpose packet')
     }
-    return { ...request, instructions: `Perform only the category in this frozen packet.
+    return { ...request, reservation, instructions: `Perform only the category in this frozen packet.
 Use its instruction_set source contents, not writing skills, the full catalog, or sibling criteria.
 Ambient repository instructions such as CLAUDE.md, AGENTS.md and rules files may already be present.
 Ignore them for this review. Only this explicitly supplied ruleset defines your review purpose.
@@ -232,6 +252,7 @@ Frozen packet: ${JSON.stringify(packet)}` }
  * const result = await reviewLeaf(assignment, request)
  */
 async function reviewLeaf(assignment, request) {
+  request.reservation.started = true
   const result = await launchAgent({
     role: request.role, schema: resultSchema, assignment,
     prompt: `Perform only the bounded ${request.role} assignment below. Do not launch agents.
@@ -306,7 +327,7 @@ async function dispatchReviewRound(assignment, requests) {
  */
 async function reviewAssignment(assignment) {
   const reports = []
-  const resultPaths = new Set()
+  const reservations = new Map()
   let calls = 0
   const maximum = assignment.limits.review_dispatches
   while (calls < maximum) {
@@ -333,9 +354,11 @@ For a mistaken source-read-only classification with otherwise complete coverage,
 report and record the adjudicator's isolation_assessments under PACKETS.md; do not re-run that category.
 A context_blocker is a worker's claim, not an established verdict. not_started entries have no report:
 preserve their reservations and counts, and replan rather than claiming those workers ran.
+After assessment, resubmit an unchanged unstarted request with its original result path.
+It retains its reserved dispatch slot; new requests and owner calls still need unreserved capacity.
 Genuine adoption of another ruleset, incomplete work or reused context cannot be waived merely because
 findings are empty. Do not repeat a known unchanged failure; reconcile the actual cause within existing limits.
-Owner calls plus leaf calls remaining after this call: ${maximum - calls}.
+Unreserved owner/leaf capacity after this call: ${maximum - calls}.
 ${progressInstructions(assignment, { dispatch: calls, role: 'review-owner' })}
 Assignment data: ${JSON.stringify(assignment)}
 Completed leaf report references: ${JSON.stringify(reports)}`,
@@ -357,12 +380,16 @@ Completed leaf report references: ${JSON.stringify(reports)}`,
     })
     if (!owner) throw new Error('Missing review-owner result')
     if (owner.outcome !== 'dispatch') return { outcome: owner.outcome, result_file: owner.result_file }
-    if (!owner.requests.length || calls + owner.requests.length >= maximum) {
+    const fresh = owner.requests.filter(request => !reservations.has(request.result_file))
+    if (!owner.requests.length || calls + fresh.length >= maximum) {
       throw new Error('Review dispatch allowance cannot cover the requested leaves and owner handback')
     }
-    const requests = prepareReviewRound(assignment, owner.requests, resultPaths)
-      .map((request, index) => ({ ...request, dispatch: calls + index + 1 }))
-    calls += requests.length
+    const requests = prepareReviewRound(assignment, owner.requests, reservations)
+    for (const request of requests) {
+      if (request.reservation.dispatch === undefined) request.reservation.dispatch = ++calls
+      request.dispatch = request.reservation.dispatch
+      reservations.set(request.result_file, request.reservation)
+    }
     reports.push(...await dispatchReviewRound(assignment, requests))
   }
   throw new Error('Review dispatch allowance exhausted before a complete handback')

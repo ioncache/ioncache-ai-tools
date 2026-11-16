@@ -440,23 +440,45 @@ def stored_files(folder):
         else:
             require(path.is_dir(), "Unsupported file in legacy review storage")
             entry = ("directory", None, mode)
-        entries[str(path.relative_to(folder))] = entry
+        entries[str(path.relative_to(folder))] = list(entry)
     return entries
 
 
-def migration_preserved(source, target):
-    before, after = stored_files(source), stored_files(target)
+def migration_snapshot(source):
+    files = stored_files(source)
+    entry = files.get("REVIEW_LEDGER.json")
+    content = (source / "REVIEW_LEDGER.json").read_bytes() if entry and entry[0] == "file" else None
+    require(content is None or digest(content) == entry[1],
+            "Legacy history changed during capture; stop its writers and retry migration")
+    return {"files": files, "ledger": content.hex() if content is not None else None}
+
+
+def migration_preserved(baseline, target):
+    before, after = baseline["files"], stored_files(target)
     if before == after:
         return
     require(all(after.get(name) == entry for name, entry in before.items()
                 if name != "REVIEW_LEDGER.json"), "Migration destination does not preserve the source files")
-    original, _ = load_history(source / "REVIEW_LEDGER.json")
+    require(isinstance(baseline["ledger"], str), "Original history cannot verify a changed migration destination")
+    content = bytes.fromhex(baseline["ledger"])
+    require(digest(content) == before["REVIEW_LEDGER.json"][1], "Migration checkpoint history changed")
+    original = json.loads(content)
+    validate_snapshots(original, target)
+    replay(original, check_snapshot_transition)
     current, _ = load_history(target / "REVIEW_LEDGER.json")
     require(all(current[key] == value for key, value in original.items()
                 if key not in ("events", "snapshots")) and
             current["events"][:len(original["events"])] == original["events"] and
             all(current["snapshots"].get(key) == value for key, value in original["snapshots"].items()),
             "Migration destination has conflicting history; preserve both records, never overwrite it")
+
+
+def migration_checkpoint(path, source, target):
+    record = json.loads(path.read_bytes())
+    fields(record, "schema source target files ledger")
+    require(record["schema"] == 1 and record["source"] == str(source) and record["target"] == str(target) and
+            isinstance(record["files"], dict), "Migration cleanup checkpoint belongs to a different transfer")
+    return {"files": record["files"], "ledger": record["ledger"]}
 
 
 def migrate(args, root):
@@ -468,14 +490,21 @@ def migrate(args, root):
             re.fullmatch(r"[a-f0-9]{32}", candidate.parent.name), "Migration requires a legacy run path")
     source = safe_path(root, str(candidate.parent.relative_to(root)))
     target = safe_path(storage(root), source.name)
+    checkpoint = safe_path(target.parent, f".migration-{source.name}.json")
+    migrated = source.exists()
     if not source.exists():
         require(target.is_dir(), "Legacy source and external destination are both missing")
-        return {"ledger": str(target / candidate.name), "migrated": False}
+        if not checkpoint.exists():
+            return {"ledger": str(target / candidate.name), "migrated": False}
+    baseline = (migration_checkpoint(checkpoint, source, target) if checkpoint.exists()
+                else migration_snapshot(source))
+    if checkpoint.exists():
+        require(target.is_dir(), "Verified migration destination is missing; restore it before retrying cleanup")
     if not target.exists():
         temporary = target.parent / f".initializing-{uuid4().hex}"
         try:
             shutil.copytree(source, temporary, symlinks=True)
-            migration_preserved(source, temporary)
+            migration_preserved(baseline, temporary)
             for path in temporary.rglob("*"):
                 if not path.is_symlink() and path.is_file():
                     with path.open("rb") as handle:
@@ -489,10 +518,17 @@ def migrate(args, root):
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
-    migration_preserved(source, target)
-    shutil.rmtree(source)
-    sync_directory(source.parent)
-    return {"ledger": str(target / candidate.name), "migrated": True,
+    migration_preserved(baseline, target)
+    require(all(baseline["files"].get(name) == entry for name, entry in stored_files(source).items()),
+            "Legacy source changed after verification; preserve the new evidence before retrying cleanup")
+    if not checkpoint.exists():
+        atomic_write(checkpoint, encode({"schema": 1, "source": str(source), "target": str(target), **baseline}))
+    if source.exists():
+        shutil.rmtree(source)
+        sync_directory(source.parent)
+    checkpoint.unlink()
+    sync_directory(checkpoint.parent)
+    return {"ledger": str(target / candidate.name), "migrated": migrated,
             "shutdown_evidence": args.shutdown_evidence}
 
 

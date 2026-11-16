@@ -209,6 +209,9 @@ the observations. This is a reported concern, not an established verdict.
 The adapter drains launched siblings and returns those reports to the owner
 for assessment, marking later requests `not_started` instead of launching them.
 Their reservations remain counted; no report or native launch is implied.
+After assessment, an unchanged unstarted request may use its original result
+path and dispatch reservation. Do not change its packet or purpose under that
+path, reuse a launched worker's path, or charge the same reservation again.
 The owner obtains adjudication and replans within the existing limits rather
 than automatically interrupting or repeating a category. Unresolved genuine
 failures still require the normal evidence-reconciliation path.

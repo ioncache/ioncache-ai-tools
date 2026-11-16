@@ -78,7 +78,7 @@ def execution(manifest):
     return {"provider": provider, "adapter": adapter}
 
 
-def require_provider(manifest, provider):
+def require_provider(manifest, provider, *, strict_worktrees=True):
     if provider is None:
         return
     require(provider in EXECUTION_ADAPTERS, f"No packaged adapter for execution provider {provider!r}")
@@ -87,7 +87,7 @@ def require_provider(manifest, provider):
             "use the approved provider's executor, or correct the manifest before approval. "
             "No assignment was reserved.")
     for item in manifest["prs"]:
-        executable_worktree(item["worktree"])
+        (executable_worktree if strict_worktrees else relative)(item["worktree"])
 
 
 def encode(value):

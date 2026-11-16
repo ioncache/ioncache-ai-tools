@@ -461,6 +461,53 @@ class DevelopmentRunTests(unittest.TestCase):
         records = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())["reviews"]
         self.assertEqual(len(records), len(paths))
         self.assertFalse(next(item for item in records if item["id"] == missing.parent.name)["available"])
+        missing.parent.symlink_to(self.store / "unavailable-directory", target_is_directory=True)
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        records = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())["reviews"]
+        unavailable = next(item for item in records if item["id"] == missing.parent.name)
+        self.assertFalse(unavailable["available"])
+        self.assertIn(last_review["id"], unavailable["assignment_ids"])
+        self.assertEqual(len(records), len(paths))
+        self.assertTrue(any(item["available"] for item in records))
+        self.assertTrue(missing.parent.is_symlink())
+
+    def test_audit_export_isolates_unusable_recorded_paths(self):
+        root = self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        public = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())["public"]
+        recorded = next(item for item in state["history"] if item["role"] == "review")
+        path = Path(recorded["report"]["data"]["ledger"])
+        path.parent.rename(self.store / "retained-history")
+        path.parent.symlink_to(self.store / "missing-history", target_is_directory=True)
+        public["findings"] = []
+        with patch.dict(os.environ, self.env, clear=True):
+            exported = audit.export(state, active, public)
+        bundle = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
+        unavailable = next(item for item in bundle["reviews"] if item["id"] == path.parent.name)
+        self.assertFalse(unavailable["available"])
+        self.assertEqual(unavailable["assignment_ids"], [recorded["id"]])
+        self.assertTrue(root.exists())
+        recorded["report"]["data"]["ledger"] = "/PRIVATE-AUDIT-PATH/invalid"
+        with patch.dict(os.environ, self.env, clear=True):
+            bundle = audit.build(state, active, public)
+        self.assertNotIn("PRIVATE-AUDIT-PATH", json.dumps(bundle))
+        self.assertTrue(any(recorded["id"] in item["assignment_ids"] and not item["available"]
+                            for item in bundle["reviews"]))
+        other_root = self.folder / "another-worktree"
+        other = self.store / "reviews" / development.review.root_key(other_root) / ("a" * 32)
+        other.parent.mkdir(parents=True)
+        (self.store / "retained-history").rename(other)
+        ledger_path = other / "REVIEW_LEDGER.json"
+        ledger = json.loads(ledger_path.read_bytes())
+        ledger.update(root=str(other_root), run_id=other.name)
+        ledger_path.write_bytes(manifest.encode(ledger))
+        recorded["report"]["data"]["ledger"] = str(ledger_path)
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(audit.review, "load", side_effect=AssertionError("Read a foreign review")):
+            bundle = audit.build(state, active, public)
+        foreign = next(item for item in bundle["reviews"] if item["id"] == other.name)
+        self.assertFalse(foreign["available"])
+        self.assertEqual(foreign["assignment_ids"], [recorded["id"]])
 
     def test_audit_repository_identity_accepts_casing_but_rejects_other_targets(self):
         self.start_audit_fixture()
@@ -1019,6 +1066,42 @@ class DevelopmentRunTests(unittest.TestCase):
         self.plan["tasks"][0]["paths"] = ["../outside"]
         with self.assertRaises(manifest.ManifestError):
             manifest.validate(self.plan, self.bundle)
+
+    def legacy_worktree_recovery(self, destination):
+        self.plan["prs"][0]["worktree"] = destination
+        self.path.write_bytes(manifest.encode(self.plan))
+        approved = self.cli("validate", self.path)["identity"]
+        args = SimpleNamespace(manifest=str(self.path), root=str(self.root), store=str(self.store),
+                               approved=approved, provider=None)
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(manifest, "executable_worktree", side_effect=manifest.relative):
+            saved = development.initialize(args)
+            saved.pop("worktree_roots")
+            development.save(self.store, saved)
+        original = (self.store / "MANIFEST.json").read_bytes()
+        self.state = self.cli("status", self.store)
+        self.mutate("next", "--provider", "claude-workflows")
+        self.assertEqual(self.state["assignment"]["role"], "preflight")
+        self.finish({name: True for name in ("artifact_access", "native_permissions", "fresh_workers",
+                                             "independent_review", "result_delivery", "cancellation")})
+        root = self.prepare()
+        self.execute_fixture(self.next())
+        self.next()
+        self.review(root)
+        self.mutate("reconcile", "--pr", "first", "--reason", "Repeat review within the original allowance")
+        self.mutate("next", "--provider", "claude-workflows")
+        self.assertEqual(self.state["assignment"]["role"], "review")
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+        self.assertEqual((self.store / "MANIFEST.json").read_bytes(), original)
+        self.assertEqual(development.load(self.store)["approval"], approved)
+        self.assertEqual(root, self.root / destination)
+
+    def test_legacy_option_like_worktree_continues_without_changing_approval(self):
+        self.legacy_worktree_recovery("-legacy-checkout")
+
+    def test_legacy_control_character_worktree_continues_without_changing_approval(self):
+        self.legacy_worktree_recovery("legacy\tcheckout")
 
     def watch_process(self, *args):
         process = subprocess.Popen(
@@ -1598,6 +1681,32 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_bytes(manifest.encode(report))
         self.assertIn("artifact identity", self.mutate("record", "--report", path, ok=False))
         self.assertEqual(self.cli("status", self.store)["assignment"]["id"], self.state["assignment"]["id"])
+        consumed = self.state["consumed_assignments"]
+        self.finish()
+        self.assertEqual(self.state["consumed_assignments"], consumed)
+        self.assertEqual((root / "discovered.txt").read_text(), "required implementation dependency")
+        self.assertEqual(self.next()["role"], "review")
+
+    def test_worker_owned_commit_can_be_unstaged_and_recorded_without_losing_edits(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        assignment = self.next()
+        (root / "app.txt").write_text("required implementation\n")
+        self.git("add", "app.txt", root=root)
+        self.git("commit", "-qm", "fixture accidental worker commit", root=root)
+        self.assertIn("HEAD or staging", self.finish(ok=False))
+        baseline = self.cli("status", self.store)["assignment"]["before"]
+        self.assertEqual(baseline, assignment["before"])
+        self.git("reset", "--soft", baseline["head"], root=root)
+        self.assertIn("HEAD or staging", self.finish(ok=False))
+        self.git("restore", "--staged", "app.txt", root=root)
+        consumed = self.state["consumed_assignments"]
+        self.finish()
+        self.assertEqual(self.state["consumed_assignments"], consumed)
+        self.assertEqual((root / "app.txt").read_text(), "required implementation\n")
+        self.assertEqual(self.git("rev-parse", "HEAD", root=root), baseline["head"])
+        self.assertEqual(self.next()["role"], "review")
 
     def test_disabled_controller_does_not_block_status_or_interruption(self):
         self.init()

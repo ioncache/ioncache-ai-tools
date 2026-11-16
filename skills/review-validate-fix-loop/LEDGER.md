@@ -70,6 +70,12 @@ is removed after the move. Old root-relative references resolve to the default
 external destination after migration; use the returned absolute path in new
 reports. Keep the same external state location when resolving old references.
 Ledger migration does not rewrite original development reports or their approval.
+Before source deletion, a private cleanup checkpoint pins the verified copy's
+file inventory and original ledger bytes outside the run directory. An interrupted
+deletion can resume after checking that checkpoint, the destination and remaining
+source files, even when the source no longer replays. Changed evidence is retained,
+not overwritten. Successful cleanup removes the checkpoint without changing the
+ledger or its objects.
 
 Initialization publishes the run directory only after its baseline is complete.
 An interruption before publication may leave `.initializing-*` directories in

@@ -187,11 +187,11 @@ def overlaps(left, right):
     return left.is_relative_to(right) or right.is_relative_to(left)
 
 
-def worktree_targets(root, manifest):
+def worktree_targets(root, manifest, *, strict=True):
     targets = {}
     metadata = Path(common_directory(root))
     for item in manifest["prs"]:
-        plan.executable_worktree(item["worktree"])
+        (plan.executable_worktree if strict else plan.relative)(item["worktree"])
         target = (root / item["worktree"]).resolve()
         plan.require(not root.is_relative_to(target), "Worktree cannot contain the launch repository")
         plan.require(not any(part in (".git", ".review-loop") for part in target.parts) and
@@ -211,7 +211,7 @@ def separate_store(folder, root, targets):
 
 def roots(state, pr_id):
     root = Path(state["root"])
-    targets = worktree_targets(root, state["manifest"])
+    targets = worktree_targets(root, state["manifest"], strict="worktree_roots" in state)
     pinned = state.get("worktree_roots")
     if pinned is not None:
         plan.require(pinned == {key: str(path) for key, path in targets.items()}, "Worktree path changed")
@@ -601,7 +601,8 @@ def mutate(args, folder):
             return summary(state, settings)
         plan.require(args.revision == state["revision"], "Stale revision; inspect status before retrying")
         if args.command == "next":
-            plan.require_provider(state["manifest"], args.provider)
+            plan.require_provider(state["manifest"], args.provider,
+                                  strict_worktrees="worktree_roots" in state)
             reserve(state, settings, args.models)
         elif args.command == "record":
             feature(Path(state["root"]), settings)

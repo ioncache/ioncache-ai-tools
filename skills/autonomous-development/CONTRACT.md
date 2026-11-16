@@ -59,6 +59,9 @@ later execution; restoring the original target recovers without changing approva
 Legacy manifests with otherwise valid option-like/control-character spellings
 still validate with warnings and unchanged identities, but cannot initialize
 execution. Artifact paths retain their contained relative-path rules.
+Already initialized runs without destination pins retain their original
+contained relative-path validation, including those legacy spellings, through
+reservation and reconciliation. Their approved manifests are not rewritten.
 The controller checks the prepared worktree's root, Git common directory and
 owned branch. It uses new branches and worktrees, never implicit adoption.
 `base` is a full commit ID. `target` is the intended PR base branch.

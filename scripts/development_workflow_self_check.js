@@ -190,25 +190,30 @@ function phase(title) {
  * Observes real promise overlap and exclusive fixer barriers without a live host.
  * @param {boolean|string} failLeaf - True for native failure, 'context' for conflict, false for success
  * @param {object} policy - Model-selection policy supplied by the controller
+ * @param {number} [dispatchLimit=20] - Owner and reserved leaf allowance
  * @returns {Promise<void>}
  * @throws {assert.AssertionError} When dispatch serializes readers or overlaps writers
  * @example
  * await concurrentReview(false)
  */
-async function concurrentReview(failLeaf, policy = {}) {
+async function concurrentReview(failLeaf, policy = {}, dispatchLimit = 20) {
   const assignment = {
     id: 'A0001', role: 'review', root: '/project', comparison_base: 'base',
     store: input.store, result_file: '/private/run/reports/A0001.json',
     configuration: { execution: { provider: 'claude-workflows' } },
-    monitoring: { enabled: true }, model_selection: policy, limits: { review_dispatches: 12 }
+    monitoring: { enabled: true }, model_selection: policy, limits: { review_dispatches: dispatchLimit }
   }
+  const resuming = ['resume', 'changed-reservation', 'completed-path', 'duplicate-reservation'].includes(failLeaf)
+  const blocked = Boolean(failLeaf && failLeaf !== 'resume')
+  const assessmentFile = '/private/run/reports/A0001/isolation-assessment.json'
+  let assessed = false
   let owners = 0
   let active = 0
   let maximum = 0
   let finished = 0
   let fixing = false
   const trace = []
-  const requests = ['reviewer', 'reviewer', 'fixer', 'fixer', 'validator', 'adjudicator'].map((role, index) => {
+  const requests = ['reviewer', 'reviewer', 'fixer', 'fixer', 'validator', 'reviewer'].map((role, index) => {
     const result_file = `/private/run/reports/A0001/leaf-${index}.json`
     const review_type = index === 0 ? 'correctness' : 'integration'
     return { role, prompt: `Independent fixture ${index}`, result_file, packet: role === 'reviewer' ? {
@@ -229,11 +234,29 @@ async function concurrentReview(failLeaf, policy = {}) {
     if (options.label === 'development-control') {
       assert.equal(active, 0, 'Controller must not advance while a sibling is still running')
       return { assignment: owners ? null : assignment, limits: { assignments: 1 }, revision: 0,
-        outcome: owners ? (prompt.includes('Interrupt') || failLeaf === 'context' ? 'blocked' : 'completed') : 'running' }
+        outcome: owners ? (prompt.includes('Interrupt') || failLeaf === 'context' ? 'blocked' : 'completed') : 'running',
+        reason: prompt.includes('Interrupt') ? prompt : null }
     }
     if (options.label === 'review-owner') {
       owners += 1
       if (owners === 1) return { outcome: 'dispatch', result_file: '', requests }
+      if (owners === 2 && resuming) {
+        assert.equal(finished, 2)
+        assert(prompt.includes('"outcome":"not_started"'))
+        return { outcome: 'dispatch', result_file: '', requests: [{
+          role: 'adjudicator', prompt: 'Assess the original source-read-only conflict.',
+          result_file: assessmentFile
+        }] }
+      }
+      if (owners === 3 && resuming) {
+        assert(assessed)
+        const remaining = requests.slice(2).map(request => Object.fromEntries(Object.entries(request).reverse()))
+        remaining[3].packet = Object.fromEntries(Object.entries(remaining[3].packet).reverse())
+        if (failLeaf === 'changed-reservation') remaining[0].prompt = 'Different correction assignment'
+        if (failLeaf === 'completed-path') remaining[0] = requests[1]
+        if (failLeaf === 'duplicate-reservation') remaining.push(remaining[0])
+        return { outcome: 'dispatch', result_file: '', requests: remaining }
+      }
       if (failLeaf === 'context') {
         assert.equal(finished, 2)
         assert(prompt.includes('"outcome":"not_started"'))
@@ -243,7 +266,15 @@ async function concurrentReview(failLeaf, policy = {}) {
       return { outcome: 'complete', result_file: assignment.result_file, requests: [] }
     }
     const result_file = JSON.parse(prompt.match(/Assigned result file: (.+)/)[1])
+    if (result_file === assessmentFile) {
+      assert.equal(active, 0)
+      assert.equal(finished, 2)
+      assessed = true
+      return { outcome: 'complete', result_file }
+    }
     const index = requests.findIndex(item => item.result_file === result_file)
+    const progress = JSON.parse(prompt.match(/Progress arguments: (.+)/)[1])
+    assert.equal(progress[progress.indexOf('--dispatch') + 1], String(index + 2))
     assert(!fixing, 'No leaf may overlap a fixer')
     if (options.label === 'fixer') {
       assert.equal(options.model, fixtureModels.fixer.model)
@@ -260,17 +291,22 @@ async function concurrentReview(failLeaf, policy = {}) {
     finished += 1
     trace.push(`end-${index}`)
     if (failLeaf === true && index === 0) throw new Error('Fixture concurrent leaf failed')
-    if (failLeaf === 'context' && index === 0) {
+    if ((failLeaf === 'context' || resuming) && index === 0) {
       return { outcome: 'blocked', result_file, context_blocker: 'Conflicting injected review instructions' }
     }
     return { outcome: 'complete', result_file }
   }
   const result = await run(input, worker, phase)
   assert.equal(maximum, 2, 'Independent leaves must overlap')
-  assert.equal(result.outcome, failLeaf ? 'blocked' : 'completed')
-  if (failLeaf) {
+  assert.equal(result.outcome, blocked ? 'blocked' : 'completed', result.reason)
+  if (blocked) {
     assert.equal(finished, 2, 'Drain already-launched siblings, but do not start later fixer batches')
+    if (resuming) {
+      assert(assessed)
+      assert.match(result.reason, /Review report/)
+    }
   } else {
+    assert.equal(finished, requests.length)
     assert(trace.indexOf('end-1') < trace.indexOf('start-2'))
     assert(trace.indexOf('end-2') < trace.indexOf('start-3'))
     assert(trace.indexOf('end-3') < trace.indexOf('start-4'))
@@ -540,6 +576,11 @@ async function main() {
   await concurrentReview(false, { enabled: true, review_auto_enabled: false })
   await concurrentReview(true)
   await concurrentReview('context')
+  await concurrentReview('resume')
+  await concurrentReview('resume', {}, 12)
+  await concurrentReview('changed-reservation')
+  await concurrentReview('completed-path')
+  await concurrentReview('duplicate-reservation')
   console.log('Development workflow offline self-check passed')
 }
 

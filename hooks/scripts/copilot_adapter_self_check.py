@@ -209,13 +209,15 @@ class CopilotAdapterTests(unittest.TestCase):
             output = self.tool('skill', {'skill': name})
             self.assertEqual(output.get('permissionDecision'), 'deny')
             self.assertIn('ordinary tools', output['permissionDecisionReason'])
-        self.prompt('/ioncache-ai-tools:autonomous-development')
         self.assertEqual(self.tool('view', {'path': str(ROOT / 'skills/autonomous-development/SKILL.md')}), {})
         command = 'printf continued > continued.txt'
         self.assertEqual(self.tool('bash', {'command': command}), {})
         subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
         self.assertEqual((self.project / 'continued.txt').read_text(), 'continued')
         self.assertEqual(self.tool('skill', {'skill': 'review-code'}), {})
+        self.assertEqual(self.tool('skill', {'skill': 'autonomous-development'})['permissionDecision'], 'deny')
+        self.prompt('/ioncache-ai-tools:autonomous-development')
+        self.assertEqual(self.tool('view', {'path': str(ROOT / 'skills/autonomous-development/SKILL.md')}), {})
         self.assertEqual(self.tool('skill', {'skill': 'autonomous-development'})['permissionDecision'], 'deny')
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
                           {'features': {'autonomous-development-explicit-only': False}})

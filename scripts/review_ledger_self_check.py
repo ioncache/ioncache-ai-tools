@@ -750,6 +750,77 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])["migrated"])
         self.assertFalse((self.root / ".review-loop").exists())
 
+    def test_migration_retry_after_partial_source_deletion_preserves_history(self):
+        self.init()
+        self.send("start_review")
+        source = self.legacy_run()
+        args = SimpleNamespace(ledger=str(source / "REVIEW_LEDGER.json"), shutdown_evidence="Stopped")
+        expected = review_ledger.stored_files(source)
+        ledger = json.loads((source / "REVIEW_LEDGER.json").read_bytes())
+        blob = next(iter(ledger["snapshots"][ledger["initial"]]["files"].values()))["blob"]
+
+        def interrupted_cleanup(path):
+            self.assertEqual(path, source)
+            (source / "objects" / blob).unlink()
+            raise OSError("interrupted after deleting a referenced object")
+
+        with patch("review_ledger.shutil.rmtree", side_effect=interrupted_cleanup):
+            with self.assertRaisesRegex(OSError, "referenced object"):
+                review_ledger.migrate(args, self.root)
+        self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), expected)
+        self.assertRegex(self.cli(["init", "--objective", "Other", "--scope", "all"], ok=False),
+                         "Legacy|Existing active run")
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])
+        self.assertFalse(source.exists())
+        self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), expected)
+        self.assertEqual(self.cli(["status", self.ledger])["revision"], self.state["revision"])
+        self.send("stop", outcome="interrupted")
+        self.send("resume")
+
+    def test_migration_cleanup_retry_rejects_changed_destination_and_source(self):
+        self.init()
+        source = self.legacy_run()
+        args = SimpleNamespace(ledger=str(source / "REVIEW_LEDGER.json"), shutdown_evidence="Stopped")
+        with patch("review_ledger.shutil.rmtree", side_effect=OSError("interrupted cleanup")):
+            with self.assertRaises(OSError):
+                review_ledger.migrate(args, self.root)
+        target = Path(self.ledger).parent
+        obj = next((target / "objects").iterdir())
+        original = obj.read_bytes()
+        obj.write_bytes(b"damaged destination")
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"], ok=False)
+        self.assertTrue(source.exists())
+        self.assertEqual(obj.read_bytes(), b"damaged destination")
+        obj.write_bytes(original)
+        unexpected = source / "new-evidence"
+        unexpected.write_text("retained source change")
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"], ok=False)
+        self.assertEqual(unexpected.read_text(), "retained source change")
+        unexpected.unlink()
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])
+        self.assertFalse(source.exists())
+
+    def test_migration_retry_after_source_removal_preserves_newer_history(self):
+        self.init()
+        source = self.legacy_run()
+        args = SimpleNamespace(ledger=str(source / "REVIEW_LEDGER.json"), shutdown_evidence="Stopped")
+        sync_directory = review_ledger.sync_directory
+
+        def interrupted_sync(path):
+            if path == source.parent and not source.exists():
+                raise OSError("interrupted after source removal")
+            sync_directory(path)
+
+        with patch("review_ledger.sync_directory", side_effect=interrupted_sync):
+            with self.assertRaisesRegex(OSError, "source removal"):
+                review_ledger.migrate(args, self.root)
+        self.assertFalse(source.exists())
+        self.send("start_review")
+        newer = Path(self.ledger).read_bytes()
+        self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])
+        self.assertEqual(Path(self.ledger).read_bytes(), newer)
+        self.assertFalse(list(self.storage.glob(".migration-*.json")))
+
     def test_migrated_abandonment_retains_unavailable_spending(self):
         self.init()
         Path(self.ledger).write_bytes(b"{damaged history")
@@ -761,6 +832,16 @@ class ReviewLedgerTests(unittest.TestCase):
         closed["ledger"] = str(source / "REVIEW_LEDGER.json")
         marker.write_bytes(review_ledger.encode(closed))
         original = review_ledger.stored_files(source)
+
+        def interrupted_cleanup(path):
+            self.assertEqual(path, source)
+            (source / "REVIEW_LEDGER.json").unlink()
+            raise OSError("interrupted cleanup of corrupt history")
+
+        args = SimpleNamespace(ledger=closed["ledger"], shutdown_evidence="Stopped")
+        with patch("review_ledger.shutil.rmtree", side_effect=interrupted_cleanup):
+            with self.assertRaisesRegex(OSError, "corrupt history"):
+                review_ledger.migrate(args, self.root)
         self.cli(["migrate", closed["ledger"], "--shutdown-evidence", "Stopped"])
         self.assertEqual(original, review_ledger.stored_files(Path(self.ledger).parent))
         self.assertEqual(self.cli(["inspect", self.ledger])["allowance"], "unavailable")
