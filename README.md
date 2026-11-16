@@ -1,7 +1,7 @@
 # ioncache-ai-tools
 
 A plugin for Claude Code, GitHub Copilot CLI, and Codex CLI. It provides
-19 directly invocable skills for code review, PR work, investigation, writing,
+20 directly invocable skills for code review, PR work, investigation, writing,
 and implementation, plus automatic guardrails for common tool actions.
 
 ## Install
@@ -114,6 +114,7 @@ defaults without a setup prompt.
 | `/ioncache-ai-tools:investigate` | Traces a feature or workflow and explains its behavior without editing files | The feature, workflow, or system to investigate |
 | `/ioncache-ai-tools:triage-errors` | Groups failing checks by root cause and fixes each group | The failing command and relevant error context |
 | `/ioncache-ai-tools:create-worktree` | Creates a git worktree and applies the repository's setup configuration | Worktree arguments, such as `-b feature-name ../feature-name` |
+| `/ioncache-ai-tools:autonomous-development` | Prepares approved plans and coordinates bounded implementation toward review-ready PRs | An idea, artifact references, an approved manifest, or a private run directory |
 
 ### Writing and engineering guidance
 
@@ -175,6 +176,33 @@ Role effort, validator, fallback, and strategy options are listed in
 accepts the same review options; they do not change its fixing model.
 Use `$ioncache-ai-tools:review-code --help` in Codex. Claude can show argument
 hints; `--help` is the portable option list, not a promised cross-host picker.
+
+## Autonomous development
+
+Invoke `/ioncache-ai-tools:autonomous-development` in Claude/Copilot, or
+`$ioncache-ai-tools:autonomous-development` in Codex. Choose planning, design,
+and execution destinations independently. Review and approve the plan, content
+snapshots, permissions, and finite limits before execution.
+
+The initial execution adapter is the Claude Workflow
+`/ioncache-ai-tools:autonomous-development-run`. It uses fresh workers, private
+durable state, per-task and full-PR reviews, and human-controlled PR merging.
+Copilot and Codex currently support preparation and state inspection only.
+This adapter uses configured models; unsupported review-role overrides require
+their declared fallback or leave the affected work incomplete.
+The adapter is **not yet live-host qualified**; offline checks do not establish
+unattended permissions, cloud operation, or shared team controls.
+
+When approved, runs automatically publish initial and final process audit bundles
+on a separate branch in the same GitHub repository and link immutable versions
+from PR comments. Private inputs and raw reports stay local. The public narrative
+requires publication review. Set `autonomous-development-audit` to `false` to
+disable this independently. See [skills/autonomous-development/AUDIT.md](skills/autonomous-development/AUDIT.md).
+
+Usage and recovery: [skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
+Manifest fields: [skills/autonomous-development/CONTRACT.md](skills/autonomous-development/CONTRACT.md).
+Set `autonomous-development` to `false` in the feature configuration to disable
+execution while retaining status and interruption commands.
 
 ## Review-loop arguments
 

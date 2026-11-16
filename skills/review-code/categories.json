@@ -17,6 +17,6 @@
   "skill_roles": {
     "category": ["security", "code-complexity", "comments", "jsdoc", "unit-tests"],
     "generic": ["engineering-judgment", "documentation-writing"],
-    "workflow": ["answer-questions", "create-worktree", "investigate", "post-pr-review-comments", "prompt-output", "review-code", "review-dependabot-pr", "review-triage-loop", "review-validate-fix-loop", "triage-errors", "verify-unresolved-pr-comments", "write-pr-descriptions"]
+    "workflow": ["answer-questions", "autonomous-development", "create-worktree", "investigate", "post-pr-review-comments", "prompt-output", "review-code", "review-dependabot-pr", "review-triage-loop", "review-validate-fix-loop", "triage-errors", "verify-unresolved-pr-comments", "write-pr-descriptions"]
   }
 }

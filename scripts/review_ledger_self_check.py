@@ -986,6 +986,277 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(list((self.root / ".review-loop").iterdir()),
                          [self.root / ".review-loop" / ".lock"])
 
+    def interrupt_init(self, boundary):
+        script = """
+import os
+import sys
+import review_ledger
+
+boundary = sys.argv[1]
+write = review_ledger.atomic_write
+def interrupted_write(path, data):
+    write(path, data)
+    if (boundary == "object" and path.parent.name == "objects" or
+            boundary == "ledger" and path.name == "REVIEW_LEDGER.json"):
+        os._exit(75)
+
+rename = review_ledger.os.rename
+def interrupted_rename(source, destination):
+    rename(source, destination)
+    if boundary == "published":
+        os._exit(75)
+
+review_ledger.atomic_write = interrupted_write
+review_ledger.os.rename = interrupted_rename
+sys.argv = ["review_ledger.py", "init", "--objective", "Interrupted fixture",
+            "--scope", "repository"]
+sys.exit(review_ledger.main())
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script, boundary], cwd=self.root,
+            env={**self.env, "PYTHONPATH": str(HELPER.parent)}, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+    def test_interrupted_initial_snapshot_allows_retry(self):
+        self.interrupt_init("object")
+        self.assertTrue(list((self.root / ".review-loop").glob("*/objects/*")))
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual((self.root / "app.txt").read_text(), "before\n")
+
+    def test_interrupted_unpublished_ledger_allows_retry(self):
+        self.interrupt_init("ledger")
+        self.init()
+        self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.send("start_review")
+        self.send("stop", outcome="interrupted")
+        self.send("resume")
+        self.assertEqual(len(self.state["loops"]), 1)
+
+    def test_interruption_after_publication_preserves_the_run(self):
+        self.interrupt_init("published")
+        ledgers = list((self.root / ".review-loop").glob("*/REVIEW_LEDGER.json"))
+        self.assertEqual(len(ledgers), 1)
+        self.ledger = str(ledgers[0])
+        self.state = self.cli(["status", self.ledger])
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_missing_published_ledger_is_not_an_unpublished_initialization(self):
+        self.init()
+        path = Path(self.ledger)
+        path.unlink()
+        self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.assertTrue(path.parent.is_dir())
+
+    def test_unrecoverable_history_can_be_closed_without_rewriting_evidence(self):
+        for damage in ("missing-ledger", "truncated-ledger", "missing-object", "corrupt-object",
+                       "file-map", "snapshot-map"):
+            with self.subTest(damage=damage):
+                self.init("--max-loops", "2")
+                self.send("start_review")
+                if damage == "file-map":
+                    self.send("review_done", passes=PASSES, checks=CHECKS)
+                    self.finding()
+                    self.decide()
+                    self.fix()
+                path = Path(self.ledger)
+                arguments = ["abandon", self.ledger, "--reason", "History is unrecoverable",
+                             "--evidence", "Inspected surviving objects; no complete history exists",
+                             "--shutdown-evidence", "All fixture workers have exited"]
+                self.assertIn("use stop", self.cli(arguments, ok=False))
+                missing = None
+                if damage == "missing-ledger":
+                    path.unlink()
+                    missing = path
+                elif damage == "truncated-ledger":
+                    path.write_bytes(b'{"incomplete":')
+                elif damage in ("missing-object", "corrupt-object"):
+                    obj = next((path.parent / "objects").iterdir())
+                    if damage == "missing-object":
+                        obj.unlink()
+                        missing = obj
+                    else:
+                        obj.write_bytes(b"corrupt")
+                else:
+                    ledger = json.loads(path.read_bytes())
+                    if damage == "file-map":
+                        before = ledger["initial"]
+                        item = ledger["snapshots"].pop(before)
+                        item["files"] = []
+                        key = review_ledger.digest(review_ledger.encode(item))
+                        ledger["snapshots"][key] = item
+                        ledger["initial"] = key
+                        for event in ledger["events"]:
+                            if event["snapshot"] == before:
+                                event["snapshot"] = key
+                    else:
+                        ledger["snapshots"] = []
+                    path.write_bytes(review_ledger.encode(ledger))
+                evidence = {item: item.read_bytes() for item in path.parent.rglob("*") if item.is_file()}
+                project = (self.root / "app.txt").read_bytes()
+                self.assertIn("abandon", self.cli(
+                    ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+                closed = self.cli(arguments)
+                self.assertEqual(closed["outcome"], "failed")
+                self.assertEqual(closed["allowance"], "unavailable")
+                if damage == "file-map":
+                    self.assertIn("Invalid snapshot file map", closed["error"])
+                self.assertEqual(closed, self.cli(["status", self.ledger]))
+                self.assertEqual(closed, self.cli(arguments))
+                for item, content in evidence.items():
+                    self.assertEqual(item.read_bytes(), content)
+                if missing is not None:
+                    self.assertFalse(missing.exists())
+                for event in ("resume", "start_review"):
+                    self.assertIn("abandoned", self.reject(event))
+                self.assertEqual((self.root / "app.txt").read_bytes(), project)
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_symlinked_ledger_can_be_closed_without_following_its_target(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                self.init()
+                path = Path(self.ledger)
+                original = path.read_bytes()
+                target = self.root / ("missing-history" if missing else "external-history")
+                if not missing:
+                    target.write_bytes(original)
+                path.unlink()
+                path.symlink_to(target)
+                args = [self.ledger, "--reason", "Ledger entry is an unusable symlink",
+                        "--evidence", "Inspected the entry without following its target",
+                        "--shutdown-evidence", "All fixture workers have exited"]
+                self.assertIn("abandon", self.cli(
+                    ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+                self.cli(["status", self.ledger], ok=False)
+                self.cli(["recover-closure", *args], ok=False)
+                closed = self.cli(["abandon", *args])
+                self.assertEqual((closed["outcome"], closed["allowance"]), ("failed", "unavailable"))
+                self.assertIn("Symlink", closed["error"])
+                self.assertEqual(self.cli(["status", self.ledger]), closed)
+                self.assertEqual(self.cli(["abandon", *args]), closed)
+                self.reject("resume")
+                self.reject("start_review")
+                self.assertTrue(path.is_symlink())
+                self.assertEqual(path.readlink(), target)
+                if missing:
+                    self.assertFalse(target.exists())
+                else:
+                    self.assertEqual(target.read_bytes(), original)
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_readable_history_survives_damaged_closure_recovery(self):
+        self.init("--max-loops", "2")
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        path = Path(self.ledger)
+        original = json.loads(path.read_bytes())
+        prior = self.state
+        objects = {item: item.read_bytes() for item in (path.parent / "objects").iterdir()}
+        project = (self.root / "app.txt").read_bytes()
+        marker = path.parent / "ABANDONED.json"
+        marker.write_bytes(b"damaged closure")
+        args = ["recover-closure", self.ledger, "--reason", "Cannot restore the closure record",
+                "--evidence", "Validated surviving history and inspected the damaged marker",
+                "--shutdown-evidence", "All fixture workers have exited"]
+        self.assertIn("recover-closure", self.cli(["abandon", *args[1:]], ok=False))
+        self.assertEqual(json.loads(path.read_bytes()), original)
+        self.assertIn("recover-closure", self.cli(["status", self.ledger], ok=False))
+        self.reject("resume")
+        self.cli([*args[:-1], ""], ok=False)
+        self.assertEqual(marker.read_bytes(), b"damaged closure")
+        self.state = self.cli(args)
+        self.assertEqual(self.state["outcome"], "failed")
+        for key in ("loops", "findings", "limits", "snapshot"):
+            self.assertEqual(self.state[key], prior[key])
+        saved = json.loads(path.read_bytes())
+        self.assertEqual(saved["events"][:-1], original["events"])
+        self.assertEqual(saved["snapshots"], original["snapshots"])
+        self.assertEqual(saved["events"][-1]["type"], "stop")
+        self.assertIn("All fixture workers have exited", saved["events"][-1]["reason"])
+        self.assertFalse(marker.exists())
+        archives = list(path.parent.glob("ABANDONED-*.json"))
+        self.assertEqual([item.read_bytes() for item in archives], [b"damaged closure"])
+        self.assertEqual(self.cli(args), self.state)
+        self.assertEqual(json.loads(path.read_bytes()), saved)
+        self.reject("resume")
+        self.reject("start_review")
+        for item, content in objects.items():
+            self.assertEqual(item.read_bytes(), content)
+        self.assertEqual((self.root / "app.txt").read_bytes(), project)
+        self.init()
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+
+    def test_closure_recovery_cannot_reopen_terminal_history_after_interruption(self):
+        self.init()
+        self.review()
+        self.send("advance")
+        path = Path(self.ledger)
+        original = path.read_bytes()
+        path.unlink()
+        flags = [self.ledger, "--reason", "Closure recovery fixture",
+                 "--evidence", "Inspected persisted fixture evidence",
+                 "--shutdown-evidence", "No native workers are running"]
+        self.cli(["abandon", *flags])
+        path.write_bytes(original)
+        self.cli(["recover-closure", *flags], ok=False)
+        self.assertEqual(path.read_bytes(), original)
+        marker = path.parent / "ABANDONED.json"
+        marker.write_bytes(b"damaged terminal closure")
+        args = review_ledger.parser().parse_args(["recover-closure", *flags])
+        with patch.object(review_ledger.os, "rename", side_effect=OSError("fixture archive failure")):
+            with self.assertRaisesRegex(OSError, "fixture archive failure"):
+                review_ledger.recover_closure(args, self.root)
+        self.assertEqual(marker.read_bytes(), b"damaged terminal closure")
+        self.assertEqual(json.loads(path.read_bytes())["events"][-1]["outcome"], "failed")
+        self.cli(["status", self.ledger], ok=False)
+        self.reject("resume")
+        self.state = self.cli(["recover-closure", *flags])
+        self.assertEqual(self.state["outcome"], "failed")
+        self.reject("resume")
+        self.assertEqual(self.cli(["status", self.ledger])["outcome"], "failed")
+
+    def test_abandonment_requires_evidence_and_cannot_be_transplanted(self):
+        self.init()
+        path = Path(self.ledger)
+        path.unlink()
+        args = ["abandon", self.ledger, "--reason", "Unrecoverable history",
+                "--evidence", "No surviving ledger copy", "--shutdown-evidence", ""]
+        self.cli(args, ok=False)
+        self.assertFalse((path.parent / "ABANDONED.json").exists())
+        args[-1] = "Offline fixture has no running worker"
+        self.cli(args)
+        marker = path.parent / "ABANDONED.json"
+        marker.write_bytes(b"corrupt closure")
+        self.cli(["status", self.ledger], ok=False)
+        self.cli(["recover-closure", *args[1:]], ok=False)
+        recovered = self.cli(args)
+        self.assertEqual((path.parent / recovered["previous_record"]).read_bytes(), b"corrupt closure")
+        self.assertEqual(self.cli(["status", self.ledger])["outcome"], "failed")
+        other = path.parent.parent / ("a" * 32)
+        other.mkdir()
+        (other / "ABANDONED.json").write_bytes((path.parent / "ABANDONED.json").read_bytes())
+        self.assertIn("different run", self.cli(
+            ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+
     def test_lock_blocks_concurrent_updates(self):
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()

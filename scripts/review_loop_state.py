@@ -378,6 +378,8 @@ def apply_event(state, event):
     if kind == "reconcile":
         require(state["outcome"] in ("running", "interrupted", "blocked"),
                 "Finished run cannot be reconciled")
+    elif kind == "stop" and state["outcome"] in ("completed", "completed_with_exceptions"):
+        require(event["outcome"] == "failed", "Completed history can only be invalidated as failed")
     elif kind == "stop" and state["outcome"] in ("interrupted", "blocked"):
         require(event["outcome"] in ("failed", "stalled"),
                 "A stopped run can only be abandoned as failed or stalled")

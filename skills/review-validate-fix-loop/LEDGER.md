@@ -19,6 +19,65 @@ on stdin. Supply the revision from the latest successful response. A stale
 revision is rejected; inspect history before retrying rather than duplicating
 an event whose response was lost.
 
+Initialization publishes the run directory only after its baseline is complete.
+An interruption before publication may leave `.review-loop/.initializing-*`
+artifacts. They contain no published run and do not prevent retrying `init`.
+The helper preserves these abandoned artifacts; no manual cleanup is required
+to continue. If publication succeeded but the response was lost, `init` reports
+the existing run instead. Inspect that run with `status` and continue it rather
+than replacing its history or limits. Missing or corrupt published ledgers
+remain errors, not permission to start over.
+
+If exact history cannot be restored, inspect the surviving evidence and stop
+the run's native workers before closing it:
+
+```bash
+python3 "/installed plugin/scripts/review_ledger.py" abandon \
+  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  --reason "Complete history cannot be recovered" \
+  --evidence "Inspected retained reports and objects; no complete ledger copy exists" \
+  --shutdown-evidence "Native host confirms this run's workers and processes exited"
+```
+
+Supply actual observations, not these example claims. `abandon` records a
+terminal failed outcome in `ABANDONED.json`, without rewriting surviving history,
+snapshots, or project files. Unknown spending stays unknown; the abandoned run's
+remaining allowance is unavailable. It cannot resume or satisfy a completed
+review. Readable ledgers use the ordinary `stop` event instead.
+`status` and repeated `abandon` calls return the saved closure. A damaged closure
+record is archived before replacement only when history is unreadable.
+An unusable symlink at the ledger entry can be abandoned without following,
+removing or replacing it. Its target does not supply trusted history.
+The run directory must still be real, owned storage. Closure status and audit
+export retain this run as failed with unavailable allowance.
+
+If the closure record is damaged but the ledger is readable, use:
+
+```bash
+python3 "/installed plugin/scripts/review_ledger.py" recover-closure \
+  ".review-loop/<run-id>/REVIEW_LEDGER.json" \
+  --reason "The closure record cannot be restored" \
+  --evidence "Inspected the damaged marker and validated the surviving history" \
+  --shutdown-evidence "Native host confirms this run's workers and processes exited"
+```
+
+Use actual evidence and stop the workers first. Recovery records a terminal
+failed `stop` before archiving the damaged marker, unless the history is already
+failed, stalled or limit-exhausted. Those terminal failures remain unchanged.
+It retains findings, decisions, snapshots and consumed counters, without making
+remaining allowance reusable.
+Even previously completed history becomes failed: a damaged closure is not
+evidence that the run may resume or satisfy a review. Ordinary `stop` may also
+downgrade a completed outcome to failed, but cannot reopen it.
+Recovery refuses a valid abandonment record. If recovery is interrupted, retry
+the command; neither an interrupted repair nor a lost response reopens the run.
+
+Closure does not authorize another review. Further work needs a separately
+authorized attempt within the caller's retained limits. A development controller
+must retire or record the old assignment as blocked, then reserve a counted
+retry before another ledger is initialized. Do not reuse exhausted or unknown
+caller allowance. Other authorized work remains available.
+
 ```bash
 python3 "/installed plugin/scripts/review_ledger.py" apply \
   ".review-loop/<run-id>/REVIEW_LEDGER.json" --revision 0 <<'JSON'
