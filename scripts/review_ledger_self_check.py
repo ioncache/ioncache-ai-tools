@@ -706,6 +706,69 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(expected, self.cli(["diff", self.ledger, "--from", initial]))
         self.cli(["status", self.ledger], ok=False)
 
+    def test_offline_reads_survive_repository_created_around_storage(self):
+        self.init()
+        initial = self.state["snapshot"]
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        commands = (["inspect", self.ledger], ["diff", self.ledger, "--from", initial])
+        expected = [self.cli(command) for command in commands]
+        original = review_ledger.stored_files(Path(self.ledger).parent)
+        self.git("init", "-q", self.env["XDG_STATE_HOME"])
+        self.assertIn("outside every repository", self.cli(["status", self.ledger], ok=False))
+        self.assertIn("outside every repository", self.reject("stop", outcome="interrupted"))
+        for command, result in zip(commands, expected):
+            with self.subTest(command=command[0]):
+                self.assertEqual(self.cli(command), result)
+        self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), original)
+        self.assertIn("outside every repository", self.reject("stop", outcome="interrupted"))
+
+    def test_offline_reads_follow_migrated_legacy_references(self):
+        self.init()
+        initial = self.state["snapshot"]
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        expected = (self.cli(["inspect", self.ledger]),
+                    self.cli(["diff", self.ledger, "--from", initial]))
+        source = self.legacy_run()
+        legacy = source / "REVIEW_LEDGER.json"
+        self.cli(["migrate", str(legacy), "--shutdown-evidence", "Fixture workers are stopped"])
+        original = review_ledger.stored_files(Path(self.ledger).parent)
+        for removed in (False, True):
+            if removed:
+                self.root.rename(self.folder / "removed-worktree")
+                self.cwd = self.folder
+            references = (str(legacy),) if removed else (str(legacy), str(legacy.relative_to(self.root)))
+            for reference in references:
+                commands = (["inspect", reference], ["diff", reference, "--from", initial])
+                for command, result in zip(commands, expected):
+                    with self.subTest(removed=removed, command=command):
+                        self.assertEqual(self.cli(command), result)
+        self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), original)
+
+    def test_offline_legacy_resolution_retains_path_and_owner_checks(self):
+        self.init()
+        ledger = Path(self.ledger)
+        legacy = self.root / ".review-loop"
+        legacy.symlink_to(self.folder / "missing-storage", target_is_directory=True)
+        reference = legacy / ledger.parent.name / ledger.name
+        commands = (["inspect"], ["diff", "--from", self.state["snapshot"]])
+        for command in commands:
+            with self.subTest(command=command[0], invalid="symlink"):
+                self.assertIn("Symlink not allowed", self.cli([*command, str(reference)], ok=False))
+        other_root = self.folder / "other-owner"
+        other_storage = review_ledger.storage(other_root)
+        other_storage.mkdir(parents=True)
+        ledger.parent.rename(other_storage / ledger.parent.name)
+        reference = other_root / ".review-loop" / ledger.parent.name / ledger.name
+        for command in commands:
+            with self.subTest(command=command[0], invalid="owner"):
+                self.assertIn("different worktree", self.cli([*command, str(reference)], ok=False))
+
     def test_external_run_recovery_keeps_different_runs_separate(self):
         invalid = self.root / "private-run"
         first = review_ledger.external_run_directory(invalid, "a" * 32, self.root)

@@ -369,8 +369,10 @@ def ledger_path(root, argument, *, allow_unavailable=False, historical=False):
     require(candidate.name == "REVIEW_LEDGER.json" and
             re.fullmatch(r"[a-f0-9]{32}", candidate.parent.name), "Invalid review ledger path")
     legacy = candidate.parent.parent.name == ".review-loop"
-    if root is not None and legacy:
+    if legacy:
+        root = root or candidate.parent.parent.parent
         require(candidate.parent.parent == root / ".review-loop", "Ledger belongs to a different worktree")
+        safe_path(Path(candidate.anchor), str(candidate.parent.relative_to(candidate.anchor)))
         if not candidate.parent.exists():
             base = state_directory() / "reviews" / root_key(root) if historical else storage(root)
             candidate = base / candidate.parent.name / candidate.name
@@ -612,7 +614,7 @@ def append(args, root):
 
 def status(args, root):
     """Report saved decisions and live drift without accepting drift as new evidence."""
-    path = ledger_path(root, args.ledger, allow_unavailable=True)
+    path = ledger_path(root, args.ledger, allow_unavailable=True, historical=root is None)
     closed = abandoned(path)
     if closed is not None:
         return closed
@@ -635,7 +637,7 @@ def blob(folder, entry):
 
 def diff(args, root):
     """Show saved correction deltas without writing them into the working tree."""
-    path = ledger_path(root, args.ledger)
+    path = ledger_path(root, args.ledger, historical=root is None)
     ledger, state = load(path)
     if root is not None:
         ensure_owner(ledger, root)

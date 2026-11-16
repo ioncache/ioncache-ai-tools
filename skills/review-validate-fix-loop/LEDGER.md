@@ -25,7 +25,7 @@ Standalone runs default to
 `$XDG_STATE_HOME/ioncache-ai-tools/reviews/<worktree-identity>/<run-id>/`,
 or `~/.local/state/ioncache-ai-tools/reviews/` with the same suffix when
 `XDG_STATE_HOME` is unset. The worktree identity hashes its canonical root path;
-it does not place files there. The ledger and its `objects/` directory must stay
+it does not place files there. Create ledgers and their `objects/` directories
 outside every repository and Git metadata directory. Select an external
 `XDG_STATE_HOME` if the default is unsuitable.
 
@@ -46,6 +46,9 @@ python3 "/installed plugin/scripts/review_ledger.py" diff "/absolute/private/rev
 Use the actual returned path. `inspect` reports unknown live drift (`null`), not a
 clean checkout, and cannot authorize acceptance. Keep the full run directory:
 the ledger alone cannot reproduce its saved snapshots.
+If a repository is later created around retained storage, these offline reads
+remain available. Live `status` and mutations still reject that location.
+Offline reads retain path, symlink, ownership and snapshot-integrity checks.
 
 Older `.review-loop/<run-id>/` directories are read-only to current mutation
 commands. Before removing their worktree, stop the native workers and migrate:
@@ -66,9 +69,10 @@ after successful migration; already deleted history cannot be reconstructed.
 Retrying an interrupted migration never overwrites the destination. An unchanged
 copy or a verified continuation of its original history permits source cleanup;
 conflicting destination evidence is preserved and reported. Empty legacy storage
-is removed after the move. Old root-relative references resolve to the default
-external destination after migration; use the returned absolute path in new
-reports. Keep the same external state location when resolving old references.
+is removed after the move. Old references resolve to the default external
+destination after migration; use the returned absolute path in new reports.
+Without the checkout, supply the absolute legacy path to `inspect` or `diff`.
+Keep the same external state location when resolving old references.
 Ledger migration does not rewrite original development reports or their approval.
 Before source deletion, a private cleanup checkpoint pins the verified copy's
 file inventory and original ledger bytes outside the run directory. An interrupted
