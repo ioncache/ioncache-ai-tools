@@ -30,7 +30,7 @@ a root agent's prompt is classified as a question, that turn is answer-only:
 | --- | --- |
 | File edits | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `apply_patch` |
 | Recognized shell mutations | `git commit`/`push`/`reset`/`rebase`/`merge`, `gh pr create`/`merge`, `rm`, `mv`, `cp`, `mkdir`, `touch`, `tee`, file redirects, `npm install`, `node -e`, `python -c`, GraphQL mutations |
-| MCP operations | Operation names starting with `create`, `update`, `delete`, `edit`, `write`, `remove`, `merge`, or `push` |
+| MCP operations | Operation names starting with the word `create`, `update`, `delete`, `edit`, `write`, `remove`, `merge`, or `push`, in snake, kebab, dotted, or camel case (`create_issue`, `createIssue`) |
 | Work control | Launching, messaging, or stopping workers (`Agent`, `Task`, `Workflow`, `SendMessage`, `TaskStop`, `spawn_agent`, `send_input`) and task or todo creation (`TaskCreate`, `TaskUpdate`, `TodoWrite`) |
 
 Question state belongs to one identity. A question to the root never blocks a

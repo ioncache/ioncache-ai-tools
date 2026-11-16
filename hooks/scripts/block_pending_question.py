@@ -246,14 +246,18 @@ def _mutating_shell_command(simple_command):
     return bool(BASH_MUTATION_PATTERNS.match(command))
 
 
+# Case is kept so a camelCase boundary (createIssue) counts as the end of the verb.
+MCP_MUTATION = re.compile(r'(?i:create|update|delete|edit|write|remove|merge|push)(?:[_.-]|[A-Z]|$)')
+
+
 def is_mutating(tool_name, tool_input):
     if tool_name in ALWAYS_MUTATING_TOOLS:
         return True
     if isinstance(tool_name, str) and tool_name.startswith('mcp'):
-        canonical = tool_name.lower().split('__', 2)
+        canonical = tool_name.split('__', 2)
         operation = (canonical[2] if len(canonical) == 3 and canonical[0] == 'mcp'
-                     else re.split(r'__|[.-]', tool_name.lower())[-1])
-        if re.match(r'^(create|update|delete|edit|write|remove|merge|push)(?:[_.-]|$)', operation):
+                     else re.split(r'__|[.-]', tool_name)[-1])
+        if MCP_MUTATION.match(operation):
             return True
     if tool_name == "Bash":
         command = (tool_input or {}).get("command", "")
