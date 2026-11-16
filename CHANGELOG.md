@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.12.1 (2026-11-16)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* **questions:** restore answer-only enforcement for question turns ([#56](https://github.com/ioncache/ioncache-ai-tools/issues/56)) ([cacf2d3](https://github.com/ioncache/ioncache-ai-tools/commit/cacf2d34bd9e010877f2b6d5a5d611ddb635924c))
+
 ## 1.12.0 (2026-11-16)
 
 ### New
