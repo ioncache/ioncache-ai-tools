@@ -67,6 +67,11 @@ storage too. While the original store remains invalid, new archives use
 Discovery is limited to review storage pinned in this run's saved assignments
 and individual recorded ledger references. Legacy references can locate their
 migrated ledger by the same review ID; they do not include neighboring ledgers.
+Historical reads retain path, symlink, ownership and snapshot-integrity checks.
+They can read existing evidence if its storage later becomes part of a repository;
+that does not permit further ledger writes there. New review and archive-output
+locations must still pass the external-storage check. A failed Git probe reports
+checker unavailability, not proof that a location is outside repositories.
 Reusing a worktree path does not add the new occupant's reviews to an old archive.
 Missing recorded reviews remain explicit gaps rather than being replaced with
 other history found at that path.

@@ -69,11 +69,15 @@ def external_directory(path, root=None):
         probe = probe.parent
     environment = {key: value for key, value in os.environ.items()
                    if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")}
+    environment["LC_ALL"] = "C"
     result = subprocess.run(["git", "-C", str(probe), "rev-parse", "--git-dir"],
                             capture_output=True, env=environment)
     require(result.returncode != 0,
             "Review storage must be outside every repository and Git metadata directory; "
             "set XDG_STATE_HOME to an external state directory")
+    if result.returncode != 128 or not result.stderr.startswith(b"fatal: not a git repository (or any "):
+        detail = result.stderr.decode(errors="replace").strip() or f"Git exited with status {result.returncode}"
+        raise OSError(f"Git storage check unavailable: {detail}")
     return path
 
 
@@ -359,7 +363,7 @@ def abandon(args, root):
     return result
 
 
-def ledger_path(root, argument, *, allow_unavailable=False):
+def ledger_path(root, argument, *, allow_unavailable=False, historical=False):
     """Validate owned storage, retaining an unusable ledger entry only for inspection or closure."""
     candidate = Path(os.path.abspath((root or Path.cwd()) / argument))
     require(candidate.name == "REVIEW_LEDGER.json" and
@@ -368,10 +372,12 @@ def ledger_path(root, argument, *, allow_unavailable=False):
     if root is not None and legacy:
         require(candidate.parent.parent == root / ".review-loop", "Ledger belongs to a different worktree")
         if not candidate.parent.exists():
-            candidate = storage(root) / candidate.parent.name / candidate.name
+            base = state_directory() / "reviews" / root_key(root) if historical else storage(root)
+            candidate = base / candidate.parent.name / candidate.name
             legacy = False
     if not legacy:
-        external_directory(candidate.parent.parent, root)
+        if not historical:
+            external_directory(candidate.parent.parent, root)
         require(re.fullmatch(r"[a-f0-9]{64}", candidate.parent.parent.name) and
                 (root is None or candidate.parent.parent.name == root_key(root)),
                 "Ledger belongs to a different worktree")

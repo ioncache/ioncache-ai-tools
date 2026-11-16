@@ -533,6 +533,32 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertFalse(foreign["available"])
         self.assertEqual(foreign["assignment_ids"], [recorded["id"]])
 
+    def test_archive_preserves_completed_reviews_after_storage_becomes_a_repository(self):
+        self.store = self.folder / "later-repository" / "private-run"
+        root = self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        original = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
+        public = self.store / "reports" / active["id"] / "public.json"
+        recorded = next(item for item in state["history"] if item["role"] == "review")
+        ledger = Path(recorded["report"]["data"]["ledger"])
+        ledger_bytes = ledger.read_bytes()
+        run_bytes = (self.store / "RUN.json").read_bytes()
+        self.assertTrue(original["reviews"][0]["available"])
+        self.assertTrue(original["reviews"][0]["findings"])
+        self.git("init", "-q", str(self.store.parent))
+
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+        bundle = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())
+        self.assertEqual(bundle["reviews"], original["reviews"])
+        self.assertEqual(bundle["public"], original["public"])
+        self.assertTrue(Path(archived["directory"]).is_relative_to(Path(self.env["XDG_STATE_HOME"])))
+        self.assertEqual(ledger.read_bytes(), ledger_bytes)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), run_bytes)
+        self.assertEqual(self.audit_body_updates, [])
+        with patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaisesRegex(development.review.LedgerError, "outside every repository"):
+                development.review.ledger_path(root, str(ledger))
+
     def archive_with_reused_worktree(self, legacy):
         root = self.start_audit_fixture()
         state, active, exported = self.audit_export()

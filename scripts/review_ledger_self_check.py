@@ -725,6 +725,23 @@ class ReviewLedgerTests(unittest.TestCase):
                 review_ledger.external_run_directory(self.folder / "private-run", "a" * 32, self.root)
         command.assert_called_once()
 
+    def test_external_run_recovery_rejects_failed_git_probes(self):
+        destination = self.folder / "private-run"
+        failures = [
+            (-15, b""),
+            (128, b"fatal: detected dubious ownership in repository\n"),
+            (1, b"Git probe failed\n"),
+        ]
+        for returncode, stderr in failures:
+            with self.subTest(returncode=returncode):
+                result = subprocess.CompletedProcess([], returncode, b"", stderr)
+                with patch("review_ledger.subprocess.run", return_value=result) as command:
+                    with self.assertRaisesRegex(OSError, "Git storage check unavailable"):
+                        review_ledger.external_run_directory(destination, "a" * 32, self.root)
+                command.assert_called_once()
+                self.assertFalse(destination.exists())
+        self.assertEqual(review_ledger.external_run_directory(destination, "a" * 32, self.root), destination)
+
     def legacy_run(self):
         source = self.root / ".review-loop" / Path(self.ledger).parent.name
         source.parent.mkdir(exist_ok=True)

@@ -68,7 +68,7 @@ def review_identity(path):
 def review_record(path, root=None):
     result = {"id": review_identity(path), "history_digest": None, "available": False}
     try:
-        path = review.ledger_path(root, str(path), allow_unavailable=True)
+        path = review.ledger_path(root, str(path), allow_unavailable=True, historical=True)
         if not path.is_symlink() and path.exists():
             result["history_digest"] = review.digest(path.read_bytes())
         closed = review.abandoned(path)
@@ -145,7 +145,8 @@ def public_narrative(value, reviews):
 def stored_review_paths(root, folders):
     for folder in dict.fromkeys(folders):
         try:
-            folder = review.external_directory(folder, root)
+            folder = Path(os.path.abspath(folder))
+            folder = review.safe_path(Path(folder.anchor), str(folder.relative_to(folder.anchor)))
             plan.require(folder.name == review.root_key(root), "Review storage belongs to another worktree")
             entries = list(folder.iterdir())
         except (ValueError, OSError):
@@ -168,7 +169,7 @@ def review_locations(state, assignment):
         if isinstance(reference, str):
             path = Path(os.path.abspath(root / reference))
             try:
-                path = review.ledger_path(root, reference, allow_unavailable=True)
+                path = review.ledger_path(root, reference, allow_unavailable=True, historical=True)
             except (ValueError, OSError, KeyError, TypeError):
                 pass
             referenced[review_identity(path)] = path
