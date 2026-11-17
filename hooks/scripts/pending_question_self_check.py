@@ -489,7 +489,7 @@ def main():
         if is_question_blocked(tool_name, {}) is not expected:
             failures.append(f'is_question_blocked mismatch for {tool_name}: expected {expected}')
 
-    # Exercise the actual protocol: only a root user question records question state.
+    # Verified-user cases exercise the shared contract, not native origin detection.
     session_id = f'self-check-{uuid.uuid4()}'
     flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
     with tempfile.TemporaryDirectory(prefix='question-check-') as home:
@@ -500,7 +500,7 @@ def main():
 
             def classify(**fields):
                 result = subprocess.run(
-                    [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'guidance.py'), 'UserPromptSubmit'],
                     input=json.dumps({'session_id': session_id, 'cwd': home, **fields}),
                     env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
                     capture_output=True,
@@ -509,18 +509,52 @@ def main():
                 )
                 return result.stdout
 
-            stdout = classify(prompt='why is this broken')
+            def guard(tool_name, **fields):
+                result = subprocess.run(
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'block_pending_question.py')],
+                    input=json.dumps({'session_id': session_id, 'cwd': home,
+                                      'tool_name': tool_name, 'tool_input': {}, **fields}),
+                    env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
+                    capture_output=True, text=True, check=True,
+                )
+                return json.loads(result.stdout) if result.stdout.strip() else {}
+
+            fixtures = json.loads((pathlib.Path(SCRIPT_DIR).parent / 'fixtures/prompt-origins.json').read_text())
+            cases = fixtures['claude'] + [{
+                'case': 'synthetic-unknown-bare-report',
+                'payload': {'prompt': 'Why did the test finish? What should happen next? Can the parent continue?'},
+            }]
+            for fixture in cases:
+                payload = {**fixture['payload'], 'session_id': session_id, 'cwd': home}
+                classify(prompt='Why did it fail?', _ioncache_prompt_origin='user')
+                if guard('Write').get('hookSpecificOutput', {}).get('permissionDecision') != 'deny':
+                    failures.append('the verified shared question must block before recovery')
+                stdout = classify(**payload)
+                if flag_path.exists() or QUESTION_CONTRACT in stdout:
+                    failures.append(f'Claude unverified origin fenced: {fixture["case"]}')
+                if guard('Write') or guard('Agent'):
+                    failures.append(f'Claude authorized work could not resume: {fixture["case"]}')
+
+            stdout = classify(prompt='why is this broken', _ioncache_prompt_origin='user')
             hook_output = json.loads(stdout).get('hookSpecificOutput') or {}
             if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
-                failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {stdout!r}')
+                failures.append(f'guidance.py stdout is not wrapped in hookSpecificOutput: {stdout!r}')
             if QUESTION_CONTRACT not in hook_output.get('additionalContext', ''):
                 failures.append('a root question must emit the answer-only contract')
             if not flag_path.exists():
                 failures.append('a root question must record its own question state')
+            if guard('Read') or guard('Bash', tool_input={'command': 'git status --short'}):
+                failures.append('read-only research must remain available during a verified question')
+            classify(prompt='Why did it fail?', agent_id='worker', _ioncache_prompt_origin='user')
+            if not flag_path.exists() or guard('Write', agent_id='worker'):
+                failures.append('a child must neither clear nor inherit the root question marker')
+            classify(prompt='Why did it fail?', parent_agent_id='parent', _ioncache_prompt_origin='user')
+            if not flag_path.exists() or guard('Write', parent_agent_id='parent'):
+                failures.append('an incomplete child identity must not use the root marker')
             classify(prompt='fix it')
             if flag_path.exists():
                 failures.append('a non-question instruction must clear the question state')
-            classify(prompt='why is this broken', agent_id='worker')
+            classify(prompt='why is this broken', agent_id='worker', _ioncache_prompt_origin='user')
             if flag_path.exists() or any(pathlib.Path('/tmp').glob(f'.ioncache-pending-question-{session_id}-*')):
                 failures.append('a parent-written child prompt must not record question state')
             manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'

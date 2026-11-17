@@ -16,7 +16,7 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from classify_question import has_marker  # noqa: E402
+from classify_question import has_marker, is_root  # noqa: E402
 from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable  # noqa: E402
 from plugin_config import enabled  # noqa: E402
 from rule_engine import (  # noqa: E402
@@ -304,7 +304,7 @@ def evaluate(data):
     if not isinstance(tool_name, str):
         raise ValueError('missing tool_name')
     # Only this identity's own marker: a root question must not stop children.
-    if not has_marker(data) or not enabled('answer-questions', data):
+    if not is_root(data) or not has_marker(data) or not enabled('answer-questions', data):
         return None
     if not is_question_blocked(tool_name, data.get('tool_input') or {}):
         return None

@@ -31,6 +31,11 @@ QUESTION_CONTRACT = (
 )
 
 
+def is_root(data):
+    return (data.get('agent_id') in (None, '', 'root')
+            and data.get('parent_agent_id') in (None, ''))
+
+
 def marker_path(data, kind='question'):
     if kind not in ('question', 'prompt'):
         raise ValueError('invalid marker kind')

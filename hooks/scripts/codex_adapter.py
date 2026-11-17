@@ -92,15 +92,15 @@ def run_hook(event, data):
 def dispatch(event, data):
     if not isinstance(data, dict):
         raise ValueError('Codex hook input must be an object')
-    data = {**data, '_ioncache_harness': 'codex'}
+    data = {**data, '_ioncache_harness': 'codex', '_ioncache_prompt_origin': 'unknown'}
     session_id = data.get('session_id')
     if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', session_id):
         raise ValueError('missing or invalid Codex session_id')
     if not isinstance(data.get('cwd'), str) or not data['cwd']:
         raise ValueError('missing or invalid Codex cwd')
-    synchronize(data['cwd'], 'codex')
     if event == 'UserPromptSubmit':
         return prompt_submit(data)
+    synchronize(data['cwd'], 'codex')
     if event == 'PreToolUse':
         return pre_tool_use(data)
     if event in ('PostToolUse', 'SessionStart', 'SessionEnd', 'PreCompact', 'SubagentStart', 'Stop'):

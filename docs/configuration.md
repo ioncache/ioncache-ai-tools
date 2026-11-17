@@ -40,7 +40,7 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Answer-only question turns: the answer contract and the question-turn tool guard |
+| `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts; native origin detection is currently unavailable |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |

@@ -16,8 +16,10 @@ answer content. Native host permissions remain authoritative.
 
 ## Question turns
 
-A user question asks for information so the user can decide what to do. When
-a root agent's prompt is classified as a question, that turn is answer-only:
+A user question asks for information so the user can decide what to do. The
+answer-only tool guard requires positive evidence that a root prompt came
+from the user, as well as question-shaped text. With both, the shared guard
+applies this contract:
 
 - The agent receives the answer contract: reasoning, a supported cause for
   WHY, and no apologies, deflections, recommendations, or offers of more work.
@@ -36,13 +38,19 @@ a root agent's prompt is classified as a question, that turn is answer-only:
 Question state belongs to one identity. A question to the root never blocks a
 running subagent. Prompts a subagent receives from its parent are not user
 questions, so a question-shaped assignment does not restrict that subagent.
-Host-started turns clear the state instead of creating it, so an orchestrator
-can act on returned work after answering. In Claude these are background-task
-notifications (`<task-notification>`), subagent hand-backs, and messages from
-other sessions (`Another Claude session sent a message:`). Claude's hook input
-has no origin field, so these prefixes are inferred from observed transcripts,
-not a documented contract. Compaction and resume keep the state until the next
-prompt.
+Host-started and unknown-origin prompt events clear the state instead of
+creating it, so an orchestrator can act on returned work after answering.
+They receive non-restrictive guidance, not the answer-only contract.
+Clearing precedes configuration and guidance work. A failed evaluation cannot
+create a marker afterward. Compaction and resume keep existing state until
+the next prompt.
+
+**Native question enforcement is currently unavailable on all three hosts.**
+The captured payloads do not establish user origin. A genuine question with
+unknown origin therefore receives guidance without a tool fence. This favors
+unattended continuation over accidentally stopping a worker on a report.
+The shared guard still supports positively identified user questions, but
+its normalized-input tests are not proof of native detection.
 
 The classifier checks each sentence or line. One that ends in `?` or opens
 with an interrogative word (`what`, `why`, `how`, `when`, `where`, `who`,
@@ -62,10 +70,42 @@ Coverage limits:
   are instructions only.
 - A question typed directly to a subagent identity is treated like a
   parent-written prompt and receives guidance only.
-- A host that represents a delegated worker as a separate root session, with
-  no subagent identity, would apply the guard to that worker's
-  question-shaped assignment. Sending the worker a non-question instruction
-  clears it.
+- A separate root session is not proof of user origin. Parent-written
+  assignments without a child identity remain unknown and do not create a
+  marker.
+
+### Prompt-origin evidence and gaps
+
+The official references below and live command-hook captures were checked on
+macOS on 2026-11-17. Sanitized stdin payloads are in
+[../hooks/fixtures/prompt-origins.json](../hooks/fixtures/prompt-origins.json).
+
+| Host | Observed input and documented limits | Remaining gap |
+| --- | --- | --- |
+| Claude Code 2.1.326 | Captured a root question, instruction, background subagent report and shell-task notification. User prompts and notifications both had `prompt_id`. The documented prompt hook also runs on scheduled tasks, other sessions' messages and Code Mode output. | No verified positive user-origin signal. Peer messages, scheduled tasks and Code Mode output were not captured. The originally reported hand-back framing mismatch was not reproduced. |
+| Copilot CLI 1.0.113-1 | Captured a root question at `userPromptTransformed`, with `prompt` and `transformedPrompt` but no origin field. Documentation excludes system notifications from this event; that does not establish the provenance of every submitted or parent-written message. | Worker capture was denied by tool permissions. Instruction, hand-back, task-notification and peer-message captures remain unavailable. |
+| Codex 0.163.0 | Captured a root question and instruction. A worker returned a question-heavy report, but that return and the shell completion produced no additional prompt-hook invocation in this run. The documented prompt fields are `turn_id` and `prompt`, not origin. Stop-hook continuation reasons can act as new user prompts. | No verified positive user-origin signal. Child prompt, asynchronous notification, peer-message and Stop-continuation payloads were not captured. |
+
+Claude's hook documentation explicitly warns that transcripts are asynchronous
+and may not yet contain the current turn. The captures confirmed this at prompt
+time. Codex documents its transcript format as unstable. Neither a stale
+transcript nor an event called `UserPromptSubmit` establishes a human author.
+Known wrapper text can identify particular host messages, but the absence of
+a wrapper cannot prove that a bare report is a user question. The shared
+handler therefore uses no harness-specific prefix allowlist.
+
+References for these specific contracts:
+
+- https://code.claude.com/docs/en/hooks#userpromptsubmit
+- https://code.claude.com/docs/en/hooks#common-input-fields
+- https://docs.github.com/en/copilot/reference/hooks-reference#userprompttransformed
+- https://learn.chatgpt.com/docs/hooks#userpromptsubmit
+- https://learn.chatgpt.com/docs/hooks#stop
+
+The captures used an opt-in probe loaded from the feature worktree and a
+one-invocation Codex hook override. No persistent user hook registration points
+at a temporary script. Offline recovery tests cover unknown reports, children,
+settings and marker failures; they do not fill the live-host gaps above.
 
 ## Action checks and autonomous recovery
 

@@ -64,12 +64,21 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   deliver cache notices; Copilot does not scan final transcripts.
   `block_emdash_turn.py` is retained inactive source.
   Question markers (`classify_question.marker_path`) are keyed by session and
-  agent identity. Only a root prompt (no `agent_id`) records one; subagent
-  prompts come from parents, and host-started turns clear it
-  (`guidance.HOST_TURN_PREFIXES`: task notifications, hand-backs, and other
-  sessions' messages). Those prefixes are inferred from observed Claude
-  transcripts, not a documented hook field. The clear runs before guidance
-  evaluation so slow guidance cannot keep a stale marker. The guard reads only the caller's own marker, never the root's,
+  agent identity. A marker requires a positively identified root-user prompt.
+  The shared boundary uses `_ioncache_prompt_origin: "user"`; this is an
+  internal contract, not a native host field. Root identity alone, a prompt
+  event name, and the absence of known text prefixes do not establish origin.
+  Current native payloads have no verified user-origin signal, so all three
+  harnesses leave origin unknown and do not create markers, even for genuine
+  questions. Restoring native question enforcement requires verified origin
+  evidence; synthetic normalized-input tests do not establish host support.
+  See `docs/guardrails.md#prompt-origin-evidence-and-gaps` and the sanitized
+  captures in `hooks/fixtures/prompt-origins.json`.
+  Every prompt clears its own marker before settings and guidance evaluation,
+  including host-started, unknown-origin and parent-written turns. Neither
+  an agent identity nor a parent identity may create a root question marker.
+  A guidance or marker-clear failure must not create one afterward.
+  The guard reads only the caller's own marker, never the root's,
   so a root question cannot stop a running child. It denies `is_mutating`
   matches and `WORK_CONTROL_TOOLS` (launching, messaging, or stopping workers;
   task/todo creation) so the questioned agent cannot delegate around it.

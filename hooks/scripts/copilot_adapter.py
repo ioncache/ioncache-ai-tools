@@ -27,6 +27,7 @@ def shared_input(data):
         raise ValueError('missing or invalid Copilot sessionId')
     return {
         '_ioncache_harness': 'copilot',
+        '_ioncache_prompt_origin': 'unknown',
         'session_id': f'copilot-{session_id}',
         'cwd': data['cwd'],
         'prompt': data.get('prompt', ''),
@@ -47,7 +48,6 @@ def user_warning(output):
 
 def transform_prompt(data):
     hook_input = shared_input(data)
-    synchronize(hook_input['cwd'], 'copilot')
     messages = []
     for output in run_shared_hooks('UserPromptSubmit', hook_input):
         user_warning(output)

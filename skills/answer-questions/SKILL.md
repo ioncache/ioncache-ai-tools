@@ -59,7 +59,7 @@ unrequested design work.
 
 ## Tool guard
 
-When a root agent's user prompt is classified as a question, the plugin denies
+When a root prompt has verified user origin and is classified as a question, the plugin denies
 that agent's recognized state-changing tool calls until the next non-question
 prompt. Denied calls include file edits, recognized shell mutations such as
 commits and file writes, task or todo creation, and launching, messaging, or
@@ -72,6 +72,13 @@ recommendations remain instructions. Prompts that subagents receive from
 their parent are not treated as user questions, and their work is not
 blocked. Host-started turns, such as worker hand-backs and task
 notifications, end the question turn instead of starting one.
+
+Unknown origin also clears the marker and must not produce an answer-only
+fence. Root identity and question-like text do not prove that the user wrote
+the prompt. The current native integrations have no verified positive origin
+signal, so genuine questions on those hosts receive guidance without this
+tool guard. Do not infer native enforcement from shared-contract tests.
+Evidence and gaps: [../../docs/guardrails.md#prompt-origin-evidence-and-gaps](../../docs/guardrails.md#prompt-origin-evidence-and-gaps).
 
 ## Checklist
 
