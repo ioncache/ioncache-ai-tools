@@ -308,6 +308,10 @@ def evaluate(data):
         return None
     if not is_question_blocked(tool_name, data.get('tool_input') or {}):
         return None
+    return deny()
+
+
+def deny():
     return {'hookSpecificOutput': {
         'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
         'permissionDecisionReason': DENIAL_REASON,
@@ -321,6 +325,9 @@ def run_hook(data):
         with invocation_deadline(4):
             return evaluate(data)
     except (InvocationDeadline, Exception) as error:
+        # A question turn must stay answer-only even when the check times out.
+        if isinstance(data, dict) and has_marker(data):
+            return deny()
         return unavailable('pending-question', error)
 
 

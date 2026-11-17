@@ -33,6 +33,7 @@ Examples use placeholders, not recommendations or verified available models:
 /ioncache-ai-tools:review-code this PR --model-selection configured
 /ioncache-ai-tools:review-code this PR --lead-model LEAD_ID --reviewer-model REVIEW_ID
 /ioncache-ai-tools:review-code src --reviewer-model REVIEW_ID --reviewer-effort LEVEL --fallback configured
+/ioncache-ai-tools:review-code branch --max-loops 2 --strategy sweep-first
 $ioncache-ai-tools:review-code --help
 ```
 

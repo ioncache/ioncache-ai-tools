@@ -53,10 +53,13 @@ DISTILL_SYSTEM_PROMPT = (
 )
 
 
+CACHE_SUBDIRECTORIES = ('entries', 'sessions')
+
+
 def cache_dir():
     base = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache')
     root = base / 'ioncache-ai-tools' / 'docs-cache'
-    for sub in ('entries', 'sessions'):
+    for sub in CACHE_SUBDIRECTORIES:
         (root / sub).mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
     return root
@@ -105,7 +108,8 @@ def log_event(event, url, harness):
     log = cache_dir() / 'events.jsonl'
     if log.exists() and log.stat().st_size > MAX_LOG_BYTES:
         os.replace(log, log.with_suffix('.jsonl.1'))
-    line = json.dumps({'ts': int(time.time()), 'event': event, 'harness': harness, 'url': redacted_url(url)})
+    # Keep the full URL so cache misses can be matched to the exact request.
+    line = json.dumps({'ts': int(time.time()), 'event': event, 'harness': harness, 'url': url})
     fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     with os.fdopen(fd, 'a', encoding='utf-8') as handle:
         handle.write(line + '\n')

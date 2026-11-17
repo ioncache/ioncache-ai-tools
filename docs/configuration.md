@@ -64,7 +64,8 @@ Skill opt-outs block explicit skill-tool loads and instruct the assistant not
 to apply the skill automatically or through slash commands. They do not remove
 skills from the host's discovery menu. Instruction-based activation remains
 subject to host behavior.
-When a skill is disabled, continue with other available tools. The worktree
+When a skill is disabled, continue with other available tools; the skill's
+files stay installed and other skills can still reference them. The worktree
 guard supplies its setup helper's path, so recovery does not depend on loading
 the `create-worktree` skill.
 

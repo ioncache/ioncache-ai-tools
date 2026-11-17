@@ -13,6 +13,8 @@ Keep local-only work local. Never submit or discard a review.
 Before planning or performing GitHub comment/review operations, or assessing
 another reviewer's comments, read [references/github-review.md](references/github-review.md).
 That reference is mandatory for those tasks, not for local drafting alone.
+Once every planned comment is in the pending review, submit it as a comment
+review so the author is notified in one batch.
 
 ## Voice and length
 

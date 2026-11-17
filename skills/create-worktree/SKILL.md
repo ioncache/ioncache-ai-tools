@@ -15,7 +15,7 @@ version cannot be verified, leave the worktree and setup files untouched.
 Use a compatible installed Node.js via `PATH`, or the project's authorized
 runtime setup procedure, then retry the launcher. Do not bypass its checks with
 a direct Node or raw Git command. If the prerequisite remains unavailable,
-report that operation as pending and continue other authorized work.
+stop and ask the user to install Node.js before doing any other work.
 
 For example, after resolving the actual installed path:
 

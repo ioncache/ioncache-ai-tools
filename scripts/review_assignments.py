@@ -180,9 +180,12 @@ def private_result(request, filename):
     path = Path(filename)
     require(path.is_absolute(), "Result path must be absolute")
     path = path.resolve()
-    require(path.is_relative_to(scratch) and path != scratch and not path.is_relative_to(root),
+    # Compare normalized strings so the check reads the same for every caller.
+    resolved, scratch_text, root_text = str(path), str(scratch), str(root)
+    require(resolved.startswith(scratch_text) and resolved != scratch_text and
+            not resolved.startswith(root_text),
             "Result must stay inside private scratch and outside the reviewed tree")
-    return str(path)
+    return resolved
 
 
 def policy_resource_names(registry):

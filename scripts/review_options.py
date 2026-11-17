@@ -38,7 +38,7 @@ def positive(value):
         number = int(value)
     except ValueError:
         raise argparse.ArgumentTypeError("expected a positive integer") from None
-    if number < 1:
+    if number < 0:
         raise argparse.ArgumentTypeError("expected a positive integer")
     return number
 

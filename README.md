@@ -340,7 +340,7 @@ Keep the host's own permissions enabled for security-critical restrictions.
 | Guard behavior, recovery, and privacy | [docs/guardrails.md](docs/guardrails.md) |
 | Settings and synchronization | [docs/configuration.md](docs/configuration.md) |
 | Detailed review workflows and worktree configuration | [docs/workflows.md](docs/workflows.md) |
-| Cache behavior and troubleshooting | [docs/documentation-cache.md](docs/documentation-cache.md) |
+| Cache behavior and troubleshooting | [docs/docs-cache.md](docs/docs-cache.md) |
 
 Host skill-invocation references:
 

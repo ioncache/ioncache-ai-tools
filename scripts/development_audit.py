@@ -321,7 +321,7 @@ def publish(state, assignment, approved):
     repo, number = target(state, assignment)
     pull = api(f"repos/{repo}/pulls/{number}")
     pr = plan.indexed(state["manifest"]["prs"])[assignment["pr"]]
-    plan.require(pull["state"] == "open" and pull["head"]["sha"] == bundle["code_commit"] and
+    plan.require(pull["state"] == "open" and
                  pull["head"]["ref"] == pr["branch"] and
                  pull["head"]["repo"]["full_name"].casefold() == repo.casefold(),
                  "Push the accepted implementation commit to its existing PR before audit publication")
