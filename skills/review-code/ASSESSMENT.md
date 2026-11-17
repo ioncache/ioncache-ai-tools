@@ -67,9 +67,9 @@ Then give one block per finding, in the same order:
 ```markdown
 ### COR1: <title>
 
-- Problem: trigger, behaviour and consequence, and the requirement it breaks.
+- Problem: the assessment's `summary`.
 - Locations: every affected `path:line`, plus affected callers or documentation.
-- Fix: the simplest coherent correction, decision, or check.
+- Fix: the assessment's `next_step`.
 - Done when: the test or check that shows it worked, or "no check identified".
 - Scope: introduced by this change, or pre-existing.
 - Basis: `observed` or `inferred` as defined in CONTRACTS.md, labelling

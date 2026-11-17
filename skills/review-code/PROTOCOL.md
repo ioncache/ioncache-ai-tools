@@ -35,7 +35,10 @@ reviews can include unchanged files. Out-of-scope does not mean invalid.
 Requirements and approved project exceptions constrain the assigned purpose;
 do not invent rules or weaken approved instructions using the reviewed change.
 
-The target is read-only. Write only the assigned private result file.
+The target is read-only. Write only the assigned private result file, plus
+disposable files that a permitted check creates outside the reviewed tree, such
+as a self-check's temporary directory. Never write the reviewed tree or another
+worker's report.
 Do not edit code, update a ledger, commit, publish or change model/settings.
 Checks require the caller's permission; distinguish actual execution from
 source reasoning. An unavailable check or instruction source is a limitation,

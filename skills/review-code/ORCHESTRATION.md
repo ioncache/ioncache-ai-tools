@@ -270,8 +270,10 @@ scenarios into fixes. Explain rejection, uncertainty, accepted findings, and
 residual risks in the handback. Keep non-reportable observations out of the
 human report without dropping evidence needed by the caller's ledger.
 
-For every reportable assessment, set `title`, `priority_level`, `introduced`,
-`done_when`, and `locations` under [CONTRACTS.md](CONTRACTS.md#candidates-and-assessments).
+For every reportable assessment, set `title`, `summary`, `next_step`, `basis`,
+`priority_level`, `introduced`, `done_when`, and `locations` under
+[CONTRACTS.md](CONTRACTS.md#candidates-and-assessments). The human report and
+any posted comments both use these fields, so the caller does not rewrite them.
 
 When the request's `posting` is not `null`, also add the posting fields from
 [CONTRACTS.md](CONTRACTS.md#candidates-and-assessments) to every reportable

@@ -173,7 +173,11 @@ assessment (`Act`, `Decide` or `Investigate`):
 | `fix_steps` | For `Act` and `Decide`: self-contained agent instructions. |
 
 Every reportable assessment, posting or not, now also carries `title`,
-`priority_level`, `introduced`, `done_when` and `locations`. See
+`summary`, `next_step`, `basis`, `priority_level`, `introduced`, `done_when`
+and `locations`. The report and the PR comments both read these fields, so the
+caller never rewrites findings. The second PR #58 trial showed the gap: without
+`summary`, `next_step` and `basis` in the contract, the caller had to ask the
+adjudicator for them before it could post. See
 [Related change: local report format](#related-change-local-report-format).
 
 The adjudicator owns these fields because it already reads the source, merges

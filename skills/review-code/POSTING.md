@@ -82,7 +82,8 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
 
 - Every field other than `id` and `related` comes from the
   adjudicator's assessment, with `priority` taken from its `priority_level`.
-  Do not invent them yourself.
+  Do not invent them yourself. If a field is missing, ask the same adjudicator
+  for it rather than writing it.
 - Comments are written for the person reading the PR. `fix_steps` and
   `done_when` go into a collapsed "Agent guidance" section on `Act` and
   `Decide` comments, with a fixed preamble telling agents to verify the

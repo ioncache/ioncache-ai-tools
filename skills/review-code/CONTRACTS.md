@@ -146,6 +146,11 @@ can have `report_action: Investigate` without a known fix.
 Each reportable assessment (`Act`, `Decide`, or `Investigate`) also has:
 
 - `title`: a one-line headline.
+- `summary`: the trigger, behaviour and consequence, and the requirement it
+  breaks, readable without the review's private evidence.
+- `next_step`: the simplest coherent correction, decision, or check.
+- `basis`: `observed` or `inferred` for the merged issue, `inferred` unless its
+  claimed failure was observed.
 - `priority_level`: `P1`, `P2`, or `P3` under
   [assessment/COMMON.md](assessment/COMMON.md#judgment-and-next-action).
 - `introduced`: `false` when the issue predates the reviewed change.
