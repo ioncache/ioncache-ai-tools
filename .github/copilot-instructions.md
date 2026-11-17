@@ -69,11 +69,23 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   internal contract, not a native host field. Root identity alone, a prompt
   event name, and the absence of known text prefixes do not establish origin.
   Current native payloads have no verified user-origin signal, so all three
-  harnesses leave origin unknown and do not create markers, even for genuine
-  questions. Restoring native question enforcement requires verified origin
+  harnesses do not create markers, even for genuine questions. Origin stays
+  unknown unless observed framing identifies a host turn. Restoring native
+  question enforcement requires verified origin
   evidence; synthetic normalized-input tests do not establish host support.
   See `docs/guardrails.md#prompt-origin-evidence-and-gaps` and the sanitized
   captures in `hooks/fixtures/prompt-origins.json`.
+  `claude_prompt.py` normalizes observed Claude framing at the guidance entry
+  boundary. It removes system-reminder blocks from question text and recognizes
+  task-notification or agent-message segments anywhere in a batch, not just
+  at the beginning. Keep the recorded model-facing batches in
+  `hooks/fixtures/claude-batched-prompts.json` distinct from hook-stdin captures.
+  Copilot and Codex batching/reminder formats remain unverified.
+  The shared classifier keeps clauses ending in `?`. Starting words count
+  only for a whole, single-clause prompt of at most 12 words and 120 characters,
+  without a trailing period, newline, colon or semicolon. Commas may repeat
+  identical emphasis, not introduce other clauses. Declarative starters inside
+  longer prose must not create question turns.
   Every prompt clears its own marker before settings and guidance evaluation,
   including host-started, unknown-origin and parent-written turns. Neither
   an agent identity nor a parent identity may create a root question marker.

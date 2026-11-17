@@ -20,6 +20,7 @@ import docs_cache
 import guidance
 import hook_adapter_common
 from classify_question import marker_path
+from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -124,6 +125,23 @@ class CopilotAdapterTests(unittest.TestCase):
                                      toolArgs={'path': 'child.txt', 'file_text': 'continued'})[0], {})
         self.assertEqual(self.tool('create', {'path': 'root.txt', 'file_text': 'blocked'})['permissionDecision'],
                          'deny')
+
+    def test_question_classifier_and_foreign_host_batches(self):
+        for prompt, expected, note in QUESTION_FIXTURES:
+            with self.subTest(case=note):
+                self.verified_question(prompt)
+                self.assertEqual(self.marker.exists(), expected)
+                self.assertEqual(self.tool('task', {'prompt': 'Continue the work'}).get('permissionDecision'),
+                                 'deny' if expected else None)
+                self.assertEqual(self.tool('view', {'path': 'report.txt'}), {})
+        # Claude transcript replays are unknown input here, not captured Copilot formats.
+        for report in (RECORDED_CLAUDE['handback'], CLAUDE_BATCH):
+            with self.subTest(report=report[:50]):
+                self.verified_question('Why did it fail?')
+                self.prompt(report + '\nCan the parent continue?')
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(self.tool('task', {'prompt': 'Continue the work'}), {})
+                self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
 
     def test_prompt_origin_recovery_survives_settings_and_marker_failures(self):
         self.verified_question('Why did this change?')

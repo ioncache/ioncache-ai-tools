@@ -78,13 +78,14 @@ def has_question(text):
     text = text.strip()
 
     clauses = [c for c in re.split(r"(?<=[.!?])\s+|\n+", text) if c.strip()]
-    if not clauses:
+    if any(clause.rstrip().endswith("?") for clause in clauses):
+        return True
+    if (len(clauses) != 1 or text.endswith(".")
+            or len(text) > 120 or len(text.split()) > 12 or re.search(r"[\n:;]", text)):
         return False
-
-    return any(
-        clause.rstrip().endswith("?") or QUESTION_STARTERS.match(clause)
-        for clause in clauses
-    )
+    # Repeated emphasis ("why ..., why ...!!!") is still one question, not prose.
+    fragments = [part.strip().rstrip("!").rstrip().casefold() for part in text.split(",")]
+    return len(set(fragments)) == 1 and bool(QUESTION_STARTERS.match(fragments[0]))
 
 
 def main():

@@ -73,6 +73,13 @@ their parent are not treated as user questions, and their work is not
 blocked. Host-started turns, such as worker hand-backs and task
 notifications, end the question turn instead of starting one.
 
+Host reminders are not user question text. Claude's observed notification
+and agent-message framing identifies host turns even behind reminders or
+inside a batch. Without a question mark, the classifier considers only a
+short, single-clause prompt, never starting words inside longer prose or
+period-ended sentences. Conditional instructions such as "When CI passes,
+merge the PR." do not start a question turn.
+
 Unknown origin also clears the marker and must not produce an answer-only
 fence. Root identity and question-like text do not prove that the user wrote
 the prompt. The current native integrations have no verified positive origin

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from classify_question import QUESTION_CONTRACT, has_question, is_root, set_marker
+from claude_prompt import normalize_prompt
 from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable
 from plugin_config import enabled, feature_settings
 from rule_engine import load_rules_for_event, run_rules
@@ -120,6 +121,8 @@ def run_hook(event, data):
         record_safely(data, warnings, question=False)
     try:
         with invocation_deadline(3):
+            if prompt:
+                data = normalize_prompt(data)
             data = {**data, '_ioncache_features': feature_settings(data, refresh=True)}
             output = evaluate(event, data)
         if prompt and not warnings:

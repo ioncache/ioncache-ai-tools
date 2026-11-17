@@ -52,13 +52,18 @@ unattended continuation over accidentally stopping a worker on a report.
 The shared guard still supports positively identified user questions, but
 its normalized-input tests are not proof of native detection.
 
-The classifier checks each sentence or line. One that ends in `?` or opens
-with an interrogative word (`what`, `why`, `how`, `when`, `where`, `who`,
-`which`, `is`, `are`, `does`, `did`, `can`, `could`, `should`, `would`,
-`will`, `has`, `have`, `was`, or `were`) makes the prompt a question. This
-includes statements and pasted lines such as "When CI passes, merge the PR."
-or "Have the worker retry the build." To give an instruction, rephrase it so
-no sentence or line opens that way or ends in `?`.
+A user-text clause ending in `?` makes the prompt a question. Without `?`,
+the entire prompt must be one short clause: at most 12 words and 120
+characters, with no trailing period, newline, colon or semicolon. It must
+start with an interrogative word. Commas are allowed only for identical
+repeated emphasis, such as "why the fuck, why the fuck!!!!!".
+
+Starting words inside longer prose do not count. "When CI passes, merge the
+PR." and the conditional feature request "when it's turned on, the review
+skill should automatically post comments" are not questions. These limits
+deliberately miss long, multi-clause and period-ended unpunctuated questions
+rather than fence ordinary reports. This remains a text heuristic, not a
+semantic determination of intent.
 
 Coverage limits:
 
@@ -79,20 +84,28 @@ Coverage limits:
 The official references below and live command-hook captures were checked on
 macOS on 2026-11-17. Sanitized stdin payloads are in
 [../hooks/fixtures/prompt-origins.json](../hooks/fixtures/prompt-origins.json).
+Recorded Claude model-facing batches, kept separate from hook captures, are in
+[../hooks/fixtures/claude-batched-prompts.json](../hooks/fixtures/claude-batched-prompts.json).
 
 | Host | Observed input and documented limits | Remaining gap |
 | --- | --- | --- |
-| Claude Code 2.1.326 | Captured a root question, instruction, background subagent report and shell-task notification. User prompts and notifications both had `prompt_id`. The documented prompt hook also runs on scheduled tasks, other sessions' messages and Code Mode output. | No verified positive user-origin signal. Peer messages, scheduled tasks and Code Mode output were not captured. The originally reported hand-back framing mismatch was not reproduced. |
-| Copilot CLI 1.0.113-1 | Captured a root question at `userPromptTransformed`, with `prompt` and `transformedPrompt` but no origin field. Documentation excludes system notifications from this event; that does not establish the provenance of every submitted or parent-written message. | Worker capture was denied by tool permissions. Instruction, hand-back, task-notification and peer-message captures remain unavailable. |
-| Codex 0.163.0 | Captured a root question and instruction. A worker returned a question-heavy report, but that return and the shell completion produced no additional prompt-hook invocation in this run. The documented prompt fields are `turn_id` and `prompt`, not origin. Stop-hook continuation reasons can act as new user prompts. | No verified positive user-origin signal. Child prompt, asynchronous notification, peer-message and Stop-continuation payloads were not captured. |
+| Claude Code 2.1.326 | Captured a root question, instruction, background subagent report and shell-task notification. User prompts and notifications both had `prompt_id`. Recorded model-facing entry 419 combines a notification inside a leading system reminder with an agent hand-back. Entries 248 and 268 contain summary reminders. The batch reproduces the old prefix miss and declarative-starter false positive without any question marks. | No verified positive user-origin signal. The recorded batch is not hook stdin, so its exact prompt-hook representation remains unverified. Independent peer messages, scheduled tasks and Code Mode output were not captured. |
+| Copilot CLI 1.0.113-1 | Captured a root question at `userPromptTransformed`, with `prompt` and `transformedPrompt` but no origin field. Documentation excludes system notifications from this event; that does not establish the provenance of every submitted or parent-written message. | Worker capture was denied by tool permissions. Instruction, hand-back, task-notification and peer-message captures remain unavailable. Batching and reminder formats are unverified. |
+| Codex 0.163.0 | Captured a root question and instruction. A worker returned a question-heavy report, but that return and the shell completion produced no additional prompt-hook invocation in this run. The documented prompt fields are `turn_id` and `prompt`, not origin. Stop-hook continuation reasons can act as new user prompts. | No verified positive user-origin signal. Child prompt, asynchronous notification, peer-message and Stop-continuation payloads were not captured. Batching and reminder formats are unverified. |
 
 Claude's hook documentation explicitly warns that transcripts are asynchronous
 and may not yet contain the current turn. The captures confirmed this at prompt
 time. Codex documents its transcript format as unstable. Neither a stale
 transcript nor an event called `UserPromptSubmit` establishes a human author.
 Known wrapper text can identify particular host messages, but the absence of
-a wrapper cannot prove that a bare report is a user question. The shared
-handler therefore uses no harness-specific prefix allowlist.
+a wrapper cannot prove that a bare report is a user question. Claude framing
+is normalized at the shared guidance entry boundary, outside the question
+classifier. Column-zero task-notification and agent-message wrappers, or the
+peer-message introduction, anywhere in a batch identify a host turn, including
+inside a system reminder. System-reminder blocks are excluded from question
+text, including nested or repeated reminders. An incomplete reminder leaves
+origin unknown. Neither this negative evidence nor stripping reminders
+establishes user origin.
 
 References for these specific contracts:
 
@@ -105,7 +118,11 @@ References for these specific contracts:
 The captures used an opt-in probe loaded from the feature worktree and a
 one-invocation Codex hook override. No persistent user hook registration points
 at a temporary script. Offline recovery tests cover unknown reports, children,
-settings and marker failures; they do not fill the live-host gaps above.
+settings and marker failures. They also replay the recorded Claude batch and
+exercise same-turn worker-launch recovery without another human prompt.
+Replaying that text through Copilot and Codex tests their unknown-input
+fallback, not those hosts' native framing. These checks do not fill the
+live-host gaps above.
 
 ## Action checks and autonomous recovery
 
