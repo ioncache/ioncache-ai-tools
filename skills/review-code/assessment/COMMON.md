@@ -41,8 +41,18 @@ Assess severity by consequence, reachability, breadth, and recoverability:
 High for serious impact, Medium for material but bounded impact, and Low for
 limited impact. Issue category alone does not set severity. A user-visible bug,
 documentation error, or test gap need not be High to warrant correction.
-Keep confidence in the evidence separate from potential harm and explain
-priority as when action is warranted and why.
+Keep confidence in the evidence (High, Medium, or Low) separate from potential
+harm and explain priority as when action is warranted and why.
+
+Give each reportable issue a priority level from its severity, reachability,
+confidence, and timing or dependencies:
+
+- `P1`: fix before merge.
+- `P2`: fix in this change if practical.
+- `P3`: follow-up work.
+
+A severe issue with a remote trigger or weak evidence can be `P2` or `P3`;
+state why. Priority never changes severity or validity.
 
 Select one `report_action`:
 

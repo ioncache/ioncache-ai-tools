@@ -20,6 +20,7 @@
     "review-integration": true,
     "review-jsdoc": true,
     "review-performance": true,
+    "review-post-comments": true,
     "review-privacy": true,
     "review-security": true,
     "review-test-coverage": true,

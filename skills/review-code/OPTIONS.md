@@ -7,6 +7,7 @@ examples without inspecting a target or launching a review.
 Use `/ioncache-ai-tools:review-code` in Claude Code or Copilot CLI, and
 `$ioncache-ai-tools:review-code` in Codex. The same review options work with
 `review-validate-fix-loop`; they affect reviewing and validation, not fixing.
+The posting options are review-code only; the loop rejects them.
 
 | Option | Default and meaning |
 | --- | --- |
@@ -18,6 +19,8 @@ Use `/ioncache-ai-tools:review-code` in Claude Code or Copilot CLI, and
 | `--lead-effort LEVEL`, `--reviewer-effort LEVEL`, `--validator-effort LEVEL` | Omitted: host/model default. Explicit values must be supported by the native host and selected model. |
 | `--fallback configured\|fail` | Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. |
 | `--strategy auto\|sweep-first\|specialists` | `auto`: deterministically use `specialists`. `sweep-first` runs correctness first without changing the remaining required single-purpose assignments. |
+| `--post-comments` | Review-code only. Off by default. After the review, publish reportable findings as one `COMMENT` review on the reviewed PR under [POSTING.md](POSTING.md). |
+| `--post-sensitive none\|private\|all` | Review-code only, with posting. Default `private`: post security and privacy findings only on private or internal repositories. `none` never posts them; `all` always does. |
 | `--help` | Show help only. |
 
 Model and effort values are opaque native identifiers, not a plugin-maintained
@@ -31,6 +34,7 @@ Examples use placeholders, not recommendations or verified available models:
 /ioncache-ai-tools:review-code
 /ioncache-ai-tools:review-code --help
 /ioncache-ai-tools:review-code this PR --model-selection configured
+/ioncache-ai-tools:review-code this PR --post-comments
 /ioncache-ai-tools:review-code this PR --lead-model LEAD_ID --reviewer-model REVIEW_ID
 /ioncache-ai-tools:review-code src --reviewer-model REVIEW_ID --reviewer-effort LEVEL --fallback configured
 $ioncache-ai-tools:review-code --help
@@ -111,7 +115,13 @@ its own overrides. `review-auto-model-selection: false` changes unspecified role
 configured defaults while retaining explicit choices. A disabled skill remains
 disabled independently. `configuration.review_features` contains the current
 independent `review-<category>` controls used by packet preparation. Writing
-`skill:*` controls do not disable those categories. There is no category-selection
+`skill:*` controls do not disable those categories.
+`configuration.post_comments_enabled` reflects the separate `review-post-comments`
+setting. When it is false, requested posting is recorded as a limitation,
+`effective_post_comments` is false, and the review still runs.
+Posting fields are a caller action, not review choices: they are not forwarded
+to review phases. Context `choices` may record an explicit conversational request
+as `post_comments` (JSON boolean) or `post_sensitive`, with its source. There is no category-selection
 prompt or automatic exclusion option.
 Configuration failure reports unavailability; continue
 authorized work without applying this skill, rather than inventing permission.

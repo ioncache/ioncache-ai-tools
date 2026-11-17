@@ -99,7 +99,7 @@ defaults without a setup prompt.
 
 | Invocation in Claude/Copilot | What it does | What to provide |
 | --- | --- | --- |
-| `/ioncache-ai-tools:review-code` | Reviews code without applying fixes or posting comments | A file, directory, repository, branch, or PR; defaults to the active PR or branch changes |
+| `/ioncache-ai-tools:review-code` | Reviews code without applying fixes; with `--post-comments`, publishes the findings as one comment review on the PR | A file, directory, repository, branch, or PR; defaults to the active PR or branch changes |
 | `/ioncache-ai-tools:review-dependabot-pr` | Checks dependency updates against actual project usage; reports without changing the PR | The Dependabot, Renovate, or other dependency-update PR; a saved run directory when resuming |
 | `/ioncache-ai-tools:verify-unresolved-pr-comments` | Evaluates unresolved feedback and recommends fixes or responses; does not edit, post, resolve threads, or run tests | Invoke from the branch with the active PR |
 | `/ioncache-ai-tools:post-pr-review-comments` | Drafts and edits review comments; prefers pending reviews for new inline threads and posts requested replies directly; never submits a review | The PR, findings or comments, and whether to draft, edit, reply, or post |

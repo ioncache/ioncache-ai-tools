@@ -79,6 +79,9 @@ jobs:
       - name: Run review-options self-check
         run: python3 scripts/review_options_self_check.py
 
+      - name: Run review-comments self-check
+        run: python3 scripts/review_comments_self_check.py
+
       - name: Run review-assignment self-check
         run: python3 scripts/review_assignments_self_check.py
 
