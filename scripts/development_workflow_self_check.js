@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 const { execFileSync } = require('node:child_process')
+const { createHash } = require('node:crypto')
 
 const source = fs.readFileSync(path.join(__dirname, '../workflows/autonomous-development.js'), 'utf8')
 assert.match(source, /^export const meta = \{\n/)
@@ -17,6 +18,28 @@ const fixtureModels = Object.fromEntries(modelRoles.map(role => [role, {
 }]))
 const input = { store: '/private/run', pluginRoot: '/plugin', invocation: 'offline-fixture',
   models: fixtureModels }
+
+/**
+ * Supplies compact checkpoint receipts to in-memory host fixtures.
+ * @param {object} assignment - Fixture assignment
+ * @param {string} input - Checkpoint JSON from the adapter
+ * @returns {void}
+ * @throws {assert.AssertionError} If a retained request changes
+ * @example
+ * fixtureCheckpoint(assignment, input)
+ */
+function fixtureCheckpoint(assignment, input) {
+  const { assignment: id, ...saved } = JSON.parse(input)
+  assert.equal(id, assignment.id)
+  for (const [path, value] of Object.entries(saved.reservations)) {
+    const previous = assignment.review_dispatch.reservations[path]
+    if (value.identity !== previous?.identity) {
+      value.identity = createHash('sha256').update(value.identity).digest('hex')
+    }
+    if (previous) assert.equal(value.identity, previous.identity, 'Review report request changed')
+  }
+  assignment.review_dispatch = saved
+}
 
 /**
  * Exercises workflow dispatch with local responses, never a real host agent.
@@ -39,6 +62,7 @@ async function scenario(scenario, setup = {}) {
     root: '/project', comparison_base: 'fixture-base', private_context: 'owner-only-context',
     store: input.store, result_file: '/private/run/reports/A0001.json',
     configuration: { execution: { provider: 'claude-workflows' } },
+    review_dispatch: { calls: 0, reservations: {}, reports: [] },
     limits: { review_dispatches: scenario === 'review-budget' ? 2 : 6 }
   }
   if (scenario === 'review-model-overrides') {
@@ -71,6 +95,13 @@ async function scenario(scenario, setup = {}) {
   function response(prompt, options) {
     roles.push(options.label)
     if (options.label === 'development-control') {
+      const checkpoint = prompt.match(/^Review checkpoint: (.+)$/m)
+      if (checkpoint) {
+        fixtureCheckpoint(assignment, checkpoint[1])
+        if (scenario === 'review-checkpoint-missing') return null
+        if (scenario === 'review-checkpoint-throw') throw new Error('Fixture checkpoint acknowledgment lost')
+        return { outcome: 'running', assignment, limits: { assignments: 3 }, revision: roles.length }
+      }
       const interrupted = prompt.includes('Interrupt')
       let outcome = roles.length === 1 ? 'running'
         : interrupted || scenario === 'review-context-conflict' ? 'blocked'
@@ -201,6 +232,7 @@ async function concurrentReview(failLeaf, policy = {}, dispatchLimit = 20) {
     id: 'A0001', role: 'review', root: '/project', comparison_base: 'base',
     store: input.store, result_file: '/private/run/reports/A0001.json',
     configuration: { execution: { provider: 'claude-workflows' } },
+    review_dispatch: { calls: 0, reservations: {}, reports: [] },
     monitoring: { enabled: true }, model_selection: policy, limits: { review_dispatches: dispatchLimit }
   }
   const resuming = ['resume', 'changed-reservation', 'completed-path', 'duplicate-reservation'].includes(failLeaf)
@@ -233,6 +265,11 @@ async function concurrentReview(failLeaf, policy = {}, dispatchLimit = 20) {
   async function worker(prompt, options) {
     if (options.label === 'development-control') {
       assert.equal(active, 0, 'Controller must not advance while a sibling is still running')
+      const checkpoint = prompt.match(/^Review checkpoint: (.+)$/m)
+      if (checkpoint) {
+        fixtureCheckpoint(assignment, checkpoint[1])
+        return { assignment, limits: { assignments: 1 }, revision: 0, outcome: 'running' }
+      }
       return { assignment: owners ? null : assignment, limits: { assignments: 1 }, revision: 0,
         outcome: owners ? (prompt.includes('Interrupt') || failLeaf === 'context' ? 'blocked' : 'completed') : 'running',
         reason: prompt.includes('Interrupt') ? prompt : null }
@@ -348,9 +385,12 @@ async function persistedScenario(fixture) {
    * const state = helper('status')
    */
   function helper(command, ...extra) {
+    const input = command === 'review-checkpoint' ? extra.shift() : undefined
     const args = [path.join(__dirname, 'development_run.py'), command, fixture.store, ...extra]
     if (command !== 'status') args.push('--revision', String(helper('status').revision))
-    return JSON.parse(execFileSync(fixture.python, args, { encoding: 'utf8', stdio: 'pipe' }))
+    return JSON.parse(execFileSync(fixture.python, args, {
+      input, encoding: 'utf8', stdio: 'pipe', maxBuffer: 8 * 1024 * 1024
+    }))
   }
   /**
    * Executes the workflow's bookkeeping instructions with the real controller.
@@ -362,7 +402,13 @@ async function persistedScenario(fixture) {
    */
   function control(prompt) {
     let state = helper('status')
+    const checkpoint = prompt.match(/^Review checkpoint: (.+)$/m)
+    if (checkpoint) return helper('review-checkpoint', checkpoint[1])
     if (prompt.includes('Read status.')) {
+      if (state.assignment?.review_resume_ready) {
+        assert(prompt.includes('claim-review --provider claude-workflows'))
+        return helper('claim-review', '--provider', 'claude-workflows')
+      }
       if (state.assignment) return helper('interrupt', '--reason', 'Outstanding fixture worker')
       if (state.outcome !== 'running') return state
       assert(prompt.includes('--provider claude-workflows'))
@@ -439,6 +485,7 @@ async function persistedScenario(fixture) {
     const assignment = helper('status').assignment
     if (assignment.task_plan) assert(!Object.hasOwn(assignment.task_plan, 'paths'))
     if (fixture.scenario.startsWith('review-') && options.label === 'review-owner') {
+      if (fixture.scenario === 'review-recovered') return reviewWorker('finish-recovered')
       if (review) return reviewWorker('finish')
       review = reviewWorker('prepare')
       const requests = review.packets.map(packet => ({
@@ -527,11 +574,18 @@ async function main() {
   const review = await scenario('review-complete')
   assert.equal(review.result.outcome, 'completed')
   assert.deepEqual(review.roles, [
-    'development-control', 'review-owner', 'reviewer', 'review-owner', 'development-control'
+    'development-control', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control', 'review-owner', 'development-control'
   ])
   for (const name of ['review-budget', 'review-path', 'review-missing-packet']) {
     const blocked = await scenario(name)
     assert.equal(blocked.result.outcome, 'blocked')
+    assert(!blocked.roles.includes('reviewer'))
+  }
+  for (const name of ['review-checkpoint-missing', 'review-checkpoint-throw']) {
+    const blocked = await scenario(name)
+    assert.equal(blocked.result.outcome, 'blocked')
+    assert(!blocked.roles.includes('review-owner'))
     assert(!blocked.roles.includes('reviewer'))
   }
   for (const name of ['waiting', 'waiting-independent']) {
@@ -550,25 +604,29 @@ async function main() {
   const incompleteReview = await scenario('review-waiting')
   assert.equal(incompleteReview.result.outcome, 'blocked')
   assert.deepEqual(incompleteReview.roles, [
-    'development-control', 'review-owner', 'reviewer', 'development-control'
+    'development-control', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control'
   ])
   assert.deepEqual(incompleteReview.recorded, [])
   const replacement = await scenario('review-replacement')
   assert.equal(replacement.result.outcome, 'completed', replacement.result.reason)
   assert.deepEqual(replacement.roles, [
-    'development-control', 'review-owner', 'reviewer', 'review-owner',
-    'reviewer', 'review-owner', 'development-control'
+    'development-control', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control', 'review-owner', 'development-control'
   ])
   const contextConflict = await scenario('review-context-conflict')
   assert.equal(contextConflict.result.outcome, 'blocked')
   assert.deepEqual(contextConflict.roles, [
-    'development-control', 'review-owner', 'reviewer', 'review-owner', 'development-control'
+    'development-control', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control', 'review-owner', 'development-control'
   ])
   const sourceRead = await scenario('review-source-read')
   assert.equal(sourceRead.result.outcome, 'completed')
   assert.deepEqual(sourceRead.roles, [
-    'development-control', 'review-owner', 'reviewer', 'review-owner',
-    'adjudicator', 'review-owner', 'development-control'
+    'development-control', 'development-control', 'review-owner', 'development-control',
+    'reviewer', 'development-control', 'review-owner', 'development-control',
+    'adjudicator', 'development-control', 'review-owner', 'development-control'
   ])
   await assert.rejects(run({}, null, phase), /Provide absolute/)
   await assert.rejects(run({ ...input, models: {} }, null, phase), /Resolve native model/)

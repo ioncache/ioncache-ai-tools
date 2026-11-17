@@ -89,9 +89,10 @@ class DevelopmentRunTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=root or self.root, env=self.env,
                               check=True, capture_output=True, text=True).stdout.strip()
 
-    def cli(self, *args, ok=True):
+    def cli(self, *args, ok=True, stdin=None):
         result = subprocess.run([sys.executable, str(SCRIPTS / "development_run.py"), *map(str, args)],
-                                env=self.env, capture_output=True, text=True)
+                                env=self.env, capture_output=True, text=True,
+                                input=None if stdin is None else json.dumps(stdin))
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         if not ok:
             self.assertEqual(result.stdout, "")
@@ -104,8 +105,8 @@ class DevelopmentRunTests(unittest.TestCase):
         self.state = self.cli("init", self.path, "--approved", identity,
                               "--root", self.root, "--store", self.store)
 
-    def mutate(self, command, *args, ok=True):
-        result = self.cli(command, self.store, "--revision", self.state["revision"], *args, ok=ok)
+    def mutate(self, command, *args, ok=True, stdin=None):
+        result = self.cli(command, self.store, "--revision", self.state["revision"], *args, ok=ok, stdin=stdin)
         if ok:
             self.state = result
         return result
@@ -1080,6 +1081,128 @@ class DevelopmentRunTests(unittest.TestCase):
             with self.assertRaisesRegex(development.review.LedgerError, "outside every repository"):
                 development.review.ledger_path(root, str(original))
         self.assertEqual(development.review.stored_files(original.parent), files)
+
+    def assert_workflow_storage_continues(self, progress_enabled):
+        self.store = self.folder / "later-repository" / "run"
+        self.init()
+        config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+        config.write_text(json.dumps({"features": {"autonomous-development-progress": progress_enabled}}))
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.execute_fixture(self.state["assignment"])
+        self.workflow("review-throw")
+        before = development.load(self.store)
+        spent = before["active"]["review_dispatch"]
+        self.assertGreater(spent["calls"], 1)
+        original = Path(json.loads((self.store / "reports/workflow-review.json").read_bytes())["ledger"])
+        evidence = development.review.stored_files(original.parent)
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.git("init", "-q", str(self.store.parent))
+        self.mutate("recover-review-storage", "--ledger", str(original),
+                    "--reason", "Storage became a repository", "--shutdown-evidence", "Fixture workers exited")
+        recovered = Path(self.state["assignment"]["recovered_ledger"])
+        roles = self.workflow("review-recovered")
+        self.assertIn("review-owner", roles)
+        self.assertNotIn("reviewer", roles)
+        self.assertIn("commit", roles)
+        saved = development.load(self.store)
+        reviewed = next(item for item in saved["history"] if item["id"] == before["active"]["id"])
+        self.assertEqual(reviewed["outcome"], "complete")
+        self.assertEqual(reviewed["attempt"], before["active"]["attempt"])
+        self.assertEqual(reviewed["review_dispatch"]["calls"], spent["calls"] + 1)
+        self.assertEqual(reviewed["review_dispatch"]["reservations"], spent["reservations"])
+        self.assertFalse(reviewed["review_resume_ready"])
+        self.assertEqual(reviewed["report"]["data"]["ledger"], str(recovered))
+        self.assertEqual(saved["attempts"][reviewed["key"]], before["attempts"][reviewed["key"]])
+        self.assertEqual(development.review.stored_files(original.parent), evidence)
+        with patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaisesRegex(development.review.LedgerError, "outside every repository"):
+                development.review.ledger_path(root, str(original))
+
+    def test_workflow_continues_recovered_review_without_retirement(self):
+        self.assert_workflow_storage_continues(True)
+
+    def test_workflow_storage_recovery_keeps_accounting_when_progress_disabled(self):
+        self.assert_workflow_storage_continues(False)
+
+    def test_review_continuation_claim_requires_shutdown_and_is_one_use(self):
+        root = self.start_review_fixture()
+        data = self.review(root, record=False, advance=False)
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("shutdown evidence", self.mutate("claim-review", ok=False))
+        arguments = ("--ledger", data["ledger"], "--reason", "Reconciled interruption",
+                     "--shutdown-evidence", "Native fixture workers exited")
+        for setting in ("autonomous-development", "skill:autonomous-development"):
+            config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
+            config.write_text(json.dumps({"features": {setting: False}}))
+            self.assertIn("disabled", self.mutate("resume-review", *arguments, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        config.write_text('{"features": {}}')
+        self.mutate("interrupt", "--reason", "Native worker stopped")
+        self.mutate("resume-review", *arguments)
+        assignment = self.state["assignment"]
+        self.assertTrue(assignment["review_resume_ready"])
+        self.mutate("claim-review", "--provider", "claude-workflows")
+        self.assertEqual(self.state["outcome"], "running")
+        self.assertFalse(self.state["assignment"]["review_resume_ready"])
+        self.assertIn("shutdown evidence", self.mutate("claim-review", ok=False))
+        self.mutate("interrupt", "--reason", "Lost claim response before dispatch")
+        self.mutate("resume-review", *arguments)
+        self.mutate("claim-review", "--provider", "claude-workflows")
+        self.assertEqual(self.state["assignment"]["id"], assignment["id"])
+        self.assertEqual(self.state["assignment"]["review_dispatch"], assignment["review_dispatch"])
+        self.assertEqual(len(self.state["assignment"]["review_resumptions"]), 2)
+
+    def test_review_dispatch_checkpoints_retain_spending_and_reservations(self):
+        root = self.start_review_fixture()
+        ledger = self.review(root, record=False, advance=False)["ledger"]
+        assignment = self.state["assignment"]
+        path = str(self.store / "reports" / assignment["id"] / "reserved.json")
+        checkpoint = {"assignment": assignment["id"], "calls": 2, "reservations": {
+            path: {"dispatch": 2, "started": True, "role": "reviewer", "identity": "frozen-request"},
+        }, "reports": [{"role": "reviewer", "result_file": path, "outcome": "interrupted"}]}
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        saved = (self.store / "RUN.json").read_bytes()
+        invalid = []
+        for calls in (1, self.plan["limits"]["review_dispatches"] + 1):
+            invalid.append({**checkpoint, "calls": calls})
+        invalid.extend(({**checkpoint, "reservations": {}}, {**checkpoint, "reports": []}))
+        for key, value in (("dispatch", 1), ("started", False), ("identity", "replacement")):
+            changed = copy.deepcopy(checkpoint)
+            changed["reservations"][path][key] = value
+            invalid.append(changed)
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                self.mutate("review-checkpoint", stdin=payload, ok=False)
+                self.assertEqual((self.store / "RUN.json").read_bytes(), saved)
+        checkpoint["calls"] = self.plan["limits"]["review_dispatches"]
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        self.mutate("interrupt", "--reason", "All remaining calls were consumed")
+        self.mutate("resume-review", "--ledger", ledger, "--reason", "Collect retained outcome",
+                    "--shutdown-evidence", "Native workers exited")
+        roles = self.workflow("review-recovered")
+        self.assertNotIn("review-owner", roles)
+        self.assertIn("allowance exhausted", self.state["reason"])
+        self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], checkpoint["calls"])
+
+    def test_legacy_review_reentry_requires_explicit_dispatch_reconciliation(self):
+        root = self.start_review_fixture()
+        ledger = self.review(root, record=False, advance=False)["ledger"]
+        state = development.load(self.store)
+        del state["active"]["review_dispatch"]
+        state["history"][-1] = state["active"]
+        development.save(self.store, state)
+        args = ("--ledger", ledger, "--reason", "Reconcile retained native history",
+                "--shutdown-evidence", "Native workers exited")
+        self.mutate("resume-review", *args, ok=False)
+        self.mutate("resume-review", *args, "--used-dispatches", "4",
+                    "--dispatch-evidence", "Native history retains four charged owner/leaf slots")
+        self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], 4)
+        self.assertIn("cannot be replaced", self.mutate(
+            "resume-review", *args, "--used-dispatches", "0", "--dispatch-evidence", "Reset", ok=False))
+        self.mutate("claim-review", "--provider", "claude-workflows")
+        self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], 4)
 
     def test_active_storage_recovery_retries_after_run_save_failure(self):
         self.store = self.folder / "later-repository" / "run"
@@ -2466,8 +2589,10 @@ def workflow_review_fixture(fixture):
                           {"type": "start_review", "actor": "fixture-owner", "reason": json.dumps(phase)})
         saved.write_bytes(manifest.encode(data))
         return {"packets": list(phase["packets"].values()), **data}
-    worker.assertEqual(fixture["action"], "finish")
+    worker.assertIn(fixture["action"], ("finish", "finish-recovered"))
     data = json.loads(saved.read_bytes())
+    if fixture["action"] == "finish-recovered":
+        data["ledger"] = assignment["recovered_ledger"]
     handoff = json.loads(Path(data["handoff"]).read_bytes())
     for attempt in handoff["attempts"]:
         attempt["result"] = json.loads(Path(attempt["packet"]["result_file"]).read_bytes())

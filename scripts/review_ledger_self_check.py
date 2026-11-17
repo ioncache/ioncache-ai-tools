@@ -738,7 +738,12 @@ class ReviewLedgerTests(unittest.TestCase):
             with self.subTest(command=command[0]):
                 self.assertEqual(self.cli(command), result)
         self.assertEqual(review_ledger.stored_files(Path(self.ledger).parent), original)
-        self.assertIn("outside every repository", self.reject("stop", outcome="interrupted"))
+        denial = self.reject("stop", outcome="interrupted")
+        self.assertIn("outside every repository", denial)
+        self.assertIn("copy", denial)
+        self.assertIn("<worktree-identity>/<run-id>", denial)
+        self.assertIn("status", denial)
+        self.assertIn("apply", denial)
         old_ledger = self.ledger
         destination = self.folder / "recovered" / self.storage.name / Path(old_ledger).parent.name
         shutil.copytree(Path(old_ledger).parent, destination)

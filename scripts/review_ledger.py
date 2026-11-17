@@ -76,7 +76,11 @@ def external_directory(path, root=None):
             "Review storage must be outside every repository and Git metadata directory; "
             "set XDG_STATE_HOME to an external state directory. For an existing development review, "
             "stop its workers and use development_run.py recover-review-storage; do not initialize "
-            "a replacement ledger")
+            "a replacement ledger. For a standalone run, stop its writers and copy the complete run "
+            "directory, including objects, to unused external storage, retaining "
+            "<worktree-identity>/<run-id>. Run status on the copied absolute ledger path, then "
+            "continue with apply at its retained revision. Keep the original evidence; see "
+            "skills/review-validate-fix-loop/LEDGER.md")
     if result.returncode != 128 or not result.stderr.startswith(b"fatal: not a git repository (or any "):
         detail = result.stderr.decode(errors="replace").strip() or f"Git exited with status {result.returncode}"
         raise OSError(f"Git storage check unavailable: {detail}")

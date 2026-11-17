@@ -213,10 +213,11 @@ function prepareReviewRound(assignment, requests, reservations) {
     if (paths.has(request.result_file)) throw new Error('Review reports must have distinct paths')
     paths.add(request.result_file)
     const identity = reviewRequestIdentity(request)
-    const reservation = reservations.get(request.result_file) || { identity, started: false }
-    if (reservation.started || reservation.identity !== identity) {
+    const reservation = reservations.get(request.result_file) || { identity, started: false, role: request.role }
+    if (reservation.started || (reservation.identity !== identity && !/^[a-f0-9]{64}$/.test(reservation.identity))) {
       throw new Error('Review report path belongs to a launched worker or a different reservation')
     }
+    reservation.identity = identity
     if (request.role !== 'reviewer') return { ...request, reservation, instructions: request.prompt }
     const packet = request.packet
     if (!packet || !packet.identity || !packet.review_type ||
@@ -252,7 +253,6 @@ Frozen packet: ${JSON.stringify(packet)}` }
  * const result = await reviewLeaf(assignment, request)
  */
 async function reviewLeaf(assignment, request) {
-  request.reservation.started = true
   const result = await launchAgent({
     role: request.role, schema: resultSchema, assignment,
     prompt: `Perform only the bounded ${request.role} assignment below. Do not launch agents.
@@ -287,18 +287,21 @@ ${request.instructions}`
  * Overlaps independent readers while keeping each fixer an exclusive barrier.
  * @param {object} assignment - Durable review assignment
  * @param {object[]} requests - Validated, numbered leaf requests
+ * @param {Function} persist - Persist spending and launch state before each batch
  * @returns {Promise<object[]>} Ordered complete report references
  * @throws {Error} After siblings settle if a native call fails
  * @example
- * const reports = await dispatchReviewRound(assignment, requests)
+ * const reports = await dispatchReviewRound(assignment, requests, persist)
  */
-async function dispatchReviewRound(assignment, requests) {
+async function dispatchReviewRound(assignment, requests, persist) {
   const reports = []
   for (let start = 0; start < requests.length;) {
     let end = start + 1
     if (requests[start].role !== 'fixer') {
       while (end < requests.length && requests[end].role !== 'fixer') end += 1
     }
+    for (const request of requests.slice(start, end)) request.reservation.started = true
+    await persist(reports)
     const settled = await Promise.allSettled(
       requests.slice(start, end).map(request => reviewLeaf(assignment, request))
     )
@@ -318,6 +321,35 @@ async function dispatchReviewRound(assignment, requests) {
 }
 
 /**
+ * Persists authoritative dispatch accounting before any corresponding native launch.
+ * @param {object} assignment - Current durable review assignment
+ * @param {object} checkpoint - Counts, reservations and retained handbacks
+ * @returns {Promise<object>} Saved checkpoint with controller-hashed request identities
+ * @throws {Error} If the controller does not acknowledge the exact checkpoint
+ * @example
+ * const saved = await checkpointReview(assignment, checkpoint)
+ */
+async function checkpointReview(assignment, checkpoint) {
+  const saved = await control(`Persist review dispatch accounting with review-checkpoint.
+Pass the following JSON on stdin, not as a shell argument; do not reserve another assignment.
+Review checkpoint: ${JSON.stringify({ assignment: assignment.id, ...checkpoint })}
+Return the helper's exact JSON.`)
+  const recorded = saved?.assignment?.review_dispatch
+  const expected = { ...checkpoint, reservations: Object.fromEntries(
+    Object.entries(checkpoint.reservations).map(([path, value]) => [
+      path, { ...value, identity: recorded?.reservations?.[path]?.identity }
+    ])
+  ) }
+  if (!recorded || saved.assignment.id !== assignment.id ||
+      Object.values(recorded.reservations).some(value => !/^[a-f0-9]{64}$/.test(value.identity)) ||
+      reviewRequestIdentity(recorded) !== reviewRequestIdentity(expected)) {
+    throw new Error('Review dispatch checkpoint was not acknowledged; inspect retained state before resuming')
+  }
+  assignment.review_dispatch = saved.assignment.review_dispatch
+  return recorded
+}
+
+/**
  * Dispatches the existing review roles flat, without nested agent launches.
  * @param {object} assignment - Durable review assignment supplied by the controller
  * @returns {Promise<object>} Compact result pointing to the complete private report
@@ -326,12 +358,36 @@ async function dispatchReviewRound(assignment, requests) {
  * const result = await reviewAssignment(assignment)
  */
 async function reviewAssignment(assignment) {
-  const reports = []
-  const reservations = new Map()
-  let calls = 0
+  const saved = assignment.review_dispatch
+  if (!saved) throw new Error('Dispatch accounting unavailable; use resume-review with native dispatch evidence')
+  const reports = [...saved.reports]
+  const reservations = new Map(Object.entries(saved.reservations).map(([path, value]) => [path, { ...value }]))
+  const reported = new Set(reports.filter(item => item.outcome !== 'not_started').map(item => item.result_file))
+  for (const [result_file, value] of reservations) {
+    if (value.started && !reported.has(result_file)) {
+      reports.push({ role: value.role, result_file, outcome: 'interrupted',
+        reason: 'Inspect the original report if present; a launch or missing handback is not proof of completion' })
+    }
+  }
+  let calls = saved.calls
   const maximum = assignment.limits.review_dispatches
+  /**
+   * Includes completed batches when saving the next launch boundary.
+   * @param {object[]} [batchReports] - Handbacks from the current round
+   * @returns {Promise<void>}
+   * @throws {Error} If durable checkpointing fails
+   * @example
+   * await persist()
+   */
+  async function persist(batchReports = []) {
+    const recorded = await checkpointReview(assignment, {
+      calls, reservations: Object.fromEntries(reservations), reports: [...reports, ...batchReports]
+    })
+    for (const [path, value] of reservations) value.identity = recorded.reservations[path].identity
+  }
   while (calls < maximum) {
     calls += 1
+    await persist()
     const owner = await launchAgent({
       role: 'review-owner', assignment,
       prompt: `Act as the review/fix owner described in
@@ -347,6 +403,10 @@ Other requests carry only that role's instructions and evidence in prompt.
 Never send a reviewer the whole development assignment, WORKERS.md, or sibling criteria.
 Return bounded leaf requests, a blocked result, or the final development report path.
 Do not repeat completed passes. Reconstruct progress from the existing ledger on replay.
+Use resume_ledger or recovered_ledger when supplied. Retained interrupted dispatch references
+are not completed reports: inspect their original files and assess the saved evidence.
+Do not relaunch a started reservation or overwrite its result path. Any replacement needs
+a fresh result path and remaining capacity; already consumed and reserved calls are not refunded.
 Ambient repository instructions are ignored for the review, not applied as additional standards.
 Their presence, or reading a project reference as evidence, never warrants a replacement.
 Have the existing adjudicator assess a reported isolation concern before ordering replacement.
@@ -360,7 +420,7 @@ Genuine adoption of another ruleset, incomplete work or reused context cannot be
 findings are empty. Do not repeat a known unchanged failure; reconcile the actual cause within existing limits.
 Unreserved owner/leaf capacity after this call: ${maximum - calls}.
 ${progressInstructions(assignment, { dispatch: calls, role: 'review-owner' })}
-Assignment data: ${JSON.stringify(assignment)}
+Assignment data: ${JSON.stringify({ ...assignment, review_dispatch: undefined })}
 Completed leaf report references: ${JSON.stringify(reports)}`,
       schema: {
         type: 'object', required: ['outcome', 'requests', 'result_file'],
@@ -390,14 +450,16 @@ Completed leaf report references: ${JSON.stringify(reports)}`,
       request.dispatch = request.reservation.dispatch
       reservations.set(request.result_file, request.reservation)
     }
-    reports.push(...await dispatchReviewRound(assignment, requests))
+    reports.push(...await dispatchReviewRound(assignment, requests, persist))
   }
   throw new Error('Review dispatch allowance exhausted before a complete handback')
 }
 
 for (const role of modelRoles) roleSelection(role, null)
 let state = await control(
-  'Read status. If an assignment is outstanding, interrupt with its identity and stop; ' +
+  'Read status. If an outstanding review has review_resume_ready, consume it with ' +
+  'claim-review --provider claude-workflows and return that assignment without reserving another. ' +
+  'Otherwise, if an assignment is outstanding, interrupt with its identity and stop; ' +
   'do not relaunch an unknown live worker. Otherwise, if running, reserve next with ' +
   '--provider claude-workflows. On provider mismatch, interrupt without reserving an assignment. ' +
   'Do not resume a stopped run automatically.'

@@ -106,6 +106,13 @@ also remain bounded under review-code `PACKETS.md`; they are not another
 dispatch allowance. Budget for the complete enabled category roster, separate
 adjudication and owner calls. Do not combine purposes to fit a smaller limit.
 
+The packaged workflow saves `review_dispatch` in the active assignment before
+owner calls and leaf batches. It retains charged slots, hashed request identities,
+started reservations and handback references across interruption. The controller's
+`review-checkpoint` command reads that checkpoint JSON from stdin and rejects
+refunds, replaced reservations and reused slots. This accounting is independent
+of optional progress monitoring; it is not acceptance evidence.
+
 For a sizing estimate, let `C` be the enabled full roster, including project
 categories and JSDoc where applicable, `L = review_loops`, and `F = fix_cycles`.
 Read `review_options.py`'s effective `configuration.review_features` and
@@ -231,6 +238,14 @@ Assignment identity, attempts and consumed dispatches are retained. The command
 uses the existing autonomous-development opt-outs and does not stop or verify
 native workers itself.
 
+With retained dispatch accounting, recovery also arms one continuation of the
+same assignment. Run the packaged workflow again: its control worker consumes
+`review_resume_ready` using `claim-review --provider claude-workflows`, restores
+the running outcome and returns the existing assignment instead of reserving
+another. The owner uses `resume_ledger` and the saved dispatch checkpoint.
+Completed reports are inspected, not repeated. Started calls without handbacks
+remain charged and incomplete until their original evidence is assessed.
+
 An identical copy left by an interrupted controller save can be reused on retry.
 Different destination evidence is preserved, not overwritten; choose another
 external `XDG_STATE_HOME` and retry. After a lost response, read `status` first:
@@ -319,6 +334,31 @@ it. `retire` records supplied shutdown evidence; it does not stop or verify a
 native process. The caller must do that first. Reconcile real Git and remote
 state before retrying an operation whose response was lost. Never automatically
 repeat a commit, push, or PR creation.
+
+For an interrupted review with readable evidence, retain its assignment instead
+of retiring it. After stopping its native workers and reconciling partial effects:
+
+```sh
+python3 "/absolute/plugin/scripts/development_run.py" resume-review "/private/run" \
+  --revision 8 --ledger "/external/reviews/<worktree-identity>/<review-id>/REVIEW_LEDGER.json" \
+  --reason "Continue the retained review" \
+  --shutdown-evidence "Native host confirms this assignment's workers exited"
+```
+
+Then run the packaged workflow with a fresh invocation identifier. This arms one
+continuation, not an automatic retry of an unknown live worker. After a lost
+claim response or another interruption, reconcile native shutdown and use the
+same command again. Existing dispatch counts, reservations, report paths and
+assignment identity remain unchanged. Exhausted capacity cannot launch another
+owner or be reset by recovery. Relocate ineligible storage first.
+
+Older active assignments without a dispatch checkpoint require
+`--used-dispatches N --dispatch-evidence "Native history establishing charged slots"`
+on `resume-review`. Include owner calls, failed calls and reserved slots; do not
+infer zero from absent monitoring. The caller supplies this evidence, just as
+it supplies shutdown evidence; the helper does not independently inspect a host.
+Existing checkpoints cannot be replaced this way. If spending cannot be
+established, retain the incomplete outcome without launching more workers.
 
 If accepted code drifts, use `reconcile` with `--pr`,
 `--revision`, and `--reason` after collecting or retiring the outstanding worker.

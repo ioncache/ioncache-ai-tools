@@ -60,6 +60,15 @@ never replace its approved provider. A completed report must be read and recorde
 reserving another assignment. On a helper failure, preserve the error and
 interrupt scheduling; do not edit private state to make it pass.
 
+An outstanding review with `review_resume_ready` has a recorded shutdown
+declaration. Consume that one-use handoff with `claim-review --provider
+claude-workflows`; return the same assignment, not a new reservation.
+Other outstanding assignments still require interruption and reconciliation.
+Before each owner call or leaf batch, persist the adapter's exact checkpoint
+through `review-checkpoint`, passing its JSON on stdin. Return the helper's exact
+output. Never infer successful persistence, refund calls, reinterpret request
+identities or turn handback references into accepted reviews.
+
 Do not run acceptance checks or judge code. Do not create worktrees, edit source,
 commit, publish, or launch agents. Do not resume or retire workers without
 native shutdown and reconciliation evidence. A missing worker report remains
@@ -139,6 +148,12 @@ and use the controller's `recover-review-storage` command from `CONTRACT.md`.
 Resume the returned `recovered_ledger` with the same assignment and remaining
 allowance. Do not initialize a replacement or retire the assignment just to
 change its storage.
+For other interruptions, or a lost continuation-claim response, the run owner
+uses `resume-review` after reconciling native shutdown as described in
+`CONTRACT.md`. Continue from `resume_ledger` when supplied. Read original reports
+for interrupted dispatches; missing handbacks do not establish completion.
+Do not repeat completed passes or overwrite a started reservation's report.
+Replacement work needs a fresh result path and remaining dispatch capacity.
 For an existing legacy ledger, stop its workers and use `migrate` before
 continuing; never initialize a replacement to relocate history.
 Use the supplied `comparison_base`: the original

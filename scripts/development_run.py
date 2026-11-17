@@ -22,6 +22,7 @@ import development_manifest as plan
 import development_audit as audit
 import development_progress as monitoring
 import development_models as models
+import development_dispatch as dispatches
 import review_assignments as assignments
 import review_ledger as review
 
@@ -307,6 +308,7 @@ def reserve(state, settings, launch_models=None):
     assignment["launch_models"] = launch_models or {}
     assignment["model_selection"] = model_policy(state, settings)
     if role == "review":
+        assignment["review_dispatch"] = dispatches.empty()
         storage = review.external_run_directory(Path(state["store"]), state["id"], root)
         assignment["review_storage"] = str(review.external_directory(
             storage / "reviews" / review.root_key(root), root))
@@ -431,6 +433,10 @@ def recover_review_storage(state, args):
             "reason": args.reason, "shutdown_evidence": args.shutdown_evidence,
         })
         active["review_storage"] = str(destination)
+        if "review_dispatch" in active:
+            dispatches.prepare_resume(active, target / path.name, {
+                "reason": args.reason, "shutdown_evidence": args.shutdown_evidence,
+            })
         state["history"][-1] = active
 
 
@@ -684,6 +690,18 @@ def mutate(args, folder):
         elif args.command == "recover-review-storage":
             feature(Path(state["root"]), settings)
             recover_review_storage(state, args)
+        elif args.command == "resume-review":
+            feature(Path(state["root"]), settings)
+            dispatches.resume(state, args)
+        elif args.command == "claim-review":
+            feature(Path(state["root"]), settings)
+            plan.require_provider(state["manifest"], args.provider,
+                                  strict_worktrees="worktree_roots" in state)
+            check_worktree(state, dispatches.active_review(state)["pr"])
+            dispatches.claim(state)
+        elif args.command == "review-checkpoint":
+            feature(Path(state["root"]), settings)
+            dispatches.checkpoint(state, json.load(sys.stdin))
         elif args.command == "model-fallback":
             feature(Path(state["root"]), settings)
             models.schedule_fallback(state, args)
@@ -706,23 +724,27 @@ def parser():
     for name in ("approved", "root", "store"):
         initialize.add_argument("--" + name, required=True)
     for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile",
-                 "model-fallback", "recover-review-storage"):
+                 "model-fallback", "recover-review-storage", "resume-review", "claim-review", "review-checkpoint"):
         command = commands.add_parser(name)
         command.add_argument("store")
         if name != "status":
             command.add_argument("--revision", type=int, required=True)
-        if name == "next":
+        if name in ("next", "claim-review"):
             command.add_argument("--provider", help="Check the packaged adapter before reserving capacity")
+        if name == "next":
             command.add_argument("--models", type=json.loads,
                                  help="Complete JSON launch choices, retained without changing the manifest")
         if name == "record":
             command.add_argument("--report", required=True)
-        if name in ("interrupt", "resume", "retire", "reconcile", "model-fallback", "recover-review-storage"):
+        if name in ("interrupt", "resume", "retire", "reconcile", "model-fallback", "recover-review-storage", "resume-review"):
             command.add_argument("--reason", required=True)
-        if name in ("retire", "model-fallback", "recover-review-storage"):
+        if name in ("retire", "model-fallback", "recover-review-storage", "resume-review"):
             command.add_argument("--shutdown-evidence", required=True)
-        if name == "recover-review-storage":
+        if name in ("recover-review-storage", "resume-review"):
             command.add_argument("--ledger", required=True)
+        if name == "resume-review":
+            command.add_argument("--used-dispatches", type=int)
+            command.add_argument("--dispatch-evidence")
         if name == "model-fallback":
             command.add_argument("--key", required=True)
             command.add_argument("--role", choices=models.ROLES, required=True)
