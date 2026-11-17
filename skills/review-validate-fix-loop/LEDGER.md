@@ -37,6 +37,35 @@ Resume the same run using its absolute returned path, never a fresh run to reset
 counters. Storage location and worktree ownership are separate: mutations
 and `status` still require the owning live checkout.
 
+Ownership and its lock live under
+`~/.local/state/ioncache-ai-tools/review-ownership/<worktree-identity>/`,
+independently of `--storage` and `XDG_STATE_HOME`. They retain only the selected
+storage path, not ledger history or snapshot objects. Initialization and live
+mutations share this lock; changing storage cannot authorize another active run.
+An active run in the default store is discovered when adopting older records.
+Before starting new work after upgrading, resume or close existing custom-store
+runs using their saved paths so their ownership is registered.
+
+If that ownership directory is inside a repository, stop its writers and move
+only that worktree's complete `<worktree-identity>` directory to unused external
+storage, retaining its name. Symlink its original path to the new location;
+leave other worktrees' ownership directories alone. If its ownership record
+is damaged or its old store unavailable, inspect the retained evidence and stop
+the native workers before restoring the binding to an existing ledger:
+
+```sh
+python3 "/installed plugin/scripts/review_ledger.py" recover-ownership \
+  "/absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json" \
+  --reason "Restore the ownership binding from retained evidence" \
+  --shutdown-evidence "Actual native worker shutdown evidence"
+```
+
+This archives the prior ownership record and records the recovery declaration.
+It preserves ledger history and limits, and cannot displace a readable active
+run in another store. Read-only inspection and closure remain available when
+the ownership record is damaged. Shutdown evidence is a caller declaration,
+not independent native-process verification.
+
 `inspect` and `diff` read saved evidence without requiring that checkout:
 
 ```sh

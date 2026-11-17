@@ -1186,6 +1186,48 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("allowance exhausted", self.state["reason"])
         self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], checkpoint["calls"])
 
+    def test_review_dispatch_rejects_filesystem_aliases_before_reserving(self):
+        self.start_review_fixture()
+        assignment = self.state["assignment"]
+        path = str(self.store / "reports" / assignment["id"] / "pass.json")
+        checkpoint = {"assignment": assignment["id"], "calls": 3, "reservations": {
+            path: {"dispatch": 2, "started": True, "role": "reviewer", "identity": "first"},
+            path.replace("/pass.json", "//pass.json"): {
+                "dispatch": 3, "started": True, "role": "reviewer", "identity": "second"},
+        }, "reports": []}
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("normalized", self.mutate("review-checkpoint", stdin=checkpoint, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        checkpoint["reservations"][path.replace("pass.json", "other.json")] = (
+            checkpoint["reservations"].pop(path.replace("/pass.json", "//pass.json")))
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        self.assertEqual(len(self.state["assignment"]["review_dispatch"]["reservations"]), 2)
+
+    def test_existing_aliased_reservation_keeps_its_spending_without_blocking_recovery(self):
+        self.start_review_fixture()
+        state = development.load(self.store)
+        active = state["active"]
+        path = str(self.store / "reports" / active["id"]) + "//pass.json"
+        checkpoint = {"calls": 2, "reservations": {
+            path: {"dispatch": 2, "started": False, "role": "reviewer",
+                   "identity": development.review.digest(b"older frozen request")},
+        }, "reports": []}
+        active["review_dispatch"] = copy.deepcopy(checkpoint)
+        state["history"][-1] = active
+        development.save(self.store, state)
+        checkpoint.update(assignment=active["id"], calls=3)
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        canonical = str(Path(path))
+        checkpoint["calls"] = 4
+        checkpoint["reservations"][canonical] = {
+            "dispatch": 4, "started": True, "role": "reviewer", "identity": "replacement"}
+        self.assertIn("already reserved", self.mutate("review-checkpoint", stdin=checkpoint, ok=False))
+        checkpoint["reservations"][canonical.replace("pass.json", "replacement.json")] = (
+            checkpoint["reservations"].pop(canonical))
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], 4)
+        self.assertIn(path, self.state["assignment"]["review_dispatch"]["reservations"])
+
     def test_legacy_review_reentry_requires_explicit_dispatch_reconciliation(self):
         root = self.start_review_fixture()
         ledger = self.review(root, record=False, advance=False)["ledger"]

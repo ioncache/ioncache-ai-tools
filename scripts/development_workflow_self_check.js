@@ -253,6 +253,10 @@ async function concurrentReview(failLeaf, policy = {}, dispatchLimit = 20) {
       result_file, instruction_set: { category: review_type, identity: `instructions-${index}` }
     } : null }
   })
+  if (failLeaf === 'aliased-path') {
+    requests[1].result_file = requests[0].result_file.replace('/leaf-', '//leaf-')
+    requests[1].packet.result_file = requests[1].result_file
+  }
   /**
    * Keeps fake workers in flight long enough to detect sequential scheduling.
    * @param {string} prompt - Native-call prompt
@@ -334,6 +338,13 @@ async function concurrentReview(failLeaf, policy = {}, dispatchLimit = 20) {
     return { outcome: 'complete', result_file }
   }
   const result = await run(input, worker, phase)
+  if (failLeaf === 'aliased-path') {
+    assert.equal(result.outcome, 'blocked')
+    assert.equal(finished, 0)
+    assert.equal(maximum, 0)
+    assert.equal(Object.keys(assignment.review_dispatch.reservations).length, 0)
+    return
+  }
   assert.equal(maximum, 2, 'Independent leaves must overlap')
   assert.equal(result.outcome, blocked ? 'blocked' : 'completed', result.reason)
   if (blocked) {
@@ -639,6 +650,7 @@ async function main() {
   await concurrentReview('changed-reservation')
   await concurrentReview('completed-path')
   await concurrentReview('duplicate-reservation')
+  await concurrentReview('aliased-path')
   console.log('Development workflow offline self-check passed')
 }
 

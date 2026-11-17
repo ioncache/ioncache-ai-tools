@@ -122,7 +122,7 @@ ${launch.prompt}`,
 function privateReport(file, assignment) {
   return typeof file === 'string' &&
     file.startsWith(`${assignment.store}/reports/${assignment.id}/`) &&
-    !file.split('/').some(part => part === '..' || part === '.') &&
+    !file.slice(1).split('/').some(part => part === '' || part === '..' || part === '.') &&
     !file.includes('\\') && !/[\0\r\n]/.test(file)
 }
 

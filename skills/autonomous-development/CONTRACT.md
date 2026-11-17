@@ -245,6 +245,10 @@ the running outcome and returns the existing assignment instead of reserving
 another. The owner uses `resume_ledger` and the saved dispatch checkpoint.
 Completed reports are inspected, not repeated. Started calls without handbacks
 remain charged and incomplete until their original evidence is assessed.
+New report reservations require normalized, distinct paths. Older non-normalized
+reservations remain charged history; they do not prevent an owner continuation,
+but their normalized paths cannot be reused. Replacement work needs a fresh
+canonical path and remaining capacity.
 
 An identical copy left by an interrupted controller save can be reused on retry.
 Different destination evidence is preserved, not overwritten; choose another

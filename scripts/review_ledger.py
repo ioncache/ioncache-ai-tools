@@ -13,9 +13,7 @@ tests, commits, resets, or uploads data. The ledger is not a security boundary.
 """
 
 import argparse
-from contextlib import ExitStack
 import difflib
-import fcntl
 import hashlib
 import json
 import os
@@ -411,7 +409,7 @@ def assert_available(base):
             continue
         ledger, state = load(folder / "REVIEW_LEDGER.json")
         require(state["outcome"] not in ("running", "interrupted", "blocked"),
-                f"Existing active run: {ledger['run_id']}; resume or stop it first")
+                f"Existing active run: {folder / 'REVIEW_LEDGER.json'}; resume or stop it first")
 
 
 def init(args, root):
@@ -600,7 +598,7 @@ def append(args, root):
     ledger, state = load(path)
     ensure_owner(ledger, root)
     require(args.revision == state["revision"], "Stale revision; read status before retrying")
-    event = json.load(sys.stdin)
+    event = args.event if hasattr(args, "event") else json.load(sys.stdin)
     require(isinstance(event, dict), "Event must be an object")
     require(not ({"snapshot", "sequence", "time"} & event.keys()), "Reserved event fields")
     if event.get("type") == "start_fix":
@@ -679,7 +677,7 @@ def parser():
     create.add_argument("--max-loops", type=int, default=3)
     create.add_argument("--max-fix-cycles", type=int, default=3)
     create.add_argument("--storage", help="Pinned external worktree storage directory returned by the controller")
-    for name in ("apply", "status", "inspect", "diff", "abandon", "recover-closure", "migrate"):
+    for name in ("apply", "status", "inspect", "diff", "abandon", "recover-closure", "recover-ownership", "migrate"):
         command = commands.add_parser(name)
         command.add_argument("ledger", help="Absolute path or path relative to the worktree root")
         if name == "apply":
@@ -689,6 +687,9 @@ def parser():
             command.add_argument("--to", dest="to_snapshot")
         if name in ("abandon", "recover-closure"):
             for flag in ("reason", "evidence", "shutdown-evidence"):
+                command.add_argument("--" + flag, required=True)
+        if name == "recover-ownership":
+            for flag in ("reason", "shutdown-evidence"):
                 command.add_argument("--" + flag, required=True)
         if name == "migrate":
             command.add_argument("--shutdown-evidence", required=True)
@@ -700,6 +701,8 @@ def main():
     args = parser().parse_args()
     try:
         root = None if args.command in ("inspect", "diff") else worktree()
+        if args.command == "apply":
+            args.event = json.load(sys.stdin)
         if root is None and not Path(args.ledger).is_absolute():
             try:
                 relative_root = worktree()
@@ -708,8 +711,10 @@ def main():
             args.ledger = str(relative_root / args.ledger)
         handlers = {"init": init, "apply": append, "status": status, "diff": diff,
                     "inspect": status, "migrate": migrate, "fingerprint": fingerprint,
-                    "abandon": abandon, "recover-closure": recover_closure}
-        if args.command in ("init", "apply", "abandon", "recover-closure", "migrate"):
+                    "abandon": abandon, "recover-closure": recover_closure, "recover-ownership": status}
+        if args.command in ("init", "apply", "abandon", "recover-closure", "recover-ownership", "migrate"):
+            from review_ownership import guard
+
             base = (external_directory(Path(args.storage), root) if args.command == "init" and args.storage else
                     storage(root) if args.command in ("init", "migrate") else
                     ledger_path(root, args.ledger, allow_unavailable=True).parent.parent)
@@ -717,11 +722,7 @@ def main():
                     "Legacy storage is read-only; run migrate with --shutdown-evidence, then retry")
             require(base.name == root_key(root), "Storage directory must retain the worktree identity")
             bases = [safe_path(root, ".review-loop"), base] if args.command == "migrate" else [base]
-            with ExitStack() as stack:
-                for folder in bases:
-                    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    handle = stack.enter_context(safe_path(folder, ".lock").open("a"))
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with guard(root, bases, args):
                 result = handlers[args.command](args, root)
             if args.command == "migrate" and set(bases[0].iterdir()) == {bases[0] / ".lock"}:
                 (bases[0] / ".lock").unlink()

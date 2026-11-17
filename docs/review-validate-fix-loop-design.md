@@ -84,8 +84,9 @@ The implementation uses the following choices:
   `objects/` directory. They include Git-enumerated tracked and non-ignored
   untracked files, modes, HEAD, and index metadata. Bookkeeping lives outside
   the repository. Do not dereference symlinks or overwrite worktree files.
-- Updates use the worktree's external storage lock and atomic replacement. One running
-  or resumable run is allowed in that store; concurrent code work needs
+- Updates use a shared external worktree-ownership lock, the selected storage
+  lock, and atomic replacement. One running or resumable run is allowed per
+  worktree even across different stores; concurrent code work needs
   isolated worktrees. Revision checks reject stale coordinator updates.
 - Run artifacts are retained locally, never automatically committed or
   uploaded. The helper creates private-by-default storage without modifying

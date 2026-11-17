@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the ledger CLI against isolated Git repositories, without host agents."""
 
+import fcntl
 import json
 from itertools import count, product
 import os
@@ -15,6 +16,7 @@ import unittest
 from unittest.mock import patch
 
 import review_ledger
+import review_ownership
 import review_options
 import review_assignments
 
@@ -1373,6 +1375,134 @@ sys.exit(review_ledger.main())
         self.send("advance")
         self.assertEqual(self.state["outcome"], "completed")
 
+    def test_active_run_exclusion_survives_storage_and_xdg_changes(self):
+        self.init("--storage", str(self.folder / "first" / self.storage.name))
+        self.send("start_review")
+        self.send("stop", outcome="interrupted")
+        original = Path(self.ledger).read_bytes()
+        other = self.folder / "second" / self.storage.name
+        self.env["XDG_STATE_HOME"] = str(self.folder / "another-state")
+        message = self.cli(["init", "--storage", str(other),
+                            "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.assertIn("Existing active run", message)
+        self.assertIn(self.ledger, message)
+        self.assertEqual(Path(self.ledger).read_bytes(), original)
+        self.send("resume")
+        self.send("stop", outcome="failed")
+        self.init("--storage", str(other))
+        self.assertEqual(Path(self.ledger).parent.parent, other)
+
+    def test_damaged_ownership_recovers_without_replacing_history(self):
+        self.init()
+        self.send("start_review")
+        before = Path(self.ledger).read_bytes()
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        owner.write_text("{broken")
+        self.assertIn("recover-ownership", self.cli(
+            ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.assertEqual(self.cli(["status", self.ledger])["revision"], self.state["revision"])
+        self.cli(["recover-ownership", self.ledger, "--reason", "Restore retained ownership",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.assertEqual(Path(self.ledger).read_bytes(), before)
+        self.assertEqual(len(list(owner.parent.glob("OWNER-*.json"))), 1)
+        self.send("stop", outcome="interrupted")
+        other = self.folder / "another" / self.storage.name
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--storage", str(other), "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.send("resume")
+        self.send("stop", outcome="failed")
+        self.init("--storage", str(other))
+
+    def test_ownership_lock_blocks_cross_store_initialization(self):
+        self.init()
+        other = self.folder / "another" / self.storage.name
+        owner = review_ownership.directory(self.root)
+        with (owner / ".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.cli(["init", "--storage", str(other), "--objective", "Another run",
+                      "--scope", "repository"], ok=False)
+        self.assertFalse(list(other.glob("*/REVIEW_LEDGER.json")))
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--storage", str(other), "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.send("stop", outcome="failed")
+        self.init("--storage", str(other))
+
+    def test_closed_history_can_restore_damaged_ownership(self):
+        self.init()
+        Path(self.ledger).write_text("{broken")
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        owner.write_text("{broken")
+        self.cli(["abandon", self.ledger, "--reason", "History unavailable",
+                  "--evidence", "No complete fixture history survives",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.cli(["recover-ownership", self.ledger, "--reason", "Bind closed evidence",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.assertIn("abandoned", self.reject("start_review"))
+        self.init("--storage", str(self.folder / "another" / self.storage.name))
+
+    def test_ownership_recovery_cannot_displace_a_readable_active_run(self):
+        self.init()
+        old_ledger = self.ledger
+        self.send("stop", outcome="failed")
+        self.init("--storage", str(self.folder / "another" / self.storage.name))
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        before = owner.read_bytes()
+        self.assertIn("Existing active run", self.cli(
+            ["recover-ownership", old_ledger, "--reason", "Wrong prior run",
+             "--shutdown-evidence", "Fixture workers exited"], ok=False))
+        self.assertEqual(owner.read_bytes(), before)
+        self.send("start_review")
+
+    def test_damaged_owner_cannot_hide_a_known_default_store_run(self):
+        self.init("--storage", str(self.folder / "older" / self.storage.name))
+        older = self.ledger
+        self.send("stop", outcome="failed")
+        self.init()
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        owner.write_text("{broken")
+        self.assertIn("Existing active run", self.cli(
+            ["recover-ownership", older, "--reason", "Wrong prior run",
+             "--shutdown-evidence", "Fixture workers exited"], ok=False))
+        self.assertEqual(owner.read_text(), "{broken")
+        self.cli(["recover-ownership", self.ledger, "--reason", "Retain the active run",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.send("start_review")
+
+    def test_readable_run_can_stop_while_ownership_is_damaged(self):
+        self.init()
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        owner.write_text("{broken")
+        self.send("stop", outcome="failed")
+        self.assertEqual(owner.read_text(), "{broken")
+        self.cli(["recover-ownership", self.ledger, "--reason", "Bind terminal history",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.init()
+
+    def test_closing_a_relocated_copy_releases_the_original_owner(self):
+        self.init()
+        original = Path(self.ledger)
+        destination = self.folder / "recovered" / self.storage.name / original.parent.name
+        shutil.copytree(original.parent, destination)
+        self.git("init", "-q", self.env["XDG_STATE_HOME"])
+        self.ledger = str(destination / original.name)
+        self.send("stop", outcome="failed")
+        self.init("--storage", str(self.folder / "next" / self.storage.name))
+
+    def test_ownership_can_move_outside_a_new_repository(self):
+        self.init()
+        anchor = review_ownership.directory(self.root)
+        original = anchor.parent
+        self.git("init", "-q", str(original))
+        self.assertIn("symlink", self.reject("start_review"))
+        target = self.folder / "external-ownership" / anchor.name
+        target.parent.mkdir()
+        anchor.rename(target)
+        anchor.symlink_to(target, target_is_directory=True)
+        self.send("start_review")
+        other = self.folder / "another" / self.storage.name
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--storage", str(other), "--objective", "Another run", "--scope", "repository"], ok=False))
+
     def test_missing_published_ledger_is_not_an_unpublished_initialization(self):
         self.init()
         path = Path(self.ledger)
@@ -1585,7 +1715,7 @@ sys.exit(review_ledger.main())
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()
         with (self.storage / ".lock").open("a") as handle:
-            review_ledger.fcntl.flock(handle, review_ledger.fcntl.LOCK_EX)
+            fcntl.flock(handle, fcntl.LOCK_EX)
             self.reject("start_review")
         self.send("start_review")
 

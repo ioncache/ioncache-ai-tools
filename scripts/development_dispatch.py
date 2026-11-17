@@ -47,6 +47,7 @@ def checkpoint(state, data):
     plan.require(old["reservations"].keys() <= reservations.keys(), "Review reservations cannot be removed")
     slots = set()
     checked = {}
+    reserved_paths = {str(Path(path)) for path in old["reservations"]}
     for path, value in reservations.items():
         reservation(state, path, value)
         previous = old["reservations"].get(path)
@@ -56,6 +57,10 @@ def checkpoint(state, data):
             plan.require(all(value[key] == previous[key] for key in ("identity", "dispatch", "role")) and
                          (not previous["started"] or value["started"]), "Review reservation cannot be replaced or reset")
         else:
+            plan.require(str(Path(path)) == path and "//" not in path,
+                         "Review result paths must be normalized; use distinct canonical report paths")
+            plan.require(path not in reserved_paths, "Review result path is already reserved; use a fresh path")
+            reserved_paths.add(path)
             plan.require(old["calls"] < value["dispatch"] <= calls,
                          "New review reservation must consume a fresh dispatch slot")
             plan.require(not Path(path).exists(), "Existing review reports cannot be overwritten by a fresh reservation")
