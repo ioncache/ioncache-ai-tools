@@ -88,6 +88,9 @@ The implementation uses the following choices:
   lock, and atomic replacement. One running or resumable run is allowed per
   worktree even across different stores; concurrent code work needs
   isolated worktrees. Revision checks reject stale coordinator updates.
+  Whole-store loss requires an explicit shutdown-backed ownership release to
+  unused external storage. Its receipt retains unavailable allowance; it does
+  not reconstruct history. Released locations cannot initialize new runs.
 - Run artifacts are retained locally, never automatically committed or
   uploaded. The helper creates private-by-default storage without modifying
   consuming projects' ignore files.

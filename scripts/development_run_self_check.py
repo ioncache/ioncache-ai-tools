@@ -1437,6 +1437,67 @@ class DevelopmentRunTests(unittest.TestCase):
     def test_workflow_review_native_failure_requires_shutdown_before_retry(self):
         self.assert_workflow_review_recovers("review-throw", "Fixture review native call failed")
 
+    def test_workflow_lost_review_store_requires_release_and_counted_retry(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        self.execute_fixture(self.state["assignment"])
+        self.workflow("review-throw")
+        before = development.load(self.store)
+        old = before["active"]
+        source = Path(old["review_storage"])
+        development.shutil.rmtree(source)
+        destination = self.folder / "replacement" / source.name
+        self.review_cli(root, ["release-ownership", "--storage", str(source),
+                              "--replacement-storage", str(destination),
+                              "--reason", "Whole fixture store was lost",
+                              "--shutdown-evidence", "Synchronous fixture workers exited"])
+        self.assertEqual(self.workflow("review-complete"), ["development-control"])
+        self.assertEqual(development.load(self.store)["active"], old)
+        self.retire_fixture()
+        saved_report = self.store / "reports/workflow-review.json"
+        saved_report.rename(saved_report.with_name("lost-workflow-review.json"))
+        roles = self.workflow("review-complete")
+        self.assertIn("reviewer", roles)
+        self.assertIn("commit", roles)
+        after = development.load(self.store)
+        reviews = [item for item in after["history"] if item["role"] == "review"]
+        self.assertEqual([item["attempt"] for item in reviews], [1, 2])
+        self.assertEqual([item["outcome"] for item in reviews], ["retired", "complete"])
+        self.assertEqual(reviews[0]["review_dispatch"], old["review_dispatch"])
+        self.assertNotEqual(reviews[1]["review_storage"], str(source))
+        self.assertEqual(after["manifest"]["limits"], before["manifest"]["limits"])
+        self.assertFalse(source.exists())
+
+    def test_returning_released_review_cannot_resume_or_satisfy_acceptance(self):
+        root = self.start_review_fixture()
+        data = self.review(root, record=False)
+        path = Path(data["ledger"])
+        original = path.read_bytes()
+        source = path.parent.parent
+        hidden = self.folder / "unmounted-review-store"
+        source.rename(hidden)
+        self.review_cli(root, ["release-ownership", "--storage", str(source),
+                              "--replacement-storage", str(self.folder / "replacement" / source.name),
+                              "--reason", "Review store unavailable",
+                              "--shutdown-evidence", "Synchronous fixture workers exited"])
+        hidden.rename(source)
+        self.assertIn("released", self.finish(data, ok=False))
+        self.assertIn("released", self.mutate(
+            "resume-review", "--ledger", str(path), "--reason", "Old store reappeared",
+            "--shutdown-evidence", "Fixture workers exited", ok=False))
+        with patch.dict(os.environ, self.env, clear=True):
+            exported = audit.review_record(path, root)
+        self.assertFalse(exported["available"])
+        self.assertEqual(exported["outcome"], "failed")
+        self.assertEqual(exported["allowance"], "unavailable")
+        self.retire_fixture()
+        self.assertEqual(self.next()["attempt"], 2)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+        self.assertEqual(path.read_bytes(), original)
+
     def test_sequential_run_requires_task_and_full_pr_reviews(self):
         self.init()
         self.preflight()

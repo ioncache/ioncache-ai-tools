@@ -1,10 +1,12 @@
 """Worktree-wide review ownership, independent of ledger storage selection."""
 
 from contextlib import contextmanager, ExitStack
+from datetime import datetime, timezone
 import fcntl
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 from uuid import uuid4
 
@@ -42,9 +44,88 @@ def read(path, root):
             "and --shutdown-evidence. Do not initialize a replacement run") from error
 
 
+@contextmanager
+def locked(root):
+    folder = directory(root)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = ledger.safe_path(folder, "OWNER.json")
+    with ledger.safe_path(folder, ".lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield path
+
+
+def release_path(root, base):
+    return ledger.safe_path(directory(root), f"RELEASE-{ledger.root_key(base)}.json")
+
+
+def require_unreleased(root, base):
+    ledger.require(not release_path(root, base).exists(),
+                   f"Review store was released: {base}; its allowance is unavailable. Use inspect "
+                   "for surviving evidence or close retained runs. Separately authorized work needs "
+                   "init --storage with unused external storage retaining the worktree identity")
+
+
+def unavailable(base):
+    return (f"Review ownership storage unavailable: {base}; restore retained history with recover-ownership, "
+            "or, if no usable copy survives, stop its native workers and use release-ownership "
+            f"--storage {shlex.quote(str(base))} --replacement-storage <unused-external-store/{base.name}> "
+            "--reason <loss-evidence> --shutdown-evidence <native-shutdown-evidence>")
+
+
+def require_absent(base):
+    try:
+        base.stat()
+    except FileNotFoundError:
+        return
+    raise ledger.LedgerError(
+        f"Recorded store still exists: {base}; restore access and resume or close its retained runs")
+
+
+def release(args, root):
+    ledger.text(args.reason)
+    ledger.text(args.shutdown_evidence)
+    source = Path(args.storage)
+    target = ledger.external_directory(Path(args.replacement_storage), root)
+    ledger.require(target.name == ledger.root_key(root) and
+                   not target.is_relative_to(source) and not source.is_relative_to(target),
+                   "Choose a different unused external store retaining the worktree identity")
+    with locked(root) as path:
+        previous = read(path, root)
+        record = release_path(root, source)
+        if previous == target and record.is_file():
+            saved = json.loads(record.read_bytes())
+            ledger.fields(saved, "schema root storage replacement_storage owner outcome allowance "
+                          "reason shutdown_evidence time")
+            ledger.require(saved["schema"] == 1 and saved["root"] == str(root) and
+                           saved["storage"] == str(source) and saved["replacement_storage"] == str(target) and
+                           saved["outcome"] == "failed" and saved["allowance"] == "unavailable",
+                           "Release receipt unavailable; inspect the current ownership and retained receipt")
+            return saved
+        ledger.require(previous == source, f"Release must name the recorded store: {previous}")
+        require_absent(source)
+        ledger.require(not release_path(root, target).exists(),
+                       "Replacement store was already released; choose unused external storage")
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with ledger.safe_path(target, ".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            ledger.require(set(target.iterdir()) == {target / ".lock"},
+                           "Replacement store must be unused; preserve its contents and choose another")
+            require_absent(source)
+            result = {
+                "schema": 1, "root": str(root), "storage": str(source), "replacement_storage": str(target),
+                "owner": json.loads(path.read_bytes()), "outcome": "failed", "allowance": "unavailable",
+                "reason": args.reason, "shutdown_evidence": args.shutdown_evidence,
+                "time": datetime.now(timezone.utc).isoformat(),
+            }
+            if record.exists():
+                ledger.atomic_write(record.with_name(f"RELEASE-ARCHIVE-{uuid4().hex}.json"), record.read_bytes())
+            ledger.atomic_write(record, ledger.encode(result))
+            ledger.atomic_write(path, ledger.encode({"schema": 1, "root": str(root), "storage": str(target)}))
+            return result
+
+
 def active_paths(base):
-    ledger.require(base.is_dir(), f"Review ownership storage unavailable: {base}; restore it or use "
-                   "recover-ownership with the retained ledger and native shutdown evidence")
+    ledger.require(base.is_dir(), unavailable(base))
     result = []
     for folder in base.iterdir():
         if not re.fullmatch(r"[a-f0-9]{32}", folder.name):
@@ -92,12 +173,7 @@ def recover(path, root, base, args):
 
 @contextmanager
 def guard(root, bases, args):
-    folder = directory(root)
-    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = ledger.safe_path(folder, "OWNER.json")
-    with ExitStack() as locks:
-        owner_lock = locks.enter_context(ledger.safe_path(folder, ".lock").open("a"))
-        fcntl.flock(owner_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with locked(root) as path, ExitStack() as locks:
         event = getattr(args, "event", None)
         closing = args.command in ("abandon", "recover-closure") or (
             args.command == "apply" and isinstance(event, dict) and event.get("type") == "stop")
@@ -110,13 +186,14 @@ def guard(root, bases, args):
                 print(f"review-ledger: ownership unchanged during closure: {error}", file=sys.stderr)
             previous = None
         base = bases[-1]
+        if not closing:
+            require_unreleased(root, base)
         if previous is None and not closing:
             default = ledger.state_directory() / "reviews" / ledger.root_key(root)
             if default.is_dir():
                 previous = default
         if previous is not None and not closing and args.command != "recover-ownership":
-            ledger.require(previous.is_dir(), f"Review ownership storage unavailable: {previous}; "
-                           "use recover-ownership with retained history and native shutdown evidence")
+            ledger.require(previous.is_dir(), unavailable(previous))
         for location in dict.fromkeys((*bases, *((previous,) if previous and previous.is_dir() else ()))):
             if args.command in ("init", "migrate"):
                 location.mkdir(parents=True, exist_ok=True, mode=0o700)

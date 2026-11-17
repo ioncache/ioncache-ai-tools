@@ -39,8 +39,9 @@ and `status` still require the owning live checkout.
 
 Ownership and its lock live under
 `~/.local/state/ioncache-ai-tools/review-ownership/<worktree-identity>/`,
-independently of `--storage` and `XDG_STATE_HOME`. They retain only the selected
-storage path, not ledger history or snapshot objects. Initialization and live
+independently of `--storage` and `XDG_STATE_HOME`. They retain the selected
+storage path and recovery declarations, not ledger history or snapshot objects.
+Initialization and live
 mutations share this lock; changing storage cannot authorize another active run.
 An active run in the default store is discovered when adopting older records.
 Before starting new work after upgrading, resume or close existing custom-store
@@ -65,6 +66,38 @@ It preserves ledger history and limits, and cannot displace a readable active
 run in another store. Read-only inspection and closure remain available when
 the ownership record is damaged. Shutdown evidence is a caller declaration,
 not independent native-process verification.
+
+If the entire recorded store is absent and no usable copy survives, stop all
+native workers that could still use it. A missing or unmounted directory is not
+shutdown evidence. Release its ownership to a different unused external store:
+
+```sh
+python3 "/installed plugin/scripts/review_ledger.py" release-ownership \
+  --storage "/lost/reviews/<worktree-identity>" \
+  --replacement-storage "/new/private/reviews/<worktree-identity>" \
+  --reason "Inspected available backups; no usable history survives" \
+  --shutdown-evidence "Actual native worker shutdown evidence"
+```
+
+Use the exact recorded storage path and actual evidence. The command refuses
+a store that still exists, a different owner's storage, or a replacement with
+existing contents. It does not inspect a missing ledger or create the lost
+directory. It records the previous ownership, loss reason and shutdown evidence
+in `RELEASE-*.json`, with failed outcome and unavailable allowance, before binding
+ownership to the empty replacement. It does not reconstruct history, refund
+spending or mark a review complete. Retry the same command after interruption
+or a lost response.
+
+Separately authorized new work can use `init --storage` with the returned
+`replacement_storage`. The released path is no longer available for new
+initialization, live continuation or acceptance, even if it reappears. Preserve
+any returning history for `inspect`, `diff` or closure; its allowance remains
+unavailable after the replacement finishes too. Audits mark returning evidence
+as failed with unavailable allowance. If a complete retained copy exists,
+use `recover-ownership` before releasing the store, preserving its counters.
+For a development assignment, retain its controller accounting, retire the
+unrecoverable assignment after shutdown, and reserve a counted retry. Do not
+report the replacement ledger as completion of the old assignment.
 
 `inspect` and `diff` read saved evidence without requiring that checkout:
 

@@ -308,10 +308,14 @@ def reserve(state, settings, launch_models=None):
     assignment["launch_models"] = launch_models or {}
     assignment["model_selection"] = model_policy(state, settings)
     if role == "review":
+        from review_ownership import release_path
+
         assignment["review_dispatch"] = dispatches.empty()
         storage = review.external_run_directory(Path(state["store"]), state["id"], root)
-        assignment["review_storage"] = str(review.external_directory(
-            storage / "reviews" / review.root_key(root), root))
+        base = storage / "reviews" / review.root_key(root)
+        if release_path(root, base).exists():
+            base = storage / "reviews" / assignment["id"] / review.root_key(root)
+        assignment["review_storage"] = str(review.external_directory(base, root))
     assignment["configured_model_fallbacks"] = models.consume_fallbacks(state, key)
     state["active"] = assignment
     state["history"].append(assignment)
@@ -397,6 +401,8 @@ def review_result(state, assignment, data):
 
 
 def recover_review_storage(state, args):
+    from review_ownership import require_unreleased
+
     active = state["active"]
     plan.require(active is not None and active["role"] == "review" and active.get("review_storage"),
                  "Recovery requires an active review with pinned storage")
@@ -406,6 +412,7 @@ def recover_review_storage(state, args):
     path = review.ledger_path(root, args.ledger, historical=True)
     source = path.parent.parent
     plan.require(source == Path(active["review_storage"]), "Ledger is outside the pinned review_storage")
+    require_unreleased(root, source)
     recovery = review.external_run_directory(source, state["id"], root)
     plan.require(recovery != source, "Review storage is already eligible; resume its existing ledger")
     destination = review.external_directory(recovery / "reviews" / review.root_key(root), root)

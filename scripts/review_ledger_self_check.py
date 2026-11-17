@@ -1413,6 +1413,148 @@ sys.exit(review_ledger.main())
         self.send("stop", outcome="failed")
         self.init("--storage", str(other))
 
+    def test_missing_store_release_preserves_loss_and_allows_new_work(self):
+        self.init("--max-loops", "2")
+        self.send("start_review")
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        original_owner = json.loads(owner.read_bytes())
+        shutil.rmtree(self.storage)
+        destination = self.folder / "replacement" / self.storage.name
+        message = self.cli(["init", "--storage", str(destination),
+                            "--objective", "Another run", "--scope", "repository"], ok=False)
+        self.assertIn("release-ownership", message)
+        self.assertFalse(destination.exists())
+        arguments = ["release-ownership", "--storage", str(self.storage),
+                     "--replacement-storage", str(destination), "--reason", "No history survived",
+                     "--shutdown-evidence", "Fixture workers exited"]
+        for flag in ("--reason", "--shutdown-evidence"):
+            invalid = arguments.copy()
+            invalid[invalid.index(flag) + 1] = " "
+            self.cli(invalid, ok=False)
+            self.assertEqual(json.loads(owner.read_bytes()), original_owner)
+        released = self.cli(arguments)
+        self.assertEqual(released["outcome"], "failed")
+        self.assertEqual(released["allowance"], "unavailable")
+        self.assertEqual(released["owner"], original_owner)
+        self.assertFalse(self.storage.exists())
+        self.assertEqual(self.cli(arguments), released)
+        self.init("--storage", str(destination))
+        self.assertEqual(self.cli(arguments), released)
+        self.assertIn("Existing active run", self.cli(
+            ["init", "--storage", str(self.folder / "other" / self.storage.name),
+             "--objective", "Another run", "--scope", "repository"], ok=False))
+        self.review()
+        self.send("advance")
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertIn("released", self.cli(
+            ["init", "--objective", "Reuse lost store", "--scope", "repository"], ok=False))
+        self.assertFalse(self.storage.exists())
+        self.assertEqual(json.loads(next(owner.parent.glob("RELEASE-*.json")).read_bytes()), released)
+
+    def test_release_preserves_available_and_reappearing_store_ownership(self):
+        self.init()
+        self.send("start_review")
+        old_ledger, old_state = self.ledger, self.state
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        original_owner = owner.read_bytes()
+        destination = self.folder / "replacement" / self.storage.name
+        arguments = ["release-ownership", "--storage", str(self.storage),
+                     "--replacement-storage", str(destination), "--reason", "Store unavailable",
+                     "--shutdown-evidence", "Fixture workers exited"]
+        self.assertIn("still exists", self.cli(arguments, ok=False))
+        self.assertEqual(owner.read_bytes(), original_owner)
+        hidden = self.folder / "unmounted-store"
+        self.storage.rename(hidden)
+        stat = Path.stat
+
+        def unavailable_stat(path, *args, **kwargs):
+            if path == self.storage:
+                raise PermissionError("Fixture storage check unavailable")
+            return stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", unavailable_stat):
+            with self.assertRaises(PermissionError):
+                review_ownership.release(review_ledger.parser().parse_args(arguments), self.root)
+        self.assertEqual(owner.read_bytes(), original_owner)
+        self.assertFalse(destination.exists())
+        nested = arguments.copy()
+        nested[nested.index("--replacement-storage") + 1] = str(self.storage / "nested" / self.storage.name)
+        self.assertIn("unused", self.cli(nested, ok=False))
+        self.assertFalse(self.storage.exists())
+        with (owner.parent / ".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.cli(arguments, ok=False)
+        self.assertFalse(destination.exists())
+        destination.mkdir(parents=True)
+        (destination / "retained").write_text("Do not overwrite")
+        self.assertIn("unused", self.cli(arguments, ok=False))
+        self.assertEqual((destination / "retained").read_text(), "Do not overwrite")
+        (destination / "retained").unlink()
+        self.cli(arguments)
+        self.init("--storage", str(destination))
+        replacement_owner = owner.read_bytes()
+        hidden.rename(self.storage)
+        self.assertIn("released", self.cli(
+            ["apply", old_ledger, "--revision", str(old_state["revision"])],
+            self.event("review_done", passes=PASSES, checks=CHECKS), ok=False))
+        closed = self.cli(["apply", old_ledger, "--revision", str(old_state["revision"])],
+                          self.event("stop", outcome="interrupted"))
+        self.assertEqual(len(closed["loops"]), len(old_state["loops"]))
+        self.assertEqual(closed["limits"], old_state["limits"])
+        self.assertEqual(owner.read_bytes(), replacement_owner)
+        self.send("start_review")
+        self.send("stop", outcome="failed")
+        self.assertIn("released", self.cli(
+            ["apply", old_ledger, "--revision", str(closed["revision"])], self.event("resume"), ok=False))
+        self.assertIn("released", self.cli(["status", old_ledger], ok=False))
+        self.assertEqual(self.cli(["inspect", old_ledger])["outcome"], "interrupted")
+        self.assertEqual(owner.read_bytes(), replacement_owner)
+
+    def test_interrupted_ownership_release_can_retry_without_lost_evidence(self):
+        script = """
+import os
+import sys
+import review_ledger
+
+boundary = sys.argv[1]
+write = review_ledger.atomic_write
+def interrupted_write(path, data):
+    write(path, data)
+    if (boundary == "receipt" and path.name.startswith("RELEASE-") or
+            boundary == "binding" and path.name == "OWNER.json"):
+        os._exit(75)
+
+review_ledger.atomic_write = interrupted_write
+sys.argv = ["review_ledger.py", *sys.argv[2:]]
+sys.exit(review_ledger.main())
+"""
+        for boundary in ("receipt", "binding"):
+            with self.subTest(boundary=boundary):
+                source = self.folder / boundary / "lost" / self.storage.name
+                target = self.folder / boundary / "replacement" / self.storage.name
+                self.init("--storage", str(source))
+                owner = review_ownership.directory(self.root) / "OWNER.json"
+                original_owner = owner.read_bytes()
+                shutil.rmtree(source)
+                arguments = ["release-ownership", "--storage", str(source),
+                             "--replacement-storage", str(target), "--reason", "Store lost",
+                             "--shutdown-evidence", "Fixture workers exited"]
+                result = subprocess.run(
+                    [sys.executable, "-c", script, boundary, *arguments], cwd=self.root,
+                    env={**self.env, "PYTHONPATH": str(HELPER.parent)}, capture_output=True)
+                self.assertEqual(result.returncode, 75, result.stderr)
+                self.assertEqual(result.stdout, b"")
+                if boundary == "receipt":
+                    self.assertEqual(owner.read_bytes(), original_owner)
+                    self.assertIn("release-ownership", self.cli(
+                        ["init", "--storage", str(target), "--objective", "Retry", "--scope", "fixture"], ok=False))
+                receipt = self.cli(arguments)
+                self.assertEqual(receipt["owner"], json.loads(original_owner))
+                self.assertEqual(receipt["allowance"], "unavailable")
+                self.init("--storage", str(target))
+                self.send("start_review")
+                self.send("stop", outcome="failed")
+
     def test_ownership_lock_blocks_cross_store_initialization(self):
         self.init()
         other = self.folder / "another" / self.storage.name

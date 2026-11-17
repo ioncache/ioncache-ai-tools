@@ -77,6 +77,13 @@ def review_record(path, root=None):
                           closure_digest=identity(closed))
             return result
         ledger, state = review.load(path)
+        from review_ownership import release_path
+
+        released = release_path(Path(ledger["root"]), path.parent.parent)
+        if released.exists():
+            result.update(outcome="failed", allowance="unavailable",
+                          closure_digest=review.digest(released.read_bytes()))
+            return result
     except (ValueError, OSError, KeyError, TypeError):
         return result
     result.update(available=True, base=ledger["base"], snapshot=state["snapshot"],

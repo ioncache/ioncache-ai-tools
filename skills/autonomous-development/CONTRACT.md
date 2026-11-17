@@ -218,6 +218,16 @@ Historical archives use the same recovery root. If that location is also inside
 a repository, set `XDG_STATE_HOME` to external storage and retry the same run.
 Existing ledgers are not moved; preserve their recorded storage as well.
 
+If the entire pinned review store is lost with no usable copy, use the ledger's
+`release-ownership` procedure in `skills/review-validate-fix-loop/LEDGER.md`.
+Stop the native workers first, then retain and retire the old assignment.
+Release does not resume it, refund its dispatches, or authorize another attempt.
+Resume the controller and reserve a counted retry only within its remaining
+approved limits. When the usual store was released, new assignments use
+`reviews/<assignment-id>/<worktree-identity>/` beneath the selected private or
+recovery store. Existing assignments keep their pins. Reappearing old storage
+does not replace the retry's history or ownership.
+
 If storage becomes ineligible during an active review, stop its native workers
 and recover the existing ledger instead of retiring the assignment:
 

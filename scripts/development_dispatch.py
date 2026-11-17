@@ -85,9 +85,12 @@ def prepare_resume(active, ledger, evidence):
 
 
 def resume_path(active, argument):
+    from review_ownership import require_unreleased
+
     root = Path(active["root"])
     path = review.ledger_path(root, argument)
     plan.require(path.parent.parent == Path(active["review_storage"]), "Ledger is outside the pinned review_storage")
+    require_unreleased(root, path.parent.parent)
     ledger, _ = review.load(path)
     review.ensure_owner(ledger, root)
     return path

@@ -623,6 +623,10 @@ def append(args, root):
 def status(args, root):
     """Report saved decisions and live drift without accepting drift as new evidence."""
     path = ledger_path(root, args.ledger, allow_unavailable=True, historical=root is None)
+    if root is not None:
+        from review_ownership import require_unreleased
+
+        require_unreleased(root, path.parent.parent)
     closed = abandoned(path)
     if closed is not None:
         return closed
@@ -677,6 +681,9 @@ def parser():
     create.add_argument("--max-loops", type=int, default=3)
     create.add_argument("--max-fix-cycles", type=int, default=3)
     create.add_argument("--storage", help="Pinned external worktree storage directory returned by the controller")
+    release = commands.add_parser("release-ownership", help="Release an absent store after native worker shutdown")
+    for flag in ("storage", "replacement-storage", "reason", "shutdown-evidence"):
+        release.add_argument("--" + flag, required=True)
     for name in ("apply", "status", "inspect", "diff", "abandon", "recover-closure", "recover-ownership", "migrate"):
         command = commands.add_parser(name)
         command.add_argument("ledger", help="Absolute path or path relative to the worktree root")
@@ -712,7 +719,11 @@ def main():
         handlers = {"init": init, "apply": append, "status": status, "diff": diff,
                     "inspect": status, "migrate": migrate, "fingerprint": fingerprint,
                     "abandon": abandon, "recover-closure": recover_closure, "recover-ownership": status}
-        if args.command in ("init", "apply", "abandon", "recover-closure", "recover-ownership", "migrate"):
+        if args.command == "release-ownership":
+            from review_ownership import release
+
+            result = release(args, root)
+        elif args.command in ("init", "apply", "abandon", "recover-closure", "recover-ownership", "migrate"):
             from review_ownership import guard
 
             base = (external_directory(Path(args.storage), root) if args.command == "init" and args.storage else
