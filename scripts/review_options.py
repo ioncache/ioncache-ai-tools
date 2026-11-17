@@ -88,7 +88,8 @@ def parser_for(skill):
         parser.add_argument("--post-comments", action=OnceFlag,
                             help="publish reportable findings as one COMMENT review on the reviewed PR")
         parser.add_argument("--post-sensitive", choices=SENSITIVE_POLICIES, default="private", action=Once,
-                            help="sensitive findings: none, private (non-public repositories only; default), or all")
+                            help="sensitive findings: none, private (default: on public repositories, only those "
+                                 "this pull request introduces), or all")
     if skill == "review-validate-fix-loop":
         parser.add_argument("--max-loops", type=positive, default=3, action=Once,
                             help="outer review limit (default: 3)")

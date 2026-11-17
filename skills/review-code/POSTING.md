@@ -70,7 +70,6 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
       "fix_steps": "Self-contained agent instructions: what to change and where.",
       "done_when": "The test or check that shows the fix worked, or null.",
       "locations": [],
-      "categories": ["correctness"],
       "sensitive": false,
       "related": [],
       "anchor": {"path": "src/app.py", "side": "RIGHT", "start_line": 10, "line": 12},
@@ -81,9 +80,7 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
 }
 ```
 
-- `categories` lists every review category whose sighting contributed to the
-  finding. A security or privacy category always makes the finding sensitive.
-- Every field other than `id`, `categories` and `related` comes from the
+- Every field other than `id` and `related` comes from the
   adjudicator's assessment, with `priority` taken from its `priority_level`.
   Do not invent them yourself.
 - Comments are written for the person reading the PR. `fix_steps` and
@@ -101,8 +98,13 @@ python3 -B "/absolute/plugin/scripts/review_comments.py" build \
   --input "/private/post-input.json" --context "/private/context.json" --out "/private/post"
 ```
 
-Exit 1 lists rejected findings whose text contains a local path. Rewrite those
-fields once and build again. If a finding is still rejected, build again with
+The helper creates the output directory if needed. It withholds sensitive
+findings under the policy: on a public repository the default withholds only
+pre-existing ones, because their weakness is live in merged code; findings the
+change introduces are posted.
+
+Exit 1 lists rejected findings whose text contains a local path or names a
+finding that will not be posted. Rewrite those fields once and build again. If a finding is still rejected, build again with
 `--exclude <ID>` for it. It stays in the local report and is counted as not
 posted. Do not loop further.
 

@@ -80,6 +80,10 @@ owned candidate files examined, even for a justified not-applicable result.
 
 Use `complete`, `partial`, or `failed` for outcome. Known additional category
 or generic-review instructions make isolation contaminated and coverage partial.
+Context the host loads into every agent, such as project `AGENTS.md` or
+`CLAUDE.md` files, user memory and hook notes, is not an extra assignment, even
+when it states review requirements. Record it as a visibility limitation with
+`isolation: unknown`; it does not make a pass contaminated or partial.
 Disclose hidden-context uncertainty separately; never claim invisible context
 was verified. Do not overwrite previous attempts or another worker's report.
 

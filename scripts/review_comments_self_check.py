@@ -229,7 +229,8 @@ class FormatTests(unittest.TestCase):
         self.assertNotIn("start_line", second)
 
     def test_agent_guidance_is_collapsed_and_self_contained_for_act_and_decide(self):
-        result = build(finding("COR1", locations=["src/other.py:40"]),
+        result = build(finding("COR1", locations=["src/app.py:3", "src/app.py:1-2", "src/other.py:40",
+                                                  "src/app.py:9"]),
                        finding("COR2", action="Decide", basis="observed", done_when=None,
                                anchor={"path": "src/app.py", "side": "LEFT", "line": 2}),
                        finding("COR3", action="Investigate", fix_steps=None,
@@ -238,7 +239,7 @@ class FormatTests(unittest.TestCase):
         guidance = act.split("<summary>Agent guidance</summary>", 1)[1]
         self.assertTrue(act.index("<details>") < act.index("<!-- review-code:v1"))
         for text in (rc.GUIDANCE_PREAMBLE, "Finding COR1: Medium, P2, Act; inferred from source, not reproduced.",
-                     "Location: src/app.py:2-3", "Also affects: src/other.py:40",
+                     "Location: src/app.py:2-3", "Also affects: src/other.py:40, src/app.py:9",
                      "Problem: The new value drops the old default.", "Fix: Restore the old default",
                      "Done when: A test reading"):
             self.assertIn(text, guidance)
@@ -298,30 +299,49 @@ class FormatTests(unittest.TestCase):
 
 
 class DisclosureTests(unittest.TestCase):
-    def test_policy_and_visibility_matrix(self):
+    def test_policy_visibility_and_origin_matrix(self):
         expected = {
-            ("none", "PRIVATE"): True, ("none", "PUBLIC"): True,
-            ("private", "PRIVATE"): False, ("private", "INTERNAL"): False,
-            ("private", "PUBLIC"): True, ("private", None): True,
-            ("all", "PUBLIC"): False, ("all", None): False,
+            ("none", "PRIVATE", True): True, ("none", "PUBLIC", True): True,
+            ("private", "PUBLIC", True): False, ("private", "PUBLIC", False): True,
+            ("private", None, True): False, ("private", None, False): True,
+            ("private", "PRIVATE", False): False, ("private", "INTERNAL", False): False,
+            ("all", "PUBLIC", False): False, ("all", None, False): False,
         }
-        for (policy, visibility), withheld in expected.items():
-            with self.subTest(policy=policy, visibility=visibility):
-                result = build(finding("SEC1", categories=["security"]), policy=policy,
+        for (policy, visibility, introduced), withheld in expected.items():
+            with self.subTest(policy=policy, visibility=visibility, introduced=introduced):
+                result = build(finding("SEC1", sensitive=True, introduced=introduced), policy=policy,
                                facts_changes={"visibility": visibility})
                 self.assertEqual(result["withheld"] == ["SEC1"], withheld)
 
-    def test_category_floor_and_counts_without_descriptions(self):
+    def test_only_the_adjudicator_marks_sensitivity_and_withheld_text_stays_local(self):
         secret = "Token check is bypassed by an empty header."
-        result = build(finding("PRV1", categories=["documentation", "privacy"], sensitive=False, summary=secret),
-                       finding("COR2", sensitive=True), finding("COR3"),
+        result = build(finding("SEC1", categories=["security"], sensitive=False),
+                       finding("SEC2", sensitive=True, introduced=False, summary=secret),
                        facts_changes={"visibility": "PUBLIC"})
-        self.assertEqual(result["withheld"], ["PRV1", "COR2"])
-        self.assertEqual(result["inline"], ["COR3"])
+        self.assertEqual((result["inline"], result["withheld"]), (["SEC1"], ["SEC2"]))
         body = result["payload"]["body"]
-        self.assertIn("2 sensitive findings were withheld", body)
-        self.assertNotIn(secret, json.dumps(result["payload"]))
-        self.assertNotIn("PRV1", json.dumps(result["payload"]))
+        self.assertIn("1 sensitive findings in code that predates this pull request were withheld "
+                      "because this repository is public.", body)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertNotIn("SEC2", json.dumps(result["payload"]))
+        unknown = build(finding("SEC2", sensitive=True, introduced=False), facts_changes={"visibility": None})
+        self.assertIn("visibility could not be confirmed", unknown["payload"]["body"])
+        none = build(finding("SEC2", sensitive=True), policy="none")
+        self.assertIn("withheld under the `none` policy", none["payload"]["body"])
+
+    def test_posted_text_cannot_name_hidden_findings(self):
+        hidden = finding("SEC2", sensitive=True, introduced=False)
+        result = build(finding("COR1", fix_steps="Same fix as SEC2."), hidden,
+                       facts_changes={"visibility": "PUBLIC"})
+        self.assertEqual(result["rejections"], [{"id": "COR1", "field": "fix_steps",
+                                                 "reason": "names findings that are not posted: SEC2"}])
+        result = build(finding("COR1", related=["SEC2", "COR3"]), hidden, finding("COR3"),
+                       facts_changes={"visibility": "PUBLIC"})
+        body = result["payload"]["comments"][0]["body"]
+        self.assertIn("Same fix as COR3.", body)
+        self.assertNotIn("SEC2", json.dumps(result["payload"]))
+        excluded = build(finding("COR1", summary="Like COR9 but worse."), finding("COR9"), exclude=("COR9",))
+        self.assertIn("names findings that are not posted: COR9", excluded["rejections"][0]["reason"])
 
     def test_private_paths_are_rejected_but_generic_paths_are_allowed(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -409,7 +429,7 @@ class ContextTests(unittest.TestCase):
     def test_build_command_reads_the_real_merge_base_diff_and_reviewed_lines(self):
         facts_value, _ = self.context()
         out = Path(self.temp.name) / "session" / "post"
-        out.mkdir(parents=True)
+        out.parent.mkdir()
         (out.parent / "context.json").write_text(json.dumps(facts_value))
         item = finding(anchor={"path": "app.py", "side": "RIGHT", "line": 2}, suggestion="Two")
         unchanged = finding("COR2", anchor={"path": "app.py", "side": "RIGHT", "line": 2}, suggestion="TWO")
@@ -419,6 +439,7 @@ class ContextTests(unittest.TestCase):
             code = rc.main(["build", "--input", str(out.parent / "input.json"),
                             "--context", str(out.parent / "context.json"), "--out", str(out)])
         self.assertEqual(code, 0, stdout.getvalue())
+        self.assertEqual(out.stat().st_mode & 0o777, 0o700)
         payload = json.loads((out / "payload.json").read_text())
         self.assertEqual([c["path"] for c in payload["comments"]], ["app.py", "app.py"])
         self.assertIn("```suggestion\nTwo\n```", payload["comments"][0]["body"])

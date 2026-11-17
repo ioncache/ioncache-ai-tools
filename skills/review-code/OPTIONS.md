@@ -20,7 +20,7 @@ The posting options are review-code only; the loop rejects them.
 | `--fallback configured\|fail` | Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. |
 | `--strategy auto\|sweep-first\|specialists` | `auto`: deterministically use `specialists`. `sweep-first` runs correctness first without changing the remaining required single-purpose assignments. |
 | `--post-comments` | Review-code only. Off by default. After the review, publish reportable findings as one `COMMENT` review on the reviewed PR under [POSTING.md](POSTING.md). |
-| `--post-sensitive none\|private\|all` | Review-code only, with posting. Default `private`: post security and privacy findings only on private or internal repositories. `none` never posts them; `all` always does. |
+| `--post-sensitive none\|private\|all` | Review-code only, with posting. Applies to findings the adjudicator marks sensitive (exploitable weaknesses or personal-data exposure). Default `private`: post them on private or internal repositories; on public ones, post only those the change introduces and withhold pre-existing ones. `none` never posts them; `all` always does. |
 | `--help` | Show help only. |
 
 Model and effort values are opaque native identifiers, not a plugin-maintained

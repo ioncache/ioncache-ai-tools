@@ -22,7 +22,11 @@ These were decided by the repository owner and are not open:
    `APPROVE` or `REQUEST_CHANGES`.
 2. Sensitive findings follow a separate setting, `--post-sensitive
    none|private|all`, defaulting to `private`: post them on private and internal
-   repositories, withhold them on public repositories.
+   repositories. On public repositories, post the ones the pull request
+   introduces and withhold pre-existing ones. Showing a security issue publicly
+   before it is fixed is the risk to avoid. A weakness the PR introduces is
+   unmerged and its code is already public in the diff, so hiding it mainly
+   risks the author merging it. A pre-existing one is live in merged code.
 
 Decisions made in this design, with reasons:
 
@@ -204,6 +208,12 @@ changes the shared report in `ASSESSMENT.md`:
 
 PR comments use the same level, so "Priority N of M" no longer exists.
 
+Reviewers also treat context the host loads into every agent (project
+instruction files such as `AGENTS.md`, user memory, hook notes) as a visibility
+limitation, not contamination. On the PR #58 trial, workers marked themselves
+contaminated for that alone, which spent replacement allowances and left
+integration coverage falsely incomplete.
+
 ## Posting helper
 
 New `scripts/review_comments.py`, Python standard library only, like the other
@@ -365,17 +375,26 @@ prose. The finding is still posted.
 
 Sensitive findings:
 
-- A finding is sensitive if the adjudicator marks it, or if any contributing
-  sighting came from the security or privacy category. The caller copies those
-  category names into `post-input.json`. The helper takes the OR of both, so
-  the category rule is a floor the adjudicator cannot remove.
-- `--post-sensitive` decides what happens to them:
+- The adjudicator marks a finding sensitive when it describes an exploitable
+  weakness or personal-data exposure, whatever category raised it. An earlier
+  version also treated any finding a security or privacy reviewer reported as
+  sensitive. On the PR #58 trial that hid four ordinary findings, because the
+  security reviewer also reports correctness issues near trust boundaries.
+- `--post-sensitive` decides what happens to sensitive findings:
   - `none` never posts them.
-  - `private` posts them only when `visibility` is `PRIVATE` or `INTERNAL`.
+  - `private` posts them on `PRIVATE` or `INTERNAL` repositories. On a public
+    repository it posts those with `introduced: true` and withholds the rest.
   - `all` always posts them.
 - If visibility is unknown, it is treated as `PUBLIC`.
+- Posted sensitive findings describe the flaw and its fix, never exploitation
+  steps, and never quote a secret's value. A committed secret is reported as
+  needing rotation.
 - Withheld findings appear in the summary only as a count and the reason. The
-  local report lists their IDs.
+  local report lists their IDs and recommends reporting them privately, for
+  example through a repository security advisory.
+- Posted text may not name a withheld or excluded finding. `build` rejects it,
+  and drops hidden IDs from "Same fix as" references, so a hidden finding cannot
+  leak through a visible one.
 
 Private local details:
 
@@ -506,7 +525,9 @@ fixture diffs:
 - Disclosure:
   - The none, private and all policies against public, private, internal and
     unknown visibility.
-  - The category floor overrides an adjudicator `false`.
+  - Only the adjudicator's `sensitive` decides; a security category alone does not.
+  - Introduced sensitive findings post on public repositories; pre-existing ones don't.
+  - Posted text naming a hidden finding is rejected; hidden IDs leave "Same fix as".
   - Withheld findings are counted, not described.
   - Root, home and output-parent paths are rejected; generic `/tmp` text is allowed.
 - Re-runs:

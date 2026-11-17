@@ -93,6 +93,9 @@ Separate reports from a reused context do not establish independent coverage.
 A bundled or contaminated assignment remains incomplete; replace it with
 fresh single-purpose assignments within existing authority and limits.
 A known conflicting guideline load is contamination, not a harmless unknown.
+Context the host loads into every agent (project instruction files, user memory,
+hook notes) is a visibility limitation, not contamination; do not replace a pass
+for it alone.
 Hidden host instructions are a separate visibility limitation; do not claim
 their absence was verified. Use PACKETS.md's chronological attempts, active map
 and shared category replacement allowance. Keep failed records unchanged.
@@ -159,7 +162,10 @@ When the request's `posting` is not `null`, each reportable assessment also has:
 - `suggestion`: `null`, or literal replacement text for exactly the anchored
   `RIGHT` lines when an `Act` fix needs no design decision.
 - `sensitive`: `true` when the finding describes an exploitable weakness or
-  personal-data exposure, whatever its category.
+  personal-data exposure, whatever its category. With `introduced`, it decides
+  disclosure: on a public repository the default posts sensitive findings the
+  change introduces and withholds pre-existing ones, which are live in merged
+  code.
 - `prior_thread`: the ID of an unresolved earlier thread in `prior_threads`
   describing the same underlying issue, or `null`.
 - `effort`: `quick`, `moderate` or `heavy`, the expected size of the fix.
