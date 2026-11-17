@@ -30,6 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "scripts"
 from plugin_config import feature_settings
 
 
+REVIEW_DEPENDENT_ROLES = ("commit", "draft", "ready", "evidence", "audit-initial", "audit-final")
+
+
 def git(root, *args):
     try:
         return review.git(root, list(args)).decode().strip()
@@ -259,6 +262,26 @@ def permission(manifest, role):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
 
+def require_cached_review_unreleased(state, pr_id, root):
+    from review_ownership import require_unreleased
+
+    reviewed = state["prs"][pr_id].get("review")
+    if reviewed is None:
+        return
+    path = Path(reviewed["ledger"])
+    try:
+        plan.require(path.is_absolute() and path.parent.parent.name == review.root_key(root),
+                     "Cached review lacks a pinned external store; migrate any retained legacy ledgers first")
+        require_unreleased(root, path.parent.parent)
+    except (review.LedgerError, plan.ManifestError) as error:
+        raise plan.ManifestError(
+            f"Cached review cannot authorize further work: {error}. "
+            "For this development run, preserve existing Git and publication effects, stop and "
+            "retire any outstanding worker with shutdown evidence, then use "
+            f"reconcile --pr {pr_id} with --revision and --reason for a counted review. "
+            "Do not replace cached acceptance or refund attempts") from error
+
+
 def reserve(state, settings, launch_models=None):
     feature(Path(state["root"]), settings)
     plan.require(state["outcome"] == "running", "Run is stopped; inspect it before resuming")
@@ -281,6 +304,8 @@ def reserve(state, settings, launch_models=None):
     permission(state["manifest"], role)
     root = (roots(state, pr_id) if role in ("preflight", "prepare")
             else check_worktree(state, pr_id))
+    if role in REVIEW_DEPENDENT_ROLES:
+        require_cached_review_unreleased(state, pr_id, root)
     before = None if role in ("preflight", "prepare") else capture(root)
     if role in ("commit", "ready", "evidence", "audit-initial", "audit-final"):
         progress = state["prs"][pr_id]
@@ -519,6 +544,8 @@ def complete_role(state, assignment, data, settings):
     role = assignment["role"]
     if assignment["pr"] and role != "prepare":
         check_worktree(state, assignment["pr"])
+    if role in REVIEW_DEPENDENT_ROLES:
+        require_cached_review_unreleased(state, assignment["pr"], Path(assignment["root"]))
     if role == "preflight":
         required = ("artifact_access", "native_permissions", "fresh_workers",
                     "independent_review", "result_delivery", "cancellation")

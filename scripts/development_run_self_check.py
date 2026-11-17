@@ -507,8 +507,9 @@ class DevelopmentRunTests(unittest.TestCase):
         path.parent.rename(self.store / "retained-history")
         path.parent.symlink_to(self.store / "missing-history", target_is_directory=True)
         public["findings"] = []
-        with patch.dict(os.environ, self.env, clear=True):
-            exported = audit.export(state, active, public)
+        public_path = self.store / "reports" / active["id"] / "public.json"
+        public_path.write_bytes(manifest.encode(public))
+        exported = self.audit_cli("export", "--public", str(public_path))
         bundle = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
         unavailable = next(item for item in bundle["reviews"] if item["id"] == path.parent.name)
         self.assertFalse(unavailable["available"])
@@ -1497,6 +1498,155 @@ class DevelopmentRunTests(unittest.TestCase):
         self.review(root)
         self.assertEqual(self.next()["role"], "commit")
         self.assertEqual(path.read_bytes(), original)
+
+    def release_accepted_review(self, root):
+        reviewed = development.load(self.store)["prs"]["first"]["review"]
+        source = Path(reviewed["ledger"]).parent.parent
+        development.shutil.rmtree(source)
+        return self.review_cli(root, [
+            "release-ownership", "--storage", str(source),
+            "--replacement-storage", str(self.folder / "replacement" / source.name),
+            "--reason", "Accepted review history was lost",
+            "--shutdown-evidence", "Synchronous fixture workers exited",
+        ])
+
+    def test_workflow_rechecks_cached_release_before_commit_and_recovers(self):
+        root = self.start_review_fixture()
+        (root / "app.txt").write_text("reviewed change\n")
+        self.review(root)
+        before = development.load(self.store)
+        self.release_accepted_review(root)
+        self.assertEqual(self.workflow("complete"), ["development-control"])
+        self.assertIn("reconcile --pr first", self.state["reason"])
+        self.assertEqual(self.state["consumed_assignments"], len(before["history"]))
+        self.assertEqual(development.load(self.store)["prs"], before["prs"])
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace released acceptance")
+        roles = self.workflow("review-complete")
+        self.assertIn("reviewer", roles)
+        self.assertIn("commit", roles)
+        after = development.load(self.store)
+        reviews = [item for item in after["history"] if item["role"] == "review"]
+        self.assertEqual([item["attempt"] for item in reviews], [1, 2])
+        self.assertEqual(reviews[0], before["history"][-1])
+        self.assertEqual(after["prs"]["first"]["task_bases"], before["prs"]["first"]["task_bases"])
+        self.assertEqual(after["manifest"]["limits"], before["manifest"]["limits"])
+        self.assertEqual((root / "app.txt").read_text(), "reviewed change\n")
+
+    def test_released_acceptance_rejects_commit_handback_without_undoing_effects(self):
+        root = self.start_review_fixture()
+        original_base = self.state["assignment"]["comparison_base"]
+        (root / "app.txt").write_text("reviewed change\n")
+        self.review(root)
+        first_commit = self.next()
+        self.assertEqual(first_commit["role"], "commit")
+        self.git("add", "app.txt", root=root)
+        self.git("commit", "-qm", "fixture dispatched commit", root=root)
+        committed = self.git("rev-parse", "HEAD", root=root)
+        self.release_accepted_review(root)
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("reconcile --pr first", self.finish({"commit": committed}, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.git("rev-parse", "HEAD", root=root), committed)
+        self.mutate("retire", "--reason", "Retain the worker's existing commit",
+                    "--shutdown-evidence", "Synchronous commit worker exited")
+        consumed = self.state["consumed_assignments"]
+        self.mutate("reconcile", "--pr", "first", "--reason", "Recheck the retained commit")
+        retry = self.next()
+        self.assertEqual((retry["role"], retry["attempt"], retry["comparison_base"]),
+                         ("review", 2, original_base))
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root)
+        retry_commit = self.next()
+        self.assertEqual((retry_commit["role"], retry_commit["attempt"]), ("commit", 2))
+        self.execute_fixture(retry_commit)
+        self.assertEqual(self.git("rev-parse", "HEAD", root=root), committed)
+        self.assertEqual(self.next()["role"], "draft")
+
+    def test_released_acceptance_cannot_complete_a_dispatched_draft(self):
+        root = self.start_review_fixture()
+        self.review(root)
+        self.execute_fixture(self.next())
+        self.assertEqual(self.next()["role"], "draft")
+        self.release_accepted_review(root)
+        before = (self.store / "RUN.json").read_bytes()
+        data = {"commit": self.git("rev-parse", "HEAD", root=root),
+                "url": "https://example.invalid/pull/1", "state": "draft",
+                "evidence": "Offline receipt; no remote publication"}
+        self.assertIn("reconcile --pr first", self.finish(data, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.finish(outcome="blocked")
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace released acceptance")
+        self.assertEqual(self.next()["role"], "review")
+
+    def test_unreleased_cached_review_does_not_require_live_history(self):
+        root = self.start_review_fixture()
+        (root / "app.txt").write_text("reviewed change\n")
+        data = self.review(root)
+        source = Path(data["ledger"]).parent.parent
+        source.rename(self.folder / "offline-review-history")
+        source.symlink_to(self.folder / "missing-review-history", target_is_directory=True)
+        assignment = self.next()
+        self.assertEqual(assignment["role"], "commit")
+        self.execute_fixture(assignment)
+        self.assertEqual(self.next()["role"], "draft")
+        self.assertFalse(source.exists())
+
+    def test_legacy_cached_acceptance_requires_counted_rebinding_across_xdg_changes(self):
+        root = self.start_review_fixture()
+        data = self.review(root)
+        path = Path(data["ledger"])
+        legacy = root / ".review-loop" / path.parent.name
+        legacy.parent.mkdir(exist_ok=True)
+        path.parent.rename(legacy)
+        state = development.load(self.store)
+        reference = str(legacy / "REVIEW_LEDGER.json")
+        state["prs"]["first"]["review"]["ledger"] = reference
+        state["history"][-1].pop("review_storage")
+        state["history"][-1]["report"]["data"]["ledger"] = reference
+        development.save(self.store, state)
+        migrated = self.review_cli(root, [
+            "migrate", reference, "--shutdown-evidence", "Legacy fixture writers exited"])
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("reconcile --pr first", self.mutate("next", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        source = Path(migrated["ledger"]).parent.parent
+        development.shutil.rmtree(source)
+        self.review_cli(root, [
+            "release-ownership", "--storage", str(source),
+            "--replacement-storage", str(self.folder / "replacement" / source.name),
+            "--reason", "Migrated fixture history was lost",
+            "--shutdown-evidence", "Fixture workers exited",
+        ])
+        self.env["XDG_STATE_HOME"] = str(self.folder / "changed-state-home")
+        self.assertIn("reconcile --pr first", self.mutate("next", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        consumed = self.state["consumed_assignments"]
+        self.mutate("reconcile", "--pr", "first", "--reason", "Bind acceptance to its actual store")
+        retry = self.next()
+        self.assertEqual((retry["role"], retry["attempt"]), ("review", 2))
+        self.assertEqual(retry["comparison_base"], state["prs"]["first"]["task_bases"]["change"])
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_released_cached_review_cannot_authorize_audit_export(self):
+        root = self.start_audit_fixture()
+        _, active, exported = self.audit_export()
+        public_path = self.store / "reports" / active["id"] / "public.json"
+        public = json.loads(public_path.read_bytes())
+        public["findings"] = []
+        public_path.write_bytes(manifest.encode(public))
+        self.release_accepted_review(root)
+        before = (self.store / "RUN.json").read_bytes()
+        bundle = Path(exported["directory"]) / "audit.json"
+        old_bundle = bundle.read_bytes()
+        self.assertIn("reconcile --pr first", self.audit_cli(
+            "export", "--public", str(public_path), ok=False))
+        self.assertEqual(bundle.read_bytes(), old_bundle)
+        archive = self.audit_cli("archive", "--pr", "first", "--public", str(public_path))
+        self.assertTrue(archive["historical"])
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.audit_body_updates, [])
 
     def test_sequential_run_requires_task_and_full_pr_reviews(self):
         self.init()

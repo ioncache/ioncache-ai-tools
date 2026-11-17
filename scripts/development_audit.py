@@ -547,6 +547,7 @@ def main():
                          "Reserve an audit assignment before exporting or publishing")
             development.permission(state["manifest"], assignment["role"])
             root = development.check_worktree(state, assignment["pr"])
+            development.require_cached_review_unreleased(state, assignment["pr"], root)
             development.unchanged(assignment["before"], development.capture(root))
             if args.operation == "export":
                 plan.require(args.public is not None, "Export requires --public")

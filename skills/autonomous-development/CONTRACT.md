@@ -385,6 +385,22 @@ cannot authorize further commits or readiness. Use the same `reconcile` command
 for a counted review with the current contract; retain prior evidence, original
 bases and spent allowances.
 
+A cached review must also retain its absolute external ledger location. Legacy
+`.review-loop` references cannot identify the migrated store reliably after an
+`XDG_STATE_HOME` change. Migrate any remaining legacy records, then use `reconcile`
+for a counted review that records the actual storage location. Do not rewrite
+the cached reference or infer a new location from current environment settings.
+
+A released review store cannot authorize downstream work through cached
+acceptance, even when the code is unchanged. Releases are checked before
+dispatch and successful handback for commit, draft, readiness, evidence and
+audit assignments, and before audit export or publication. Preserve existing
+commits and remote effects, stop and retire any outstanding worker, then use
+`reconcile` for a counted review within the remaining allowances. Failure
+reports and historical archives remain available.
+This check uses the accepted storage identity, not live ledger contents.
+Unavailable history alone does not revoke a pinned, unreleased acceptance.
+
 `status` reports missing, unreadable, or changed snapshots in `input_error`.
 Status, interruption, and retirement do not require available snapshot bytes,
 but still check approval and manifest integrity. Execution, acceptance, resume,
