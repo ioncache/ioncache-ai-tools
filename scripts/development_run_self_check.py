@@ -1499,9 +1499,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.next()["role"], "commit")
         self.assertEqual(path.read_bytes(), original)
 
-    def release_accepted_review(self, root):
+    def release_accepted_review(self, root, *, ledger=None):
         reviewed = development.load(self.store)["prs"]["first"]["review"]
-        source = Path(reviewed["ledger"]).parent.parent
+        source = Path(ledger or reviewed["ledger"]).parent.parent
         development.shutil.rmtree(source)
         return self.review_cli(root, [
             "release-ownership", "--storage", str(source),
@@ -1510,12 +1510,100 @@ class DevelopmentRunTests(unittest.TestCase):
             "--shutdown-evidence", "Synchronous fixture workers exited",
         ])
 
-    def test_workflow_rechecks_cached_release_before_commit_and_recovers(self):
+    def close_accepted_review(self, root, closure="stop", *, ledger=None):
+        reviewed = development.load(self.store)["prs"]["first"]["review"]
+        path = Path(ledger or reviewed["ledger"])
+        if closure == "release":
+            return self.release_accepted_review(root, ledger=path)
+        if closure != "stop":
+            if closure == "abandon":
+                path.unlink()
+            else:
+                (path.parent / "ABANDONED.json").write_bytes(b"damaged closure")
+            return self.review_cli(root, [
+                closure, str(path),
+                "--reason", "Invalidate accepted fixture evidence",
+                "--evidence", "Inspected fixture history and closure",
+                "--shutdown-evidence", "Synchronous fixture workers exited",
+            ])
+        status = self.review_cli(root, ["status", str(path)])
+        return self.review_cli(root, ["apply", str(path), "--revision", str(status["revision"])], {
+            "type": "stop", "outcome": "failed", "actor": "fixture-owner",
+            "reason": "Withdraw accepted fixture review",
+        })
+
+    def assert_closed_cached_review_recovers(self, closure="stop", *, missing_blob=False, recovered=False):
+        root = self.start_review_fixture()
+        (root / "app.txt").write_text("reviewed change\n")
+        data = self.review(root)
+        path = Path(data["ledger"])
+        original = development.load(self.store)
+        if recovered:
+            target = self.folder / "retained-review" / path.parent.parent.name / path.parent.name
+            target.parent.mkdir(parents=True)
+            path.parent.rename(target)
+            path = target / path.name
+            self.review_cli(root, [
+                "recover-ownership", str(path), "--reason", "Relocate retained completed history",
+                "--shutdown-evidence", "Synchronous fixture workers exited",
+            ])
+        self.close_accepted_review(root, closure, ledger=path)
+        if recovered:
+            other = self.review_cli(root, [
+                "init", "--objective", "Separate fixture review", "--scope", "fixture",
+                "--storage", str(self.folder / "other-review" / path.parent.parent.name),
+            ])
+            self.review_cli(root, ["apply", other["ledger"], "--revision", str(other["revision"])], {
+                "type": "stop", "outcome": "failed", "actor": "fixture-owner",
+                "reason": "Finish the separately owned fixture without approval",
+            })
+            self.env["XDG_STATE_HOME"] = str(self.folder / "changed-state-home")
+        if missing_blob:
+            next((path.parent / "objects").iterdir()).unlink()
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("reconcile --pr first", self.mutate("next", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        if missing_blob:
+            self.review_cli(root, ["abandon", str(path), "--reason", "Fixture object was lost",
+                                  "--evidence", "No usable copy remains",
+                                  "--shutdown-evidence", "Synchronous fixture workers exited"])
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace failed acceptance")
+        retry = self.next()
+        self.assertEqual((retry["role"], retry["attempt"]), ("review", 2))
+        self.assertEqual(retry["comparison_base"], original["prs"]["first"]["task_bases"]["change"])
+        self.review(root)
+        while self.next():
+            self.execute_fixture(self.state["assignment"])
+        saved = development.load(self.store)
+        self.assertEqual(saved["outcome"], "completed")
+        self.assertEqual(saved["history"][:len(original["history"])], original["history"])
+        self.assertEqual(saved["prs"]["first"]["task_bases"], original["prs"]["first"]["task_bases"])
+        self.assertEqual(saved["manifest"]["limits"], original["manifest"]["limits"])
+
+    def test_stopped_cached_review_requires_counted_reconciliation(self):
+        self.assert_closed_cached_review_recovers()
+
+    def test_abandoned_cached_review_requires_counted_reconciliation(self):
+        self.assert_closed_cached_review_recovers("abandon")
+
+    def test_recovered_closure_invalidates_cached_review(self):
+        self.assert_closed_cached_review_recovers("recover-closure")
+
+    def test_missing_blob_does_not_hide_cached_review_invalidation(self):
+        self.assert_closed_cached_review_recovers(missing_blob=True)
+
+    def test_recovered_cached_review_closure_survives_later_ownership_change(self):
+        self.assert_closed_cached_review_recovers(recovered=True)
+
+    def test_recovered_cached_review_release_survives_later_ownership_change(self):
+        self.assert_closed_cached_review_recovers("release", recovered=True)
+
+    def assert_workflow_rechecks_cached_invalidation(self, invalidate):
         root = self.start_review_fixture()
         (root / "app.txt").write_text("reviewed change\n")
         self.review(root)
         before = development.load(self.store)
-        self.release_accepted_review(root)
+        invalidate(root)
         self.assertEqual(self.workflow("complete"), ["development-control"])
         self.assertIn("reconcile --pr first", self.state["reason"])
         self.assertEqual(self.state["consumed_assignments"], len(before["history"]))
@@ -1532,7 +1620,13 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(after["manifest"]["limits"], before["manifest"]["limits"])
         self.assertEqual((root / "app.txt").read_text(), "reviewed change\n")
 
-    def test_released_acceptance_rejects_commit_handback_without_undoing_effects(self):
+    def test_workflow_rechecks_cached_release_before_commit_and_recovers(self):
+        self.assert_workflow_rechecks_cached_invalidation(self.release_accepted_review)
+
+    def test_workflow_rechecks_cached_closure_before_commit_and_recovers(self):
+        self.assert_workflow_rechecks_cached_invalidation(self.close_accepted_review)
+
+    def assert_invalidated_acceptance_preserves_dispatched_commit(self, invalidate):
         root = self.start_review_fixture()
         original_base = self.state["assignment"]["comparison_base"]
         (root / "app.txt").write_text("reviewed change\n")
@@ -1542,7 +1636,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.git("add", "app.txt", root=root)
         self.git("commit", "-qm", "fixture dispatched commit", root=root)
         committed = self.git("rev-parse", "HEAD", root=root)
-        self.release_accepted_review(root)
+        invalidate(root)
         before = (self.store / "RUN.json").read_bytes()
         self.assertIn("reconcile --pr first", self.finish({"commit": committed}, ok=False))
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
@@ -1561,6 +1655,12 @@ class DevelopmentRunTests(unittest.TestCase):
         self.execute_fixture(retry_commit)
         self.assertEqual(self.git("rev-parse", "HEAD", root=root), committed)
         self.assertEqual(self.next()["role"], "draft")
+
+    def test_released_acceptance_rejects_commit_handback_without_undoing_effects(self):
+        self.assert_invalidated_acceptance_preserves_dispatched_commit(self.release_accepted_review)
+
+    def test_stopped_acceptance_rejects_commit_handback_without_undoing_effects(self):
+        self.assert_invalidated_acceptance_preserves_dispatched_commit(self.close_accepted_review)
 
     def test_released_acceptance_cannot_complete_a_dispatched_draft(self):
         root = self.start_review_fixture()
@@ -1583,13 +1683,52 @@ class DevelopmentRunTests(unittest.TestCase):
         (root / "app.txt").write_text("reviewed change\n")
         data = self.review(root)
         source = Path(data["ledger"]).parent.parent
-        source.rename(self.folder / "offline-review-history")
-        source.symlink_to(self.folder / "missing-review-history", target_is_directory=True)
+        next((Path(data["ledger"]).parent / "objects").iterdir()).unlink()
         assignment = self.next()
         self.assertEqual(assignment["role"], "commit")
         self.execute_fixture(assignment)
+        source.rename(self.folder / "offline-review-history")
+        source.symlink_to(self.folder / "missing-review-history", target_is_directory=True)
         self.assertEqual(self.next()["role"], "draft")
         self.assertFalse(source.exists())
+
+    def test_nonregular_cached_history_and_recovery_records_do_not_hang_dispatch(self):
+        root = self.start_review_fixture()
+        data = self.review(root)
+        path = Path(data["ledger"])
+        path.unlink()
+        os.mkfifo(path)
+        os.mkfifo(path.parent / "ABANDONED.json")
+        ownership = (Path(self.env["HOME"]) / ".local/state/ioncache-ai-tools/review-ownership" /
+                     development.review.root_key(root))
+        os.mkfifo(ownership / ("RECOVERY-" + "0" * 32 + ".json"))
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "development_run.py"), "next", str(self.store),
+             "--revision", str(self.state["revision"])],
+            env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["assignment"]["role"], "commit")
+
+    def test_stopped_cached_review_blocks_live_audits_but_not_archives(self):
+        root = self.start_audit_fixture()
+        _, active, exported = self.audit_export()
+        public_path = self.store / "reports" / active["id"] / "public.json"
+        self.close_accepted_review(root)
+        before = (self.store / "RUN.json").read_bytes()
+        bundle = Path(exported["directory"]) / "audit.json"
+        old_bundle = bundle.read_bytes()
+        for operation, arguments in (
+                ("export", ("--public", str(public_path))),
+                ("publish", ("--approved", exported["identity"]))):
+            with self.subTest(operation=operation):
+                self.assertIn("reconcile --pr first", self.audit_cli(operation, *arguments, ok=False))
+        self.assertEqual(bundle.read_bytes(), old_bundle)
+        archive = self.audit_cli("archive", "--pr", "first", "--public", str(public_path))
+        archived = json.loads((Path(archive["directory"]) / "audit.json").read_bytes())
+        self.assertTrue(archive["historical"])
+        self.assertEqual(archived["reviews"][0]["outcome"], "failed")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.audit_body_updates, [])
 
     def test_legacy_cached_acceptance_requires_counted_rebinding_across_xdg_changes(self):
         root = self.start_review_fixture()

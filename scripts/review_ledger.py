@@ -299,6 +299,39 @@ def abandoned(path):
     return value
 
 
+def cached_invalidation(root, path, accepted):
+    """Detect retained closure without revalidating cached snapshots or granting fresh acceptance."""
+    try:
+        path = ledger_path(root, str(path), allow_unavailable=True, historical=True)
+        require(path.parent.name == Path(accepted["ledger"]).parent.name,
+                "Path does not identify the accepted review")
+    except (ValueError, OSError, KeyError, TypeError):
+        return None
+    try:
+        if safe_path(path.parent, "ABANDONED.json").is_file() and abandoned(path) is not None:
+            return "Accepted review was abandoned; its allowance is unavailable"
+    except (ValueError, OSError, KeyError, TypeError):
+        pass
+    try:
+        require(not path.is_symlink() and path.is_file(), "Cached history is not a regular file")
+        ledger = json.loads(path.read_bytes())
+        ensure_owner(ledger, root)
+        require(ledger["run_id"] == path.parent.name, "Run ID does not match cached review")
+        require(accepted["outcome"] in ("completed", "completed_with_exceptions"),
+                "Cache does not contain completed acceptance")
+        history, events = accepted["history"], ledger["events"]
+        require(isinstance(events, list) and events[:len(history)] == history,
+                "History does not extend the accepted review")
+        if len(events) == len(history):
+            return None
+        # Completion only permits a failed stop; damaged snapshot objects cannot undo it.
+        state = dict(accepted)
+        apply_event(state, events[len(history)])
+    except (ValueError, OSError, KeyError, TypeError):
+        return None
+    return f"Accepted review was invalidated as {state['outcome']}"
+
+
 def recover_closure(args, root):
     """Close readable history before removing a damaged marker's terminal fence."""
     path = ledger_path(root, args.ledger, allow_unavailable=True)

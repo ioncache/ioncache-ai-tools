@@ -391,15 +391,24 @@ A cached review must also retain its absolute external ledger location. Legacy
 for a counted review that records the actual storage location. Do not rewrite
 the cached reference or infer a new location from current environment settings.
 
-A released review store cannot authorize downstream work through cached
-acceptance, even when the code is unchanged. Releases are checked before
-dispatch and successful handback for commit, draft, readiness, evidence and
+A released review store or explicitly failed review cannot authorize downstream
+work through cached acceptance, even when the code is unchanged. Store releases,
+valid abandonment records and failed stops after accepted completion are checked
+before dispatch and successful handback for commit, draft, readiness, evidence and
 audit assignments, and before audit export or publication. Preserve existing
 commits and remote effects, stop and retire any outstanding worker, then use
 `reconcile` for a counted review within the remaining allowances. Failure
 reports and historical archives remain available.
-This check uses the accepted storage identity, not live ledger contents.
-Unavailable history alone does not revoke a pinned, unreleased acceptance.
+The release check uses the accepted storage identity. Review closure is read
+without requiring snapshot objects or comparing the pre-commit review against
+the current HEAD. A retained failed stop still invalidates acceptance when its
+snapshot objects are lost. Unavailable history alone is not evidence of
+revocation; it does not revoke a pinned acceptance without a release or
+readable invalidation record.
+Recorded `recover-ownership` locations are checked for release or closure of the
+same review, even after ownership selects another store. Failed stop evidence
+must extend the accepted history. The cached reference and its original evidence
+are not rewritten.
 
 `status` reports missing, unreadable, or changed snapshots in `input_error`.
 Status, interruption, and retirement do not require available snapshot bytes,

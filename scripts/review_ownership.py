@@ -44,6 +44,28 @@ def read(path, root):
             "and --shutdown-evidence. Do not initialize a replacement run") from error
 
 
+def recovered_ledgers(root, run_id):
+    try:
+        folder = directory(root)
+        records = list(folder.glob("RECOVERY-*.json"))
+    except (ledger.LedgerError, OSError):
+        return
+    for record in records:
+        try:
+            record = ledger.safe_path(folder, record.name)
+            if not record.is_file():
+                continue
+            value = json.loads(record.read_bytes())
+            ledger.fields(value, "ledger reason shutdown_evidence")
+            path = Path(value["ledger"])
+            ledger.require(path.is_absolute() and path.name == "REVIEW_LEDGER.json" and
+                           path.parent.name == run_id and path.parent.parent.name == ledger.root_key(root),
+                           "Recovery belongs to a different review")
+        except (ValueError, OSError, KeyError, TypeError):
+            continue
+        yield path
+
+
 @contextmanager
 def locked(root):
     folder = directory(root)

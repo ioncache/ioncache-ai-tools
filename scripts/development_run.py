@@ -262,8 +262,9 @@ def permission(manifest, role):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
 
-def require_cached_review_unreleased(state, pr_id, root):
-    from review_ownership import require_unreleased
+def require_cached_review_usable(state, pr_id, root):
+    from itertools import chain
+    from review_ownership import recovered_ledgers, require_unreleased
 
     reviewed = state["prs"][pr_id].get("review")
     if reviewed is None:
@@ -272,7 +273,10 @@ def require_cached_review_unreleased(state, pr_id, root):
     try:
         plan.require(path.is_absolute() and path.parent.parent.name == review.root_key(root),
                      "Cached review lacks a pinned external store; migrate any retained legacy ledgers first")
-        require_unreleased(root, path.parent.parent)
+        for retained in chain((path,), recovered_ledgers(root, path.parent.name)):
+            require_unreleased(root, retained.parent.parent)
+            invalidation = review.cached_invalidation(root, retained, reviewed)
+            plan.require(invalidation is None, invalidation)
     except (review.LedgerError, plan.ManifestError) as error:
         raise plan.ManifestError(
             f"Cached review cannot authorize further work: {error}. "
@@ -305,7 +309,7 @@ def reserve(state, settings, launch_models=None):
     root = (roots(state, pr_id) if role in ("preflight", "prepare")
             else check_worktree(state, pr_id))
     if role in REVIEW_DEPENDENT_ROLES:
-        require_cached_review_unreleased(state, pr_id, root)
+        require_cached_review_usable(state, pr_id, root)
     before = None if role in ("preflight", "prepare") else capture(root)
     if role in ("commit", "ready", "evidence", "audit-initial", "audit-final"):
         progress = state["prs"][pr_id]
@@ -545,7 +549,7 @@ def complete_role(state, assignment, data, settings):
     if assignment["pr"] and role != "prepare":
         check_worktree(state, assignment["pr"])
     if role in REVIEW_DEPENDENT_ROLES:
-        require_cached_review_unreleased(state, assignment["pr"], Path(assignment["root"]))
+        require_cached_review_usable(state, assignment["pr"], Path(assignment["root"]))
     if role == "preflight":
         required = ("artifact_access", "native_permissions", "fresh_workers",
                     "independent_review", "result_delivery", "cancellation")

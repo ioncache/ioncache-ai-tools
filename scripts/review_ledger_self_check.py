@@ -142,6 +142,24 @@ class ReviewLedgerTests(unittest.TestCase):
                   checks=CHECKS)
         self.send("fixes_reviewed", passes=PASSES)
 
+    def test_cached_invalidation_retains_failed_stop_without_readable_objects_or_closure(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide(disposition="ignored")
+        self.send("advance")
+        accepted = self.cli(["status", self.ledger])
+        self.assertEqual(accepted["outcome"], "completed_with_exceptions")
+        self.assertIsNone(review_ledger.cached_invalidation(self.root, self.ledger, accepted))
+        self.send("stop", outcome="failed")
+        path = Path(self.ledger)
+        next((path.parent / "objects").iterdir()).unlink()
+        self.assertIn("abandon", self.cli(["status", self.ledger], ok=False))
+        (path.parent / "ABANDONED.json").write_bytes(b"damaged closure")
+        before = json.loads(json.dumps(accepted))
+        self.assertIn("failed", review_ledger.cached_invalidation(self.root, self.ledger, accepted))
+        self.assertEqual(accepted, before)
+
     def test_reconcile_reconfirms_verified_fix_without_another_edit(self):
         self.init("--max-loops", "2", "--max-fix-cycles", "1")
         self.review()
