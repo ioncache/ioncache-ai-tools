@@ -1,6 +1,6 @@
 ---
 name: post-pr-review-comments
-description: Turns verified review findings into brief, natural GitHub PR comments with enough context to act. Use when a human is driving a PR review and wants comments written up, added to a pending draft review, or edited, including authorised wording edits to submitted review comments; never submits the review.
+description: Turns verified review findings into brief, natural GitHub PR comments with enough context to act. Use when a human is driving a PR review and wants comments written up, added to a review, replied to in existing published threads, or edited, including authorised wording edits to submitted review comments; never submits the review.
 ---
 
 # PR Review Comment Process
@@ -16,14 +16,26 @@ That reference is mandatory for those tasks, not for local drafting alone.
 
 ## Voice and length
 
-Keep comments to a few short sentences, usually 1-3, in one compact paragraph.
-Use short bullets rather than a comma-separated list when listing several items.
-Bullets replace prose; they are not a way to squeeze a report into one comment.
+Write short notes, not an essay: informative, with a possible direction.
+The default unit is a sentence fragment on its own line, with a blank line
+between fragments. Fragments are lowercase, with no final full stop; preserve
+the exact case of identifiers and quoted text.
 
-Use everyday words, contractions, and direct phrasing. Fragments, lowercase
-openings, and omitted final periods are fine when they read naturally. Do not
-polish a normal review comment into formal prose, or force casual quirks into
-every comment. First person is optional.
+Questions are always complete sentences, capitalised and ending with a question
+mark. When two pieces only make sense together, keep them in one paragraph as
+proper sentences with capitals and punctuation. This includes a question and
+its follow-up reason, or an "It works today..." / "But..." pair.
+
+Put three or more parallel items, such as affected callers or error messages,
+in a short bullet list introduced by a fragment ending in a colon.
+Give the author enough to understand and act, but cut clauses that add no fact.
+Splitting into fragments must not pad length; dense packing must not disguise it.
+These layout rules apply to PR comments, not implementation comments or general
+documentation.
+
+Use everyday words, contractions, and direct phrasing. Do not polish a normal
+review comment into formal prose or force casual quirks into every comment.
+First person is optional.
 
 Offer an observation, question, or suggestion, never an authoritative verdict
 that the engineer is wrong. The register is tentative and collaborative, even
@@ -36,17 +48,32 @@ the examples into reusable openings. Variation is not mechanically swapping
 synonyms in the same template.
 
 Explain the problem and what needs to change. Include the trigger or connecting
-step the author needs, but do not give each part its own sentence or paragraph.
-Do not repeat what the anchored code already makes clear. A useful link can
-replace a long explanation of an external contract.
+step the author needs. Do not repeat what the anchored code already makes clear.
+A useful link can replace a long explanation of an external contract.
 
-For example:
+For a metadata-ownership comment the human has chosen:
 
-> a missing email seems to fail the whole batch, including valid invitations. worth rejecting that row before queueing?
+```text
+metadata keys spelled out here, and again where they're read: `locale` and `duration_months` in `buildRenewalSchedule`, `duration_months` in `buildOrderFields`
+
+if they drift apart nothing errors: no `duration_months` and `buildRenewalSchedule` skips the order, no `locale` and translated purchases get default-language prices
+
+each file's tests hard-code their own copy of the keys, so a one-sided rename stays green
+
+Could `services/billing/checkout-metadata.js` own both writing and reading this metadata? That would also remove this block's reliance on `options.recurring_data`, which only exists because the `if (plan.recurring)` branch above created it.
+```
 
 For a helper-reuse comment the human has chosen:
 
-> any reason not to use `loadSettings` here? it already handles these defaults, so we wouldn't need a second copy
+```text
+the same defaults copied into three callers:
+
+- `startWorker`
+- `reloadWorker`
+- `previewSettings`
+
+Would `loadSettings` fit here? It already supplies these defaults.
+```
 
 These illustrate the voice, not mandatory openings or claims to reuse.
 Avoid review-bot jargon, formal conclusions, defensive filler, hypothetical
@@ -54,6 +81,25 @@ objections, and drafting history. Never write "just want to call out."
 Use identifiers only when they help locate or explain the issue, not to dump
 the call stack. Follow repository spelling without altering identifiers.
 Keep triage/severity markers outside comment bodies.
+
+## Terminology
+
+Use the exact name from the code, README, or vendor documentation: the route
+(`GET /orders/checkout`, not "completion"), function (`buildSchedule`, not
+"the handler"), flag by its key, test by its title, and error by its message text.
+Name a field's owner when it could mean another system's field: "the identity
+provider user's `data.product_id`", not just `data.product_id`.
+
+Replace bare references that make the reader guess. Use "the
+`if (plan.recurring)` branch above", not "the branch above". When two flags
+matter, name both keys rather than saying "the flag". Replace vague states such
+as "unconfigured" with the missing setting or exact condition.
+Distinguish our webhook route from the webhook endpoint registered with the
+vendor, and the vendor's test account from the deployed development app.
+
+Quote a document's actual wording. Do not put a paraphrase in quotation marks
+or add qualifiers such as "only". Name functions or files for cross-file context;
+never cite line references into other files.
 
 ## Process
 
@@ -65,7 +111,8 @@ Keep triage/severity markers outside comment bodies.
    not evidence. Keep unresolved concerns in separate notes with the missing
    evidence, not among ready comments.
 3. Draft in a session-scratchpad Markdown file. Run the readiness check and
-   correct your own draft before presenting the file with its full path.
+   address the independent readers' findings before presenting the file with
+   its full path.
    Never post an unpresented draft or re-render the comment list in the terminal.
 4. Apply requested edits; the request authorises them, including systemic
    feedback across the file. Report which comments changed. Answer questions
@@ -73,10 +120,15 @@ Keep triage/severity markers outside comment bodies.
 5. Before revising a rejected comment, explain whether its finding survives
    without the rejected claim; otherwise propose dropping it.
    Do not ask again for edits or removals already authorised.
-6. Posting requires an explicit request to post, not merely to draft or edit.
-   If posting is already authorised, presentation does not require another
-   approval. Follow the GitHub procedures, including approval to create a
-   pending review when none exists. Never submit the review.
+6. Follow the requested action. "Add comments to a review" normally means using
+   a pending review; this is the recommended method, not a prerequisite for
+   new inline comments. Honour requests to publish new comments directly.
+   "Reply" or "respond" to an existing published PR comment authorises posting
+   the response directly, without a pending review or another posting approval.
+   Requests to draft, edit, or suggest a response do not authorise posting.
+   Honour explicit instructions to keep a reply local or pending. Presentation
+   does not require another approval when posting is already authorised.
+   Follow the GitHub procedures. Never submit the review.
 
 ## What counts as a finding
 
@@ -108,9 +160,27 @@ not a checklist of things to include in the comment.
 
 Keep the connection to the anchored change clear. Include a non-obvious trigger
 or intermediate step when leaving it out would make the finding confusing or
-misleading. Describe the needed behaviour rather than prescribing an
-implementation, unless the fix is trivial or the human requested it.
-There is no required opening, closing, or sentence-by-sentence structure.
+misleading, for example: "`findOne` finds no record and throws
+`No record for session ...` after the schedule is built".
+
+Before saying "everywhere" or listing affected places, check every candidate
+and name the full set actually affected. A caller that reads the value but gets
+the same result either way is not affected. Use a short list for three or more.
+If an existing test looks as though it covers the case, name it by title and
+explain why it does not.
+
+Describe the needed behaviour rather than prescribing an implementation, unless
+the fix is trivial or the human requested it. For a proposed fix, state the
+exact condition and check that it preserves neighbouring paths served by the
+same code. For a test request, name assertions that would fail under the
+described regression, not merely assertions that pass today.
+
+State the evidence's scope when it matters, for example, "every two-line session
+inspected in the vendor's test account returned the items in this order".
+Say what could not be checked, such as production; do not generalise test-account
+observations into a production guarantee.
+
+There is no stock opening or closing; order the facts to make the point clear.
 Tentative wording is a tone choice, not a substitute for verification.
 If the causal link is unverified, keep the concern in working notes until
 checked. Evidence supports the observation; it does not require an
@@ -118,14 +188,17 @@ authoritative tone.
 
 ## Anchoring
 
-Check the current diff. Anchor added/context lines inside a hunk, not removed-only
-lines, using `path:start-end` headings. Anchor the whole relevant prose construct
+For new inline threads, check the current diff. Anchor added/context lines inside
+a hunk, not removed-only lines, using `path:start-end` headings.
+Anchor the whole relevant prose construct
 unless one line is the subject. For cross-file findings, use where the change
 introduces the behaviour, not merely any available hunk.
 Never cite line references into other files.
 
-Without a valid anchor, retain `path (non-inline, unposted)` and ask how to proceed;
-do not invent an anchor or drop the finding. Keep independent fixes separate.
+Without a valid anchor for a new thread, retain `path (non-inline, unposted)` and
+ask how to proceed; do not invent an anchor or drop the finding.
+Replies use the existing thread's anchor; they do not need a new current-diff hunk.
+Keep independent fixes separate.
 Repeated findings may refer back but must explain their own connection and impact.
 Order by file in diff order then line, or by severity, never mixed.
 Do not renumber remaining comments after removal.
@@ -156,20 +229,48 @@ PR-head diff; verify the whole range is inside a hunk and replacement syntax is 
 
 ## Readiness check
 
-Before presentation and posting, reread the saved comments as the author seeing
-only the anchored hunk and comment, not private review notes:
+Before presentation and posting, use separate fresh-context subagents for
+correctness and comprehensibility. The author's reread does not count as either
+check. Give each worker only its single-purpose instructions below; workers
+must ignore ambient review guidance, not load other skills or generic review
+workflows, and not delegate another review layer.
 
-1. Is the point verified, correctly anchored, and clear enough to act on?
-   For a bug, can the author understand how this change causes the problem?
-   For a human-selected preference, is it honestly phrased as one?
-2. Is it a few short sentences an engineer would actually type, inviting
-   discussion rather than declaring the author wrong? Remove repeated context,
-   investigation detail, and unnecessary quotations. Shorten by cutting, not by
-   splitting the same text into more sentences or paragraphs. Read the comments
-   together for repeated openings or a stamped-out sentence pattern.
+1. **Correctness:** verify every factual claim against evidence, not the
+   author's conclusions. Read whole relevant files and trace callers,
+   transformations, validation, and error handling. Check the current anchor,
+   the full affected set, proposed fixes against neighbouring paths, and
+   whether requested assertions would fail under the regression.
+   Cite current applicable vendor documentation for external claims; use
+   authorised read-only live data when a claim depends on deployed state.
+   A claim that documentation is silent requires reading the relevant
+   documentation, including separate guides that address the behaviour.
+   A failed search or one silent page is not evidence of absence.
+   Report each claim's evidence or gap and a per-comment verdict: verified,
+   incorrect, or unverified. Keep human-selected preferences labelled honestly.
+2. **Comprehensibility:** use a different fresh-context reader given only each
+   comment, its anchored lines, and access to the PR, never the review notes or
+   correctness report. For each comment, report inexact or ambiguous terms
+   with the correct names, missing facts, hard-to-parse sentences, and a verdict:
+   clear or needs revision. Check the fragment layout, complete questions,
+   tied paragraphs, and lists. Check that the causal step and relevance are
+   understandable without private context, and that the wording invites
+   discussion rather than declaring the author wrong.
 
-After wording edits, reread the saved result for lost context or changed claims.
-Unverified claims or unexplained relevance block posting, however polished.
+Fix the findings and rerun the independent checks on revised comments until
+every comment retained for posting is verified and clear. Recheck changed
+claims as well as wording; do not carry a verdict across edits it did not cover.
+Read the comments together for repeated openings or a stamped-out pattern,
+and cut repeated context, investigation detail, and unnecessary quotations.
+
+Bound correction rounds to three per comment unless the human sets another
+finite limit. If a reader or required evidence is unavailable, or a comment
+still fails at the limit, keep it unposted, report the gap, and continue other
+authorised work. A retry limit never makes a failed check pass.
+If a comment is wrong, explain why and propose deletion; the human decides.
+Do not silently remove it or ask again for a removal already authorised.
+
+Unverified claims or unexplained relevance leave a comment unready, however
+polished.
 For already-presented drafts, make the requested edits without another approval
 round. Explain remaining gaps and ask only about changes not already authorised.
 
@@ -184,7 +285,11 @@ Ordered by file in diff order, then line.
 
 ## 1. path/to/file.js:120-134
 
-short comment, usually 1-3 sentences in one paragraph
+the locale default copied from `loadSettings`
+
+a one-sided change would leave `startWorker` using a different default
+
+Could `startWorker` use `loadSettings`? It already supplies the locale default.
 
 ---
 ```

@@ -13,7 +13,7 @@ Each skill's file defines its scope, inputs, and stopping conditions.
 | [../skills/review-code/SKILL.md](../skills/review-code/SKILL.md) | Read-only code review |
 | [../skills/review-dependabot-pr/SKILL.md](../skills/review-dependabot-pr/SKILL.md) | Review dependency updates against actual usage, including grouped and indirect dependencies |
 | [../skills/verify-unresolved-pr-comments/SKILL.md](../skills/verify-unresolved-pr-comments/SKILL.md) | Triage outstanding PR feedback without changing it |
-| [../skills/post-pr-review-comments/SKILL.md](../skills/post-pr-review-comments/SKILL.md) | Draft and edit PR comments in a pending review; never submit it |
+| [../skills/post-pr-review-comments/SKILL.md](../skills/post-pr-review-comments/SKILL.md) | Draft and edit PR comments; prefer pending reviews for new inline threads and post requested replies directly; never submit a review |
 | [../skills/write-pr-descriptions/SKILL.md](../skills/write-pr-descriptions/SKILL.md) | Write and edit human-focused PR titles and descriptions |
 | [../skills/review-triage-loop/SKILL.md](../skills/review-triage-loop/SKILL.md) | Repeated read-only review and evidence-based triage |
 | [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within limits |

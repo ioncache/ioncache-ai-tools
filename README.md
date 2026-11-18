@@ -102,7 +102,7 @@ defaults without a setup prompt.
 | `/ioncache-ai-tools:review-code` | Reviews code without applying fixes or posting comments | A file, directory, repository, branch, or PR; defaults to the active PR or branch changes |
 | `/ioncache-ai-tools:review-dependabot-pr` | Checks dependency updates against actual project usage; reports without changing the PR | The Dependabot, Renovate, or other dependency-update PR; a saved run directory when resuming |
 | `/ioncache-ai-tools:verify-unresolved-pr-comments` | Evaluates unresolved feedback and recommends fixes or responses; does not edit, post, resolve threads, or run tests | Invoke from the branch with the active PR |
-| `/ioncache-ai-tools:post-pr-review-comments` | Drafts or edits review comments; can add them to a pending review when explicitly requested; never submits the review | The PR, findings or comments, and whether to draft, edit, or post |
+| `/ioncache-ai-tools:post-pr-review-comments` | Drafts and edits review comments; prefers pending reviews for new inline threads and posts requested replies directly; never submits a review | The PR, findings or comments, and whether to draft, edit, reply, or post |
 | `/ioncache-ai-tools:write-pr-descriptions` | Drafts or edits a PR title and description | The PR or branch and the requested drafting or editing task |
 | `/ioncache-ai-tools:review-triage-loop` | Repeats read-only review and prioritizes findings without fixing them | An explicit target, optional round limit, or saved ledger |
 | `/ioncache-ai-tools:review-validate-fix-loop` | Reviews, validates findings, edits code, and re-reviews within limits | A target and optional loop limits, or saved ledger; defaults to active PR or branch changes |
