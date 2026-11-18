@@ -1,6 +1,6 @@
 ---
 name: post-pr-review-comments
-description: Turns verified review findings into brief, natural GitHub PR comments with enough context to act. Use when a human is driving a PR review and wants comments written up, added to a pending draft review, or edited, including authorised wording edits to submitted review comments; never submits the review.
+description: Turns verified review findings into brief, natural GitHub PR comments with enough context to act. Use when a human is driving a PR review and wants comments written up, added to a review, replied to in existing published threads, or edited, including authorised wording edits to submitted review comments; never submits the review.
 ---
 
 # PR Review Comment Process
@@ -120,10 +120,15 @@ never cite line references into other files.
 5. Before revising a rejected comment, explain whether its finding survives
    without the rejected claim; otherwise propose dropping it.
    Do not ask again for edits or removals already authorised.
-6. Posting requires an explicit request to post, not merely to draft or edit.
-   If posting is already authorised, presentation does not require another
-   approval. Follow the GitHub procedures, including approval to create a
-   pending review when none exists. Never submit the review.
+6. Follow the requested action. "Add comments to a review" normally means using
+   a pending review; this is the recommended method, not a prerequisite for
+   new inline comments. Honour requests to publish new comments directly.
+   "Reply" or "respond" to an existing published PR comment authorises posting
+   the response directly, without a pending review or another posting approval.
+   Requests to draft, edit, or suggest a response do not authorise posting.
+   Honour explicit instructions to keep a reply local or pending. Presentation
+   does not require another approval when posting is already authorised.
+   Follow the GitHub procedures. Never submit the review.
 
 ## What counts as a finding
 
@@ -183,14 +188,17 @@ authoritative tone.
 
 ## Anchoring
 
-Check the current diff. Anchor added/context lines inside a hunk, not removed-only
-lines, using `path:start-end` headings. Anchor the whole relevant prose construct
+For new inline threads, check the current diff. Anchor added/context lines inside
+a hunk, not removed-only lines, using `path:start-end` headings.
+Anchor the whole relevant prose construct
 unless one line is the subject. For cross-file findings, use where the change
 introduces the behaviour, not merely any available hunk.
 Never cite line references into other files.
 
-Without a valid anchor, retain `path (non-inline, unposted)` and ask how to proceed;
-do not invent an anchor or drop the finding. Keep independent fixes separate.
+Without a valid anchor for a new thread, retain `path (non-inline, unposted)` and
+ask how to proceed; do not invent an anchor or drop the finding.
+Replies use the existing thread's anchor; they do not need a new current-diff hunk.
+Keep independent fixes separate.
 Repeated findings may refer back but must explain their own connection and impact.
 Order by file in diff order then line, or by severity, never mixed.
 Do not renumber remaining comments after removal.
