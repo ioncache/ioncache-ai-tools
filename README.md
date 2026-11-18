@@ -263,14 +263,11 @@ for configuration examples.
 Hooks run without a skill invocation. Scope supplies guidance, not task
 approvals. Native host permissions still apply.
 
-A user question makes that turn answer-only for the agent that received it.
-Until the next non-question prompt, that agent can research with read-only
-tools but cannot make recognized edits, commits, or shell writes, create tasks,
-or launch, message, or stop workers. Other agents continue their work.
-Prompts a subagent receives from its parent are not treated as user questions,
-and host-started turns, such as worker hand-backs, end the question turn.
-The guard recognizes common operations, not every state change, and does not
-check the reply text. See
+Question guidance asks for direct answers without unrequested work. The
+answer-only tool guard requires verified user origin, which the current
+native integrations cannot establish. Unknown-origin prompts, including
+genuine questions, receive guidance without a tool fence. Worker reports and
+parent-written prompts must not suspend authorized work. See
 [docs/guardrails.md#question-turns](docs/guardrails.md#question-turns).
 
 Action checks block direct lockfile edits, broad process termination, and raw

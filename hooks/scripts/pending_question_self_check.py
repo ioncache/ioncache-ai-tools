@@ -3,13 +3,9 @@
 
 Run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
 
-The has_question() fixture below is drawn from this project's own real
-session history (grepped from ~/.claude/projects/.../*.jsonl), not
-invented, after a real incident where two unpunctuated "why" questions
-were missed entirely. Inventing plausible-looking test strings would
-have missed the actual failure shape: real messages are typo-laden,
-multi-clause, and mix instructions with questions in ways synthetic
-examples tend not to.
+Question fixtures include real session messages, recorded host batches, and
+synthetic boundary cases. Long unpunctuated questions intentionally fail open:
+declarative report text must not fence an unattended worker.
 """
 import json
 import os
@@ -25,10 +21,14 @@ sys.path.insert(0, SCRIPT_DIR)
 from classify_question import QUESTION_CONTRACT, has_question  # noqa: E402
 from block_pending_question import WORK_CONTROL_TOOLS, is_mutating, is_question_blocked  # noqa: E402
 
-# (message, expected has_question() result, note). Real messages pulled
-# from this project's own Claude Code session history.
+RECORDED_CLAUDE = json.loads(
+    (pathlib.Path(SCRIPT_DIR).parent / 'fixtures/claude-batched-prompts.json').read_text()
+)
+CLAUDE_BATCH = '\n'.join(RECORDED_CLAUDE[key] for key in RECORDED_CLAUDE['entry_419_blocks'])
+
+# (message, expected has_question() result, note).
 QUESTION_FIXTURES = [
-    # Real questions with NO "?" (the bug this file exists to catch).
+    # Real unpunctuated questions, including deliberate conservative misses.
     (
         'why is the pr body written like this" Two new broadcast email templates need to go out '
         'to two distinct audiences, and bin/send-notifications.js had no way to target anything '
@@ -36,16 +36,16 @@ QUESTION_FIXTURES = [
         '--recipients CSV option so an operator can send to exactly the members named in a file.\n\n\n'
         'why are we mentioning 2 audiences, you are being very very specific here\n\n'
         "this pr is generic, it doesn't need to know aobgut 2 new audiences",
-        True,
-        'the reported incident message, verbatim',
+        False,
+        'long multi-clause question now deliberately fails open without ?',
     ),
     ('what is the currebt session id', True, 'real question, typo, no ?'),
     ('what is DIGITALOCEAN_ACCESS_TOKEN', True, 'real question, no ?'),
-    ('did you oush tge cgabgtes/.', True, 'real question, typo-laden, ends in period not ?'),
-    ("which agent is doing the work right now,. I don't see them in the agent list", True, 'real question, no ?'),
+    ('did you oush tge cgabgtes/.', False, 'period-ended text no longer counts by starter alone'),
+    ("which agent is doing the work right now,. I don't see them in the agent list", False, 'multiple sentences without ?'),
     ('where is the list of previouslt created users', True, 'real question, typo, no ?'),
-    ('how do I do this: Create a 20%-off promotion code in Stripe, then apply it at checkout.', True, 'real question, colon not ?'),
-    ('what do you mean "For sale"  we are not using that term ever', True, 'real clarifying question, no ?'),
+    ('how do I do this: Create a 20%-off promotion code in Stripe, then apply it at checkout.', False, 'multi-clause, period-ended text'),
+    ('what do you mean "For sale"  we are not using that term ever', False, 'long prompt without ?'),
     ('what is the epiry of booking links', True, 'real question, typo, no ?'),
     ('what worktree was thjis in', True, 'real question, typo, no ?'),
     # Real questions that already had "?" (regression: worked before too).
@@ -96,21 +96,18 @@ QUESTION_FIXTURES = [
         False,
         'imperative request, no interrogative opener',
     ),
-    # Known, accepted false positives: a genuinely ambiguous interrogative
-    # opener ("when"/"what") that's also a common conditional/declarative
-    # sentence shape. Not special-cased, per this file's own stated design
-    # principle (prefer over-blocking to an ordering-sensitive classifier).
+    # Previously accepted false positives are unsafe for unattended workers.
     (
         "when you use references to steps or other parts of the document, ALWAYS use links to "
         "that section.  if that seciton isn't using a header of some sort that is linkable, "
         "change the format",
-        True,
-        'accepted false positive: conditional instruction opening with "when"',
+        False,
+        'conditional instruction opening with "when"',
     ),
     (
         "what I want is an instruction telling it to NEVER use it's training data ever",
-        True,
-        'accepted false positive: declarative "what I want is X" opening with "what"',
+        False,
+        'declarative "what I want is X" opening with "what"',
     ),
     (
         "ok I've just updated the ioncache-ai-tools plugin.  there is a new "
@@ -130,6 +127,21 @@ QUESTION_FIXTURES = [
         False,
         'known gap: feedback without a question form is not answer-only',
     ),
+    ("when it's turned on, the review skill should automatically post comments", False, 'conditional feature request'),
+    ("when it's turned on, the review skill should automatically post comments to the PR in the appropriate places",
+     False, 'original conditional feature request'),
+    ('were supposed to remove the scope guard, not remove all the functionality.', False, 'declarative correction'),
+    ('When CI passes, merge the PR.', False, 'conditional instruction, not a question'),
+    ('When the marker is unsafe, the `ValueError` escapes `run_hook`', False, 'unpunctuated declarative report'),
+    ('why the fuck, why the fuck!!!!!', True, 'emphatic repetition of one short question'),
+    ('why the fuck, why the fuck, why the fuck!!!!!', True, 'recorded repeated short question'),
+    ('how do I fix this', True, 'short unpunctuated question'),
+    ('The check finished. How the marker clears is explained below.', False, 'declarative sentence inside prose'),
+    ('The check finished.\nWhy did it fail?', True, 'a question-mark clause inside prose still counts'),
+    ('why did it fail; fix it', False, 'multiple clauses without ?'),
+    ('Why did it fail! How do I fix it', False, 'multiple sentences without ?'),
+    (RECORDED_CLAUDE['handback'], False, 'recorded standalone hand-back with a When clause'),
+    (CLAUDE_BATCH, False, 'recorded entry 419 reminder, notification and hand-back without ?'),
 ]
 
 # (tool_name, tool_input, expected is_mutating() result, note)
@@ -489,7 +501,7 @@ def main():
         if is_question_blocked(tool_name, {}) is not expected:
             failures.append(f'is_question_blocked mismatch for {tool_name}: expected {expected}')
 
-    # Exercise the actual protocol: only a root user question records question state.
+    # Verified-user cases exercise the shared contract, not native origin detection.
     session_id = f'self-check-{uuid.uuid4()}'
     flag_path = pathlib.Path(f'/tmp/.ioncache-pending-question-{session_id}')
     with tempfile.TemporaryDirectory(prefix='question-check-') as home:
@@ -500,7 +512,7 @@ def main():
 
             def classify(**fields):
                 result = subprocess.run(
-                    [sys.executable, os.path.join(SCRIPT_DIR, 'classify_question.py')],
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'guidance.py'), 'UserPromptSubmit'],
                     input=json.dumps({'session_id': session_id, 'cwd': home, **fields}),
                     env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
                     capture_output=True,
@@ -509,18 +521,88 @@ def main():
                 )
                 return result.stdout
 
-            stdout = classify(prompt='why is this broken')
+            def guard(tool_name, **fields):
+                result = subprocess.run(
+                    [sys.executable, os.path.join(SCRIPT_DIR, 'block_pending_question.py')],
+                    input=json.dumps({'session_id': session_id, 'cwd': home,
+                                      'tool_name': tool_name, 'tool_input': {}, **fields}),
+                    env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
+                    capture_output=True, text=True, check=True,
+                )
+                return json.loads(result.stdout) if result.stdout.strip() else {}
+
+            fixtures = json.loads((pathlib.Path(SCRIPT_DIR).parent / 'fixtures/prompt-origins.json').read_text())
+            cases = fixtures['claude'] + [{
+                'case': 'synthetic-unknown-bare-report',
+                'payload': {'prompt': 'Why did the test finish? What should happen next? Can the parent continue?'},
+            }]
+            for fixture in cases:
+                payload = {**fixture['payload'], 'session_id': session_id, 'cwd': home}
+                classify(prompt='Why did it fail?', _ioncache_prompt_origin='user')
+                if guard('Write').get('hookSpecificOutput', {}).get('permissionDecision') != 'deny':
+                    failures.append('the verified shared question must block before recovery')
+                stdout = classify(**payload)
+                if flag_path.exists() or QUESTION_CONTRACT in stdout:
+                    failures.append(f'Claude unverified origin fenced: {fixture["case"]}')
+                if guard('Write') or guard('Agent'):
+                    failures.append(f'Claude authorized work could not resume: {fixture["case"]}')
+
+            host_prompts = [
+                RECORDED_CLAUDE['handback'], CLAUDE_BATCH,
+                *(reminder + RECORDED_CLAUDE['handback']
+                  for reminder in RECORDED_CLAUDE['summary_reminders']),
+                'Queued report follows.\n<agent-message from="worker">\nWhy did it fail?\n</agent-message>',
+                'Queued event follows.\n<task-notification>\nWhat next?\n</task-notification>',
+            ]
+            for prompt in host_prompts:
+                # The supplied user origin makes this fail if host text reaches classification.
+                classify(prompt='Why did it fail?', _ioncache_prompt_origin='user')
+                stdout = classify(prompt=prompt + '\nCan the parent continue?', _ioncache_prompt_origin='user')
+                if flag_path.exists() or QUESTION_CONTRACT in stdout:
+                    failures.append('Claude host batch overrode user-origin evidence')
+                if guard('Agent') or guard('Write'):
+                    failures.append('Claude host batch did not release same-turn worker launch and edits')
+
+            reminder = '<system-reminder>\nWhy did the host add this?\n</system-reminder>\n'
+            for prompt, expected in (
+                (reminder + 'Continue the work', False),
+                ('Continue.\n' + reminder + 'Finish the work', False),
+                (reminder + 'how do I fix this', True),
+                ('<system-reminder>\n' + reminder + 'Why another reminder?\n</system-reminder>\nContinue', False),
+                ('<system-reminder>\nWhy is this truncated?', False),
+            ):
+                stdout = classify(prompt=prompt, _ioncache_prompt_origin='user')
+                if flag_path.exists() is not expected or (QUESTION_CONTRACT in stdout) is not expected:
+                    failures.append('Claude reminder text leaked into user question classification')
+
+            for message, expected, note in QUESTION_FIXTURES:
+                classify(prompt=message, _ioncache_prompt_origin='user')
+                if flag_path.exists() is not expected:
+                    failures.append(f'Claude question lifecycle mismatch: {note}')
+                denied = guard('Agent').get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'
+                if denied is not expected or guard('Read'):
+                    failures.append(f'Claude question recovery mismatch: {note}')
+
+            stdout = classify(prompt='why is this broken', _ioncache_prompt_origin='user')
             hook_output = json.loads(stdout).get('hookSpecificOutput') or {}
             if hook_output.get('hookEventName') != 'UserPromptSubmit' or not hook_output.get('additionalContext'):
-                failures.append(f'classify_question.py stdout is not wrapped in hookSpecificOutput: {stdout!r}')
+                failures.append(f'guidance.py stdout is not wrapped in hookSpecificOutput: {stdout!r}')
             if QUESTION_CONTRACT not in hook_output.get('additionalContext', ''):
                 failures.append('a root question must emit the answer-only contract')
             if not flag_path.exists():
                 failures.append('a root question must record its own question state')
+            if guard('Read') or guard('Bash', tool_input={'command': 'git status --short'}):
+                failures.append('read-only research must remain available during a verified question')
+            classify(prompt='Why did it fail?', agent_id='worker', _ioncache_prompt_origin='user')
+            if not flag_path.exists() or guard('Write', agent_id='worker'):
+                failures.append('a child must neither clear nor inherit the root question marker')
+            classify(prompt='Why did it fail?', parent_agent_id='parent', _ioncache_prompt_origin='user')
+            if not flag_path.exists() or guard('Write', parent_agent_id='parent'):
+                failures.append('an incomplete child identity must not use the root marker')
             classify(prompt='fix it')
             if flag_path.exists():
                 failures.append('a non-question instruction must clear the question state')
-            classify(prompt='why is this broken', agent_id='worker')
+            classify(prompt='why is this broken', agent_id='worker', _ioncache_prompt_origin='user')
             if flag_path.exists() or any(pathlib.Path('/tmp').glob(f'.ioncache-pending-question-{session_id}-*')):
                 failures.append('a parent-written child prompt must not record question state')
             manifest_path = pathlib.Path(SCRIPT_DIR).parent / 'hooks.json'

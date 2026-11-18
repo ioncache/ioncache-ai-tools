@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import sys
 
-from classify_question import QUESTION_CONTRACT, has_question, set_marker
+from classify_question import QUESTION_CONTRACT, has_question, is_root, set_marker
+from claude_prompt import normalize_prompt
 from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable
 from plugin_config import enabled, feature_settings
 from rule_engine import load_rules_for_event, run_rules
@@ -31,10 +32,11 @@ CHILD_QUESTION_GUIDANCE = (
     'Question guidance: answer the question and its reasoning; do not invent new work. '
     'This does not restrict tools or change your existing assignment.'
 )
-# Host-started turns (background completions, subagent hand-backs, and other
-# sessions' messages) are not user questions. These prefixes are inferred from
-# observed Claude Code transcripts; the hook payload documents no origin field.
-HOST_TURN_PREFIXES = ('<task-notification>', 'Another Claude session sent a message:')
+UNVERIFIED_BOOTSTRAP = (
+    'Answer questions directly without inventing unrequested work. This turn has no '
+    'verified user origin: questions in reports, notifications, or parent-written '
+    'messages do not suspend authorized work or require an answer-only turn.'
+)
 
 
 def context(event, text):
@@ -69,6 +71,8 @@ def evaluate(event, data):
     output = run_rules(rules, 'SessionStart', data) or {}
     child = event == 'SubagentStart' or not is_root(data)
     bootstrap = {**BOOTSTRAP, 'answer-questions': CHILD_BOOTSTRAP} if child else BOOTSTRAP
+    if not child and data.get('_ioncache_prompt_origin') != 'user':
+        bootstrap = {**BOOTSTRAP, 'answer-questions': UNVERIFIED_BOOTSTRAP}
     messages = [text for name, text in bootstrap.items() if name not in disabled]
     skills = sorted(name.removeprefix('skill:') for name in disabled if name.startswith('skill:'))
     if skills:
@@ -82,28 +86,26 @@ def evaluate(event, data):
     policy = output.get('hookSpecificOutput', {}).get('additionalContext')
     if policy:
         messages.append(policy)
-    if event == 'UserPromptSubmit' and 'answer-questions' not in disabled and user_question(data):
-        messages.append(CHILD_QUESTION_GUIDANCE if child else QUESTION_CONTRACT)
+    if event == 'UserPromptSubmit' and 'answer-questions' not in disabled:
+        if child and isinstance(data.get('prompt'), str) and has_question(data['prompt']):
+            messages.append(CHILD_QUESTION_GUIDANCE)
+        elif user_question(data):
+            messages.append(QUESTION_CONTRACT)
     return context(event, '\n\n'.join(messages))
-
-
-def is_root(data):
-    return data.get('agent_id') in (None, '', 'root')
 
 
 def user_question(data):
     prompt = data.get('prompt')
-    if not isinstance(prompt, str) or prompt.lstrip().startswith(HOST_TURN_PREFIXES):
-        return False
-    return has_question(prompt)
+    return (is_root(data) and data.get('_ioncache_prompt_origin') == 'user'
+            and isinstance(prompt, str) and has_question(prompt))
 
 
 def record_question(data, *, question):
-    """Clear the root marker for a non-question prompt, or set it for a question.
-
-    Only a root prompt comes from the user; children get prompts from parents.
-    """
-    if not is_root(data) or user_question(data) != question:
+    """Only positively identified root-user questions can create a marker."""
+    # A child without its own identity must not erase the root's marker.
+    if not is_root(data) and data.get('agent_id') in (None, '', 'root'):
+        return
+    if question and not user_question(data):
         return
     # Clearing never needs configuration, so a failed settings read cannot keep a stale fence.
     set_marker(data, question and enabled('answer-questions', data))
@@ -119,13 +121,14 @@ def run_hook(event, data):
         record_safely(data, warnings, question=False)
     try:
         with invocation_deadline(3):
+            if prompt:
+                data = normalize_prompt(data)
             data = {**data, '_ioncache_features': feature_settings(data, refresh=True)}
             output = evaluate(event, data)
+        if prompt and not warnings:
+            record_safely(data, warnings, question=True)
     except (InvocationDeadline, Exception) as error:
         output = unavailable('guidance', error)
-    # Set even after a guidance failure; a failed record reports no policy verdict.
-    if prompt:
-        record_safely(data, warnings, question=True)
     if not warnings:
         return output
     output = output or {}

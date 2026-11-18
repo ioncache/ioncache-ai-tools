@@ -1,0 +1,102 @@
+{
+  "capture": {
+    "date": "2026-11-17",
+    "platform": "macOS",
+    "notes": "Live command-hook stdin from isolated CLI runs. Session, prompt, task and tool identifiers and filesystem paths are redacted. These payloads contain no verified user-origin signal. Missing events are not fabricated fixtures.",
+    "versions": {
+      "claude": "2.1.326",
+      "copilot": "1.0.113-1",
+      "codex": "0.163.0"
+    }
+  },
+  "claude": [
+    {
+      "case": "root-question",
+      "payload": {
+        "session_id": "capture-session",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "prompt_id": "capture-prompt",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "What is two plus two?"
+      }
+    },
+    {
+      "case": "root-instruction",
+      "payload": {
+        "session_id": "capture-session",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "prompt_id": "capture-prompt",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "This is a bounded hook-payload test in an empty directory. Launch exactly one background subagent with the Agent tool. Its entire assignment is to return the literal report \"Why did the test finish? What should happen next? Can the parent continue?\" without any tools. Launch one background Bash command: sleep 2; printf \"Why did the task finish? Can work resume?\". Wait for both background completions by sleeping five seconds once if needed, then summarize their reports. Do not edit files, inspect any project, launch other work, or contact any existing session."
+      }
+    },
+    {
+      "case": "subagent-handback",
+      "payload": {
+        "session_id": "capture-session",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "prompt_id": "capture-prompt",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<task-notification>\n<task-id>capture-task</task-id>\n<tool-use-id>capture-tool</tool-use-id>\n<output-file>/capture/task.output</output-file>\n<status>completed</status>\n<summary>Agent \"Return literal test report\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>Why did the test finish? What should happen next? Can the parent continue?</result>\n<usage><subagent_tokens>4998</subagent_tokens><tool_uses>0</tool_uses><duration_ms>997</duration_ms></usage>\n</task-notification>"
+      }
+    },
+    {
+      "case": "task-notification",
+      "payload": {
+        "session_id": "capture-session",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "prompt_id": "capture-prompt",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "<task-notification>\n<task-id>capture-task</task-id>\n<tool-use-id>capture-tool</tool-use-id>\n<output-file>/capture/task.output</output-file>\n<status>completed</status>\n<summary>Background command \"Sleep briefly then print test string\" completed (exit code 0)</summary>\n</task-notification>"
+      }
+    }
+  ],
+  "copilot": [
+    {
+      "case": "root-question",
+      "payload": {
+        "sessionId": "capture-session",
+        "timestamp": 1794942717270,
+        "cwd": "/capture/project",
+        "prompt": "What is two plus two? Answer without tools.",
+        "transformedPrompt": "<current_datetime>2026-11-17T14:11:57.269-05:00</current_datetime>\n\nWhat is two plus two? Answer without tools."
+      }
+    }
+  ],
+  "codex": [
+    {
+      "case": "root-question",
+      "payload": {
+        "session_id": "capture-session",
+        "turn_id": "capture-turn",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "hook_event_name": "UserPromptSubmit",
+        "model": "gpt-6.1-terra",
+        "permission_mode": "bypassPermissions",
+        "prompt": "What is two plus two? Answer without tools."
+      }
+    },
+    {
+      "case": "root-instruction",
+      "payload": {
+        "session_id": "capture-session",
+        "turn_id": "capture-turn",
+        "transcript_path": "/capture/transcript.jsonl",
+        "cwd": "/capture/project",
+        "hook_event_name": "UserPromptSubmit",
+        "model": "gpt-6.1-terra",
+        "permission_mode": "bypassPermissions",
+        "prompt": "This is a bounded hook-payload test in an empty directory. Launch exactly one subagent. Its entire assignment is to return the literal report \"Why did the test finish? What should happen next? Can the parent continue?\" without any tools. Run one shell command: sleep 2; printf \"Why did the task finish? Can work resume?\". Wait for the worker result, then summarize. Do not edit files, inspect any project, launch other work, or contact any existing session."
+      }
+    }
+  ]
+}

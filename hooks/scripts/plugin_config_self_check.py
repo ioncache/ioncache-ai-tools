@@ -39,7 +39,8 @@ class ConfigurationTests(unittest.TestCase):
         })
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.data = {'cwd': str(self.project), 'session_id': f'config-check-{uuid.uuid4()}'}
+        self.data = {'cwd': str(self.project), 'session_id': f'config-check-{uuid.uuid4()}',
+                     '_ioncache_prompt_origin': 'user'}
         self.addCleanup(lambda: marker_path(self.data).unlink(missing_ok=True))
 
     def write(self, path, value):
@@ -90,6 +91,20 @@ class ConfigurationTests(unittest.TestCase):
         output = guidance.run_hook('SubagentStart', self.data)
         self.assertNotIn('Assigned review workers and validators', str(output))
         self.assertIn('documentation-backed', str(output))
+
+    def test_failed_guidance_cannot_recreate_a_verified_question_marker(self):
+        data = {**self.data, 'prompt': 'Why did this change?'}
+        guidance.run_hook('UserPromptSubmit', data)
+        self.assertTrue(marker_path(data).exists())
+        with mock.patch.object(guidance, 'evaluate', side_effect=OSError('guidance unavailable')), \
+                mock.patch.object(sys, 'stderr', io.StringIO()):
+            output = guidance.run_hook('UserPromptSubmit', data)
+        self.assertIn('guidance checks unavailable', output['systemMessage'])
+        self.assertNotIn('Question turn:', str(output))
+        self.assertFalse(marker_path(data).exists())
+        self.assertIsNone(block_pending_question.run_hook({
+            **self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'report.txt', 'content': 'continued'},
+        }))
 
     def test_install_update_adds_preserves_and_removes_settings(self):
         path = self.root / 'config.json'
@@ -446,7 +461,9 @@ class ConfigurationTests(unittest.TestCase):
         delegate = {**self.data, 'tool_name': 'Agent', 'tool_input': {'prompt': 'Run the next worker'}}
         for notice in notices:
             with self.subTest(notice=notice.split('\n')[0]):
-                output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': notice})
+                output = guidance.run_hook('UserPromptSubmit', {
+                    **self.data, '_ioncache_prompt_origin': 'unknown', 'prompt': notice,
+                })
                 self.assertNotIn('Question turn:', str(output))
                 self.assertFalse(marker_path(self.data).exists())
                 self.assertEqual(run_shared_hooks('PreToolUse', write), [])
@@ -455,7 +472,9 @@ class ConfigurationTests(unittest.TestCase):
                 denied = run_shared_hooks('PreToolUse', delegate)
                 self.assertEqual(denied[0]['hookSpecificOutput']['permissionDecision'], 'deny')
                 # The host-started turn ends the question turn, so orchestration can resume.
-                guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': notice})
+                guidance.run_hook('UserPromptSubmit', {
+                    **self.data, '_ioncache_prompt_origin': 'unknown', 'prompt': notice,
+                })
                 self.assertFalse(marker_path(self.data).exists())
                 self.assertEqual(run_shared_hooks('PreToolUse', delegate), [])
 

@@ -17,8 +17,10 @@ import uuid
 import copilot_adapter
 import copilot_history
 import docs_cache
+import guidance
 import hook_adapter_common
 from classify_question import marker_path
+from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,12 +76,90 @@ class CopilotAdapterTests(unittest.TestCase):
     def prompt(self, prompt):
         return self.invoke('userPromptTransformed', prompt=prompt, transformedPrompt='expanded prompt')[0]
 
+    def verified_question(self, prompt):
+        # This exercises the shared contract, not an origin signal supplied by Copilot.
+        return guidance.run_hook('UserPromptSubmit', {
+            **copilot_adapter.shared_input(self.payload),
+            '_ioncache_prompt_origin': 'user', 'prompt': prompt,
+        })
+
     def tool(self, name, args):
         return self.invoke('preToolUse', toolName=name, toolArgs=args)[0]
 
     def write_config(self, path, config):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config))
+
+    def test_unverified_prompt_origins_release_existing_question_state(self):
+        fixtures = json.loads((ROOT / 'hooks/fixtures/prompt-origins.json').read_text())['copilot']
+        prompts = [item['payload'] for item in fixtures]
+        report = 'Why did the test finish? What should happen next? Can the parent continue?'
+        prompts += [
+            {'prompt': report, 'transformedPrompt': report},
+            {'prompt': report, 'transformedPrompt': '<system_notification>' + report + '</system_notification>'},
+            {'prompt': report, 'transformedPrompt': report, '_ioncache_prompt_origin': 'user'},
+        ]
+        for payload in prompts:
+            with self.subTest(payload=payload):
+                fields = {**payload, 'sessionId': self.payload['sessionId'], 'cwd': str(self.project)}
+                self.marker.write_text('')
+                output, _ = self.invoke('userPromptTransformed', **fields)
+                self.assertFalse(self.marker.exists())
+                self.assertNotIn('Question turn:', str(output))
+                self.assertNotIn('do not decide or implement next steps', str(output))
+                self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
+                self.assertEqual(self.tool('task', {'prompt': 'Continue the assigned work'}), {})
+                self.assertEqual(self.tool('bash', {'command': 'git status --short'}), {})
+        command = 'printf continued > resumed.txt'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+        self.assertEqual((self.project / 'resumed.txt').read_text(), 'continued')
+
+    def test_incomplete_child_identity_cannot_clear_or_inherit_root_marker(self):
+        self.verified_question('Why did this change?')
+        output, _ = self.invoke('userPromptTransformed', parentAgentId='parent',
+                                prompt='Why did this change?', transformedPrompt='Why did this change?')
+        self.assertNotIn('Question turn:', str(output))
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.invoke('preToolUse', parentAgentId='parent', toolName='create',
+                                     toolArgs={'path': 'child.txt', 'file_text': 'continued'})[0], {})
+        self.assertEqual(self.tool('create', {'path': 'root.txt', 'file_text': 'blocked'})['permissionDecision'],
+                         'deny')
+
+    def test_question_classifier_and_foreign_host_batches(self):
+        for prompt, expected, note in QUESTION_FIXTURES:
+            with self.subTest(case=note):
+                self.verified_question(prompt)
+                self.assertEqual(self.marker.exists(), expected)
+                self.assertEqual(self.tool('task', {'prompt': 'Continue the work'}).get('permissionDecision'),
+                                 'deny' if expected else None)
+                self.assertEqual(self.tool('view', {'path': 'report.txt'}), {})
+        # Claude transcript replays are unknown input here, not captured Copilot formats.
+        for report in (RECORDED_CLAUDE['handback'], CLAUDE_BATCH):
+            with self.subTest(report=report[:50]):
+                self.verified_question('Why did it fail?')
+                self.prompt(report + '\nCan the parent continue?')
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(self.tool('task', {'prompt': 'Continue the work'}), {})
+                self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
+
+    def test_prompt_origin_recovery_survives_settings_and_marker_failures(self):
+        self.verified_question('Why did this change?')
+        settings = self.home / '.claude/ioncache-ai-tools.local.json'
+        settings.write_text('{bad')
+        output, stderr = self.invoke('userPromptTransformed', prompt='Why did the worker finish?',
+                                      transformedPrompt='Why did the worker finish?')
+        self.assertIn('features paused', stderr)
+        self.assertFalse(self.marker.exists())
+        self.assertNotIn('Question turn:', str(output))
+        self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
+        self.write_config(settings, {'features': {}})
+        self.marker.symlink_to(self.project / 'unavailable-marker')
+        self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
+        self.assertTrue(any('pending-question checks unavailable' in item for item in self.progress))
+        self.prompt('Continue the assignment')
+        self.assertEqual(self.tool('task', {'prompt': 'Continue the assignment'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def test_root_question_blocks_only_root_and_children_continue(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
@@ -98,7 +178,7 @@ class CopilotAdapterTests(unittest.TestCase):
             # Parent-written assignments are not user questions, even when phrased as one.
             self.invoke('userPromptTransformed', **worker,
                         prompt='What have you found?', transformedPrompt='What have you found?')
-        self.prompt('What have you found?')
+        self.verified_question('What have you found?')
         self.assertTrue(self.marker.exists())
         for event in ('preCompact', 'sessionStart'):
             self.invoke(event, **root, source='resume')
@@ -288,7 +368,7 @@ class CopilotAdapterTests(unittest.TestCase):
         path = self.write_events(self.completion_events('The requested work is complete.'))
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path))[0], {})
         self.assertFalse(capture.exists())
-        self.prompt('Why did that change?')
+        self.verified_question('Why did that change?')
         self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
         self.assertEqual(self.tool('view', {'path': 'source.py'}), {})
         self.prompt('Commit the requested fix')
@@ -297,12 +377,19 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertFalse(capture.exists())
 
 
-    def test_adapter_deadline_includes_configuration_before_shared_hooks(self):
+    def test_adapter_deadline_interrupts_prompt_hooks(self):
+        def slow_hooks(*_):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(1)
+            return []
+
         self.prompt('Implement the requested file')
         question = {**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'}
         with (
-            mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
-            mock.patch.object(copilot_adapter, 'synchronize', side_effect=lambda *_: time.sleep(1)),
+            mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 5),
+            mock.patch.object(copilot_adapter, 'invocation_deadline',
+                              wraps=copilot_adapter.invocation_deadline) as deadline,
+            mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=slow_hooks) as delayed_hooks,
             mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
             mock.patch.object(sys, 'stderr', io.StringIO()),
         ):
@@ -310,6 +397,8 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIsNone(copilot_adapter.run_hook('userPromptTransformed', question))
             self.assertLess(time.monotonic() - started, 0.5)
         self.assertIn('invocation deadline', notices.getvalue())
+        deadline.assert_called_once_with(5)
+        delayed_hooks.assert_called_once()
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
     def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
@@ -513,7 +602,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertIn('documentation-backed', self.prompt('Continue')['modifiedTransformedPrompt'])
 
     def test_stop_does_not_retry_visible_text_or_clear_question_state(self):
-        self.prompt('Why is this different?')
+        self.verified_question('Why is this different?')
         path = self.write_events(self.transcript_events(f'Bad{EM_DASH}punctuation.'))
         output = self.invoke('agentStop', transcriptPath=str(path))[0]
         self.assertEqual(output, {})

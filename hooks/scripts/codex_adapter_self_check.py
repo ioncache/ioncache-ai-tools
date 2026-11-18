@@ -21,6 +21,7 @@ import codex_adapter
 import docs_cache
 import guidance
 import hook_adapter_common
+from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,12 +96,87 @@ class CodexAdapterTests(unittest.TestCase):
             for output in outputs
         )
 
+    def verified_question(self, prompt):
+        # This exercises the shared contract, not an origin signal supplied by Codex.
+        return guidance.run_hook('UserPromptSubmit', {
+            **self.payload, '_ioncache_harness': 'codex',
+            '_ioncache_prompt_origin': 'user', 'prompt': prompt,
+        })
+
     def tool(self, name, args):
         outputs = self.invoke('PreToolUse', tool_name=name, tool_input=args)
         return next((
             output['hookSpecificOutput'] for output in outputs
             if output.get('hookSpecificOutput', {}).get('permissionDecision') == 'deny'
         ), {})
+
+    def test_unverified_prompt_origins_release_existing_question_state(self):
+        fixtures = json.loads((ROOT / 'hooks/fixtures/prompt-origins.json').read_text())['codex']
+        prompts = [item['payload'] for item in fixtures]
+        report = 'Why did the test finish? What should happen next? Can the parent continue?'
+        prompts += [
+            {'prompt': report},
+            {'prompt': '<task-notification>' + report + '</task-notification>'},
+            {'prompt': report, '_ioncache_prompt_origin': 'user'},
+        ]
+        for payload in prompts:
+            with self.subTest(payload=payload):
+                fields = {**payload, 'session_id': self.payload['session_id'], 'cwd': str(self.project)}
+                fields.pop('hook_event_name', None)
+                self.marker.write_text('')
+                output = self.invoke('UserPromptSubmit', **fields)
+                self.assertFalse(self.marker.exists())
+                self.assertNotIn('Question turn:', str(output))
+                self.assertNotIn('do not decide or implement next steps', str(output))
+                self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+                self.assertEqual(self.tool('spawn_agent', {'message': 'Continue the assigned work'}), {})
+                self.assertEqual(self.tool('Bash', {'command': 'git status --short'}), {})
+        command = 'printf continued > resumed.txt'
+        self.assertEqual(self.tool('Bash', {'command': command}), {})
+        subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+        self.assertEqual((self.project / 'resumed.txt').read_text(), 'continued')
+
+    def test_incomplete_child_identity_cannot_clear_or_inherit_root_marker(self):
+        self.verified_question('Why did this change?')
+        output = self.invoke('UserPromptSubmit', parent_agent_id='parent', prompt='Why did this change?')
+        self.assertNotIn('Question turn:', str(output))
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.invoke('PreToolUse', parent_agent_id='parent', tool_name='apply_patch',
+                                     tool_input={'command': CLEAN_PATCH}), [{}])
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH})['permissionDecision'], 'deny')
+
+    def test_question_classifier_and_foreign_host_batches(self):
+        for prompt, expected, note in QUESTION_FIXTURES:
+            with self.subTest(case=note):
+                self.verified_question(prompt)
+                self.assertEqual(self.marker.exists(), expected)
+                self.assertEqual(self.tool('spawn_agent', {'message': 'Continue the work'}).get('permissionDecision'),
+                                 'deny' if expected else None)
+                self.assertEqual(self.tool('Bash', {'command': 'git status --short'}), {})
+        # Claude transcript replays are unknown input here, not captured Codex formats.
+        for report in (RECORDED_CLAUDE['handback'], CLAUDE_BATCH):
+            with self.subTest(report=report[:50]):
+                self.verified_question('Why did it fail?')
+                self.prompt(report + '\nCan the parent continue?')
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(self.tool('spawn_agent', {'message': 'Continue the work'}), {})
+                self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+
+    def test_prompt_origin_recovery_survives_settings_and_marker_failures(self):
+        self.verified_question('Why did this change?')
+        settings = self.home / '.claude/ioncache-ai-tools.local.json'
+        settings.write_text('{bad')
+        self.assertNotIn('Question turn:', self.prompt('Why did the worker finish?'))
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
+        settings.write_text('{"features": {}}')
+        self.marker.symlink_to(self.project / 'unavailable-marker')
+        output, = self.invoke('PreToolUse', tool_name='apply_patch', tool_input={'command': CLEAN_PATCH})
+        self.assertIn('pending-question checks unavailable', output['systemMessage'])
+        self.assertNotIn('permissionDecision', str(output))
+        self.prompt('Continue the assignment')
+        self.assertEqual(self.tool('spawn_agent', {'message': 'Continue the assignment'}), {})
+        self.assertEqual(self.tool('Bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def test_root_question_blocks_only_root_and_children_continue(self):
         (self.home / '.claude/ioncache-ai-tools.local.json').write_text('{"features": {}}')
@@ -111,7 +187,7 @@ class CodexAdapterTests(unittest.TestCase):
         for worker in ('first', 'second'):
             # Parent-written assignments are not user questions, even when phrased as one.
             self.invoke('UserPromptSubmit', agent_id=worker, prompt='Why did that change?')
-        self.prompt('Why did that change?')
+        self.verified_question('Why did that change?')
         for event, source in (('PreCompact', None), ('SessionStart', 'compact'), ('SessionStart', 'resume')):
             self.invoke(event, source=source)
             denied = self.tool('apply_patch', {'command': CLEAN_PATCH})
@@ -153,7 +229,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_lifecycle_and_stop_preserve_question_state_until_next_instruction(self):
         self.assertIn('documentation-backed', str(self.invoke('SessionStart', source='startup')))
-        self.assertEqual(self.prompt('Why does this happen?').count('Question turn:'), 1)
+        self.assertIn('Question turn:', str(self.verified_question('Why does this happen?')))
         output = self.invoke('Stop', last_assistant_message=f'Bad{EM_DASH}punctuation.')[0]
         self.assertEqual(output, {})
         self.assertTrue(self.marker.exists())
@@ -181,7 +257,7 @@ class CodexAdapterTests(unittest.TestCase):
         data = {**self.payload, 'prompt': 'Implement the revised change'}
         with (
             mock.patch.object(codex_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
-            mock.patch.object(codex_adapter, 'synchronize', side_effect=lambda *_: time.sleep(1)),
+            mock.patch.object(codex_adapter, 'run_shared_hooks', side_effect=lambda *_: time.sleep(1)),
             mock.patch.object(sys, 'argv', ['codex_adapter.py', 'UserPromptSubmit']),
             mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(data))),
             mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
@@ -309,9 +385,11 @@ class CodexAdapterTests(unittest.TestCase):
                                      tool_response=''), [{}])
 
     def test_prompt_order_survives_concurrent_host_dispatch(self):
-        text = self.prompt('why is this different')
-        self.assertIn('Question turn:', text)
+        self.verified_question('Why is this different?')
         self.assertTrue(self.marker.exists())
+        text = self.prompt('why is this different')
+        self.assertNotIn('Question turn:', text)
+        self.assertFalse(self.marker.exists())
         self.assertNotIn('Question turn:', self.prompt('Implement the change'))
         self.assertFalse(self.marker.exists())
 
