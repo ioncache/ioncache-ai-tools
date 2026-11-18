@@ -15,16 +15,39 @@ SKILLS = ("review-code", "review-validate-fix-loop")
 REVIEW_FIELDS = ("model_selection", "fallback", "strategy") + tuple(
     f"{role}_{setting}" for role in ROLES for setting in ("model", "effort")
 )
+# Posting is a review-code caller action, not a review choice: these fields are
+# never forwarded to review phases or saved for loop resume like REVIEW_FIELDS.
+POSTING_FIELDS = ("post_comments", "post_sensitive")
+SENSITIVE_POLICIES = ("none", "private", "all")
+POSTING_FEATURE = "review-post-comments"
+NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE)
+
+
+class PostingConflict(ValueError):
+    """Posting arguments that conflict after flags and choices are merged."""
+
+
+def record_once(parser, namespace, dest, option_string):
+    specified = set(getattr(namespace, "specified", ()))
+    if dest in specified:
+        parser.error(f"{option_string} may only be supplied once")
+    specified.add(dest)
+    namespace.specified = sorted(specified)
 
 
 class Once(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        specified = set(getattr(namespace, "specified", ()))
-        if self.dest in specified:
-            parser.error(f"{option_string} may only be supplied once")
-        specified.add(self.dest)
-        namespace.specified = sorted(specified)
+        record_once(parser, namespace, self.dest, option_string)
         setattr(namespace, self.dest, values)
+
+
+class OnceFlag(argparse.Action):
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, default=False, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        record_once(parser, namespace, self.dest, option_string)
+        setattr(namespace, self.dest, True)
 
 
 def nonempty(value):
@@ -61,6 +84,12 @@ def parser_for(skill):
                             help=f"explicit {role} model; omitted roles use the selection policy")
         parser.add_argument(f"--{role}-effort", type=nonempty, action=Once, metavar="LEVEL",
                             help=f"explicit {role} effort; validate against the native host/model")
+    if skill == "review-code":
+        parser.add_argument("--post-comments", action=OnceFlag,
+                            help="publish reportable findings as one COMMENT review on the reviewed PR")
+        parser.add_argument("--post-sensitive", choices=SENSITIVE_POLICIES, default="private", action=Once,
+                            help="sensitive findings: none, private (default: on public repositories, only those "
+                                 "this pull request introduces), or all")
     if skill == "review-validate-fix-loop":
         parser.add_argument("--max-loops", type=positive, default=3, action=Once,
                             help="outer review limit (default: 3)")
@@ -84,9 +113,22 @@ def parse_options(skill, argv):
         "specified": specified, "resume": getattr(args, "resume", None),
         "max_loops": None if getattr(args, "resume", None) else getattr(args, "max_loops", None),
         "max_fix_cycles": None if getattr(args, "resume", None) else getattr(args, "max_fix_cycles", None),
-        "option_sources": {name: "invocation" if name in specified else "default" for name in REVIEW_FIELDS},
+        "option_sources": {name: "invocation" if name in specified else "default"
+                           for name in REVIEW_FIELDS + posting_fields(skill)},
     }
+    options.update({name: getattr(args, name) for name in posting_fields(skill)})
     return apply_values(options, {name: getattr(args, name) for name in REVIEW_FIELDS})
+
+
+def posting_fields(skill):
+    return POSTING_FIELDS if skill == "review-code" else ()
+
+
+def validate_posting_choice(name, value):
+    if name == "post_comments" and type(value) is not bool:
+        raise ValueError("expected true or false for post_comments")
+    if name == "post_sensitive" and value not in SENSITIVE_POLICIES:
+        raise ValueError(f"expected one of {', '.join(SENSITIVE_POLICIES)} for post_sensitive")
 
 
 def apply_values(options, values):
@@ -129,6 +171,7 @@ def merge_context(options, context):
     if options["resume"] and "saved" not in context:
         raise ValueError("resume needs --context with saved review options, or saved: null for an older run")
     values, sources = review_values(options), dict(options["option_sources"])
+    posting = {name: options[name] for name in posting_fields(options["skill"])}
     saved = context.get("saved")
     if saved is not None:
         if not options["resume"] or not isinstance(saved, dict) or saved.get("skill") != options["skill"]:
@@ -150,14 +193,24 @@ def merge_context(options, context):
         if not isinstance(choice["source"], str):
             raise ValueError(f"choice {name} source must be a nonempty string")
         nonempty(choice["source"])
-        validate_values(options["skill"], {name: choice["value"]})
-        values[name], sources[name] = choice["value"], choice["source"]
+        if name in posting_fields(options["skill"]):
+            validate_posting_choice(name, choice["value"])
+            posting[name] = choice["value"]
+        else:
+            validate_values(options["skill"], {name: choice["value"]})
+            values[name] = choice["value"]
+        sources[name] = choice["source"]
     for name in set(options["specified"]).intersection(REVIEW_FIELDS):
         values[name], sources[name] = review_values(options)[name], "invocation"
+    for name in set(options["specified"]).intersection(posting):
+        posting[name], sources[name] = options[name], "invocation"
+    if posting and not posting["post_comments"] and sources["post_sensitive"] != "default":
+        raise PostingConflict("--post-sensitive needs --post-comments or an explicit post_comments choice")
     limitations = ["Prior review options unavailable; using defaults and current explicit choices."] if (
         options["resume"] and saved is None
     ) else []
-    return apply_values({**options, "option_sources": sources, "option_limitations": limitations}, values)
+    return apply_values({**options, **posting, "option_sources": sources,
+                         "option_limitations": limitations}, values)
 
 
 def read_configuration(skill):
@@ -170,8 +223,9 @@ def read_configuration(skill):
         "auto_selection_enabled": (
             "review-auto-model-selection" in catalog and "review-auto-model-selection" not in disabled
         ),
+        "post_comments_enabled": POSTING_FEATURE in catalog and POSTING_FEATURE not in disabled,
         "review_features": {name: name not in disabled for name in catalog
-                            if name.startswith("review-") and name != "review-auto-model-selection"},
+                            if name.startswith("review-") and name not in NON_CATEGORY_FEATURES},
     }
 
 
@@ -185,6 +239,9 @@ def main(argv=None):
     try:
         context = json.loads(args.context.read_text()) if args.context else {}
         options = merge_context(options, context)
+    except PostingConflict as error:
+        print(f"review-options: {error}", file=sys.stderr)
+        return 2
     except (OSError, ValueError, TypeError, argparse.ArgumentTypeError) as error:
         print(f"review-options: invalid option context: {error}", file=sys.stderr)
         return 2
@@ -199,6 +256,14 @@ def main(argv=None):
     options["effective_model_selection"] = (
         options["model_selection"] if configuration["auto_selection_enabled"] else "configured"
     )
+    if "post_comments" in options:
+        options["effective_post_comments"] = (
+            options["post_comments"] and configuration["post_comments_enabled"]
+        )
+        if options["post_comments"] and not configuration["post_comments_enabled"]:
+            options["option_limitations"] = options["option_limitations"] + [
+                f"Posting was requested but {POSTING_FEATURE} is disabled; the review runs without posting."
+            ]
     print(json.dumps(options, indent=2))
     return 0
 

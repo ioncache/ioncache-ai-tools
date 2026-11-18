@@ -283,6 +283,82 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(options["effective_model_selection"], "configured")
         self.assertEqual(options["roles"]["reviewer"]["model"], "chosen")
 
+    def test_posting_defaults_off_and_records_invocation_sources(self):
+        options = json.loads(self.run_options("review-code").stdout)
+        self.assertEqual((options["post_comments"], options["post_sensitive"]), (False, "private"))
+        self.assertFalse(options["effective_post_comments"])
+        self.assertEqual(options["option_sources"]["post_comments"], "default")
+        result = self.run_options("review-code", "--post-comments", "--post-sensitive", "none")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        options = json.loads(result.stdout)
+        self.assertTrue(options["effective_post_comments"])
+        self.assertEqual(options["post_sensitive"], "none")
+        self.assertEqual(options["option_sources"]["post_sensitive"], "invocation")
+        self.assertEqual(options["specified"], ["post_comments", "post_sensitive"])
+        loop = json.loads(self.run_options("review-validate-fix-loop").stdout)
+        for name in ("post_comments", "post_sensitive", "effective_post_comments"):
+            self.assertNotIn(name, loop)
+            self.assertNotIn(name, loop["option_sources"])
+
+    def test_posting_argument_errors_start_nothing(self):
+        for args in (["--post-comments", "--post-comments"], ["--post-sensitive", "public"],
+                     ["--post-sensitive", "all"], ["--post-comments=yes"]):
+            with self.subTest(args=args):
+                result = self.run_options("review-code", *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+        result = self.run_options("review-code", "--post-sensitive", "all")
+        self.assertIn("--post-sensitive needs --post-comments", result.stderr)
+        self.assertIn("--post-sensitive", self.run_options("review-code", "--help").stdout)
+
+    def test_posting_choices_are_typed_and_flags_take_precedence(self):
+        context = self.write_context({"choices": {
+            "post_comments": {"value": True, "source": "User asked to post the review comments"},
+            "post_sensitive": {"value": "all", "source": "User asked to post every finding"},
+        }})
+        options = json.loads(self.run_options("--context", context, "review-code").stdout)
+        self.assertTrue(options["effective_post_comments"])
+        self.assertEqual(options["post_sensitive"], "all")
+        self.assertIn("User asked", options["option_sources"]["post_comments"])
+        options = json.loads(self.run_options("--context", context, "review-code",
+                                              "--post-sensitive", "none").stdout)
+        self.assertEqual(options["post_sensitive"], "none")
+        self.assertEqual(options["option_sources"]["post_sensitive"], "invocation")
+        cases = [
+            {"post_comments": {"value": "true", "source": "User"}},
+            {"post_comments": {"value": 1, "source": "User"}},
+            {"post_sensitive": {"value": "public", "source": "User"}},
+            {"post_comments": {"value": False, "source": "User declined posting"},
+             "post_sensitive": {"value": "all", "source": "User"}},
+        ]
+        for choices in cases:
+            with self.subTest(choices=choices):
+                result = self.run_options("--context", self.write_context({"choices": choices}), "review-code")
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+
+    def test_review_fix_loop_rejects_posting_flag_and_choice(self):
+        self.assertEqual(self.run_options("review-validate-fix-loop", "--post-comments").returncode, 2)
+        context = self.write_context({"choices": {
+            "post_comments": {"value": True, "source": "User asked to post"},
+        }})
+        result = self.run_options("--context", context, "review-validate-fix-loop")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown review option", result.stderr)
+
+    def test_posting_opt_out_reports_limitation_without_failing(self):
+        options = json.loads(self.run_options("review-code").stdout)
+        self.assertNotIn("review-post-comments", options["configuration"]["review_features"])
+        self.write_settings(".claude/ioncache-ai-tools.local.json", {"review-post-comments": False})
+        result = self.run_options("review-code", "--post-comments")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        options = json.loads(result.stdout)
+        self.assertTrue(options["post_comments"])
+        self.assertFalse(options["configuration"]["post_comments_enabled"])
+        self.assertFalse(options["effective_post_comments"])
+        self.assertIn("review-post-comments is disabled", " ".join(options["option_limitations"]))
+        self.assertNotIn("review-post-comments", options["configuration"]["review_features"])
+
     def test_context_errors_leave_help_and_corrected_invocations_reachable(self):
         self.assertEqual(self.run_options("review-validate-fix-loop", "--resume", "saved").returncode, 2)
         cases = [

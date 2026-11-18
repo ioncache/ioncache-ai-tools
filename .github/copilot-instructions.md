@@ -121,6 +121,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   JavaScript; general categories adapt to the actual stack. Unknown language
   facts leave coverage unresolved, not a permission fence. Retain old evidence
   and consumed work when a corrected contract requires a new phase.
+- `scripts/review_comments.py` publishes review-code findings for the
+  `--post-comments` caller step in `skills/review-code/POSTING.md`. It checks
+  eligibility, anchors comments to the merge-base diff, applies the sensitive
+  findings policy and posts one `COMMENT` review. All GitHub calls go through
+  its `api()` function; the self-check replaces it with fakes and never posts.
 - `scripts/development_manifest.py` validates approved inputs, and
   `scripts/development_run.py` owns private development-run bookkeeping outside
   the repository. It does not launch models or publish. The Claude script in
@@ -163,6 +168,7 @@ python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
 node scripts/create-worktree.js --self-test
 python3 scripts/review_ledger_self_check.py
 python3 scripts/review_options_self_check.py
+python3 scripts/review_comments_self_check.py
 python3 scripts/review_assignments_self_check.py
 python3 scripts/development_run_self_check.py
 node scripts/development_workflow_self_check.js

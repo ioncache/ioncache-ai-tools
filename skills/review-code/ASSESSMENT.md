@@ -50,20 +50,38 @@ category's findings cannot replace the missing independent assignment.
 
 ## Human report
 
-Report only `Act`, `Decide`, and `Investigate` items, in priority order. Keep
-supported corrections distinct from decisions and investigations:
+The report's main reader is an agent or person deciding what to fix. Report
+only `Act`, `Decide`, and `Investigate` items. Keep supported corrections
+distinct from decisions and investigations.
 
-| ID | File | Issue Summary | Severity | Basis | Action | Next Step |
+Start with an index, ordered by priority level, then severity:
+
+| ID | Location | Issue | Severity | Priority | Action | Confidence |
 | --- | --- | --- | --- | --- | --- | --- |
 
 Use a short standard prefix plus a number, or `COR<N>` for correctness.
-Explain the simplest coherent correction, decision, or check. Show `observed`
-or `inferred` as defined in CONTRACTS.md and label unresolved claims explicitly.
-Group findings sharing a correction without losing their IDs or differences
-in action, severity, or basis.
+`Location` is the primary `path:line`; `Issue` is the assessment's `title`.
+
+Then give one block per finding, in the same order:
+
+```markdown
+### COR1: <title>
+
+- Problem: the assessment's `summary`.
+- Locations: every affected `path:line`, plus affected callers or documentation.
+- Fix: the assessment's `next_step`.
+- Done when: the test or check that shows it worked, or "no check identified".
+- Scope: introduced by this change, or pre-existing.
+- Basis: `observed` or `inferred` as defined in CONTRACTS.md, labelling
+  unresolved claims explicitly.
+```
+
+Group findings sharing a correction by noting "Same fix as COR2" in each
+block, without losing their IDs or differences in action, severity, or basis.
+The blocks carry the evidence; do not squeeze it into the index.
 
 Apply the caller's `main_min_severity` (default Low) after actionability
-assessment, to this table only. Count otherwise-reportable below-threshold
+assessment, to the index and blocks only. Count otherwise-reportable below-threshold
 items separately. That display preference does not discard evidence, accept
 risk, or change which corrections a calling loop should make.
 
@@ -71,8 +89,7 @@ Keep rejected, duplicate, style-only, and low-value observations in the private
 handback or ledger, with a count only in the report. Do not add a second table,
 collapsed cleanup backlog, or unsolicited location list for them.
 
-Provide evidence with each finding: behavior, triggering conditions,
-requirement, and affected callers or documentation. Preserve underlying-issue
+Preserve underlying-issue
 keys, duplicate/recurrence references, and coverage in the
 [CONTRACTS.md](CONTRACTS.md) handback. Do not silently drop ignored findings
 whose rationale is contradicted by new evidence.
@@ -81,6 +98,10 @@ Finish with reportable counts by severity and action, separate counts of
 non-reportable and below-threshold candidates, scope and snapshot, execution
 mode and strategy, model-selection limitations, and incomplete coverage or
 failed passes. Count underlying issues, not grouped rows or duplicate sightings.
-An empty table means no reportable items at that threshold, not proof of no
+End with the absolute path of the consolidated handback file, or the ledger for
+a calling loop, so an agent can read the complete evidence. Say that the file is
+private session storage and may be cleared.
+An empty index means no reportable items at that threshold, not proof of no
 defects. Do not claim a clean review while required coverage is incomplete or
-consequential uncertainty remains. Do not add approval, merge, or posting actions.
+consequential uncertainty remains. Do not recommend approval, merge, or posting
+actions. A `--post-comments` run adds only the posting line from [POSTING.md](POSTING.md).

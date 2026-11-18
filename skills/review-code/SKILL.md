@@ -1,7 +1,7 @@
 ---
 name: review-code
 description: Runs a read-only review of files, branches, pull requests or repositories with independent category workers. Use for an unassigned review request, not an already assigned category, adjudication or validation pass. Reports findings without applying fixes.
-argument-hint: "[target] [--help] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
+argument-hint: "[target] [--help] [--post-comments] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
 ---
 
 # Read-only code review
@@ -13,6 +13,10 @@ The caller/coordinator may write private request, option, and instruction
 records; leaf workers may write only assigned result files.
 All belong in private scratch outside the reviewed tree.
 They never authorize code or ledger edits.
+
+The one exception to not posting is `--post-comments`. After the review
+completes, the top-level caller alone publishes reportable findings by
+following [POSTING.md](POSTING.md). Review workers never post.
 
 ## Assigned roles
 

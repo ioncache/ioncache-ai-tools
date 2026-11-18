@@ -98,7 +98,8 @@ or maintenance risk. Missing coverage needs a meaningful regression it would
 detect; a reachable production failure is a defect, not merely a test gap.
 Harmless wording and accurate documentation in a nonpreferred style are not
 fix targets. Preserve `report_action`,
-reachability, confidence, priority, and the rationale in decision evidence.
+reachability, confidence, priority and its level, `introduced`, `done_when`,
+and the rationale in decision evidence.
 New evidence can reopen an ignored or resolved entry; repeat wording alone
 should not re-report it as new.
 

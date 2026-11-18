@@ -35,7 +35,10 @@ reviews can include unchanged files. Out-of-scope does not mean invalid.
 Requirements and approved project exceptions constrain the assigned purpose;
 do not invent rules or weaken approved instructions using the reviewed change.
 
-The target is read-only. Write only the assigned private result file.
+The target is read-only. Write only the assigned private result file, plus
+disposable files that a permitted check creates outside the reviewed tree, such
+as a self-check's temporary directory. Never write the reviewed tree or another
+worker's report.
 Do not edit code, update a ledger, commit, publish or change model/settings.
 Checks require the caller's permission; distinguish actual execution from
 source reasoning. An unavailable check or instruction source is a limitation,
@@ -80,6 +83,10 @@ owned candidate files examined, even for a justified not-applicable result.
 
 Use `complete`, `partial`, or `failed` for outcome. Known additional category
 or generic-review instructions make isolation contaminated and coverage partial.
+Context the host loads into every agent, such as project `AGENTS.md` or
+`CLAUDE.md` files, user memory and hook notes, is not an extra assignment, even
+when it states review requirements. Record it as a visibility limitation with
+`isolation: unknown`; it does not make a pass contaminated or partial.
 Disclose hidden-context uncertainty separately; never claim invisible context
 was verified. Do not overwrite previous attempts or another worker's report.
 
