@@ -379,13 +379,16 @@ class CopilotAdapterTests(unittest.TestCase):
 
     def test_adapter_deadline_interrupts_prompt_hooks(self):
         def slow_hooks(*_):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
             time.sleep(1)
             return []
 
         self.prompt('Implement the requested file')
         question = {**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'}
         with (
-            mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
+            mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 5),
+            mock.patch.object(copilot_adapter, 'invocation_deadline',
+                              wraps=copilot_adapter.invocation_deadline) as deadline,
             mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=slow_hooks) as delayed_hooks,
             mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
             mock.patch.object(sys, 'stderr', io.StringIO()),
@@ -394,6 +397,7 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIsNone(copilot_adapter.run_hook('userPromptTransformed', question))
             self.assertLess(time.monotonic() - started, 0.5)
         self.assertIn('invocation deadline', notices.getvalue())
+        deadline.assert_called_once_with(5)
         delayed_hooks.assert_called_once()
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
