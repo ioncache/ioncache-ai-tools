@@ -377,12 +377,16 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertFalse(capture.exists())
 
 
-    def test_adapter_deadline_includes_configuration_before_shared_hooks(self):
+    def test_adapter_deadline_interrupts_prompt_hooks(self):
+        def slow_hooks(*_):
+            time.sleep(1)
+            return []
+
         self.prompt('Implement the requested file')
         question = {**self.payload, 'prompt': 'Why?', 'transformedPrompt': 'Why?'}
         with (
             mock.patch.object(copilot_adapter, 'ADAPTER_TIMEOUT_SECONDS', 0.02),
-            mock.patch.object(copilot_adapter, 'synchronize', side_effect=lambda *_: time.sleep(1)),
+            mock.patch.object(copilot_adapter, 'run_shared_hooks', side_effect=slow_hooks) as delayed_hooks,
             mock.patch.object(sys, 'stdout', io.StringIO()) as notices,
             mock.patch.object(sys, 'stderr', io.StringIO()),
         ):
@@ -390,6 +394,7 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertIsNone(copilot_adapter.run_hook('userPromptTransformed', question))
             self.assertLess(time.monotonic() - started, 0.5)
         self.assertIn('invocation deadline', notices.getvalue())
+        delayed_hooks.assert_called_once()
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
     def test_invocation_deadline_stops_handlers_and_preserves_completed_rewrites(self):
