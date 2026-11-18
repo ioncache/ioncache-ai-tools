@@ -22,7 +22,10 @@ private directory outside the reviewed tree.
 
 ## 1. Check eligibility before dispatch
 
-Resolve the PR URL with `gh pr view --json url`, then run:
+Resolve the PR URL from the review target. When the request names a PR by
+number, URL or branch, pass it: `gh pr view "<target>" --json url`. Use plain
+`gh pr view --json url` (the current branch's PR) only when the request names
+no PR. Reuse this URL for every later step. Then run:
 
 ```sh
 python3 -B "/absolute/plugin/scripts/review_comments.py" context --pr-url "<url>"
@@ -122,7 +125,10 @@ python3 -B "/absolute/plugin/scripts/review_comments.py" post \
 ```
 
 The helper repeats the eligibility checks, posts once, uses the fallback once
-after a 422 validation failure, and reads the review back.
+after a 422 validation failure, and reads the review back. It skips with reason
+`destination` when `--pr-url` names a different PR from the one the payload was
+built for, and with reason `visibility` when the repository's visibility has
+changed since the build.
 
 | Outcome | Next step |
 | --- | --- |

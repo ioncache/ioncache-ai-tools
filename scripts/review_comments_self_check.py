@@ -181,8 +181,22 @@ class DiffTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in result["outside_diff"]], ["COR1", "COR2"])
         body = result["payload"]["body"]
         self.assertIn("### Findings outside the diff", body)
-        self.assertIn("`README.md`", body)
+        self.assertIn("`README.md:1`", body)
         self.assertIn("finding=COR2 -->", body)
+
+    def test_outside_diff_label_keeps_anchor_and_locations_for_every_action(self):
+        located = build(finding("INV1", action="Investigate", anchor=None, locations=["src/other.py:42"]),
+                        finding("INV2", action="Investigate", anchor={"path": "README.md", "side": "LEFT",
+                                                                      "start_line": 3, "line": 5},
+                                locations=["README.md:4", "docs/a.md:1-2"]),
+                        finding("INV3", action="Investigate", anchor=None, locations=[]),
+                        finding("INV4", action="Investigate", anchor={"path": "README.md", "line": "7"}))
+        body = located["payload"]["body"]
+        self.assertIn("\n`src/other.py:42`\n", body)
+        self.assertIn("\n`README.md:3-5 (deleted lines)`, `docs/a.md:1-2`\n", body)
+        self.assertIn("\nNo file\n", body)
+        self.assertIn("\n`README.md`\n", body)
+        self.assertNotIn("Agent guidance", body)
 
 
 class SuggestionTests(unittest.TestCase):
@@ -462,6 +476,36 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(summary["suggestions_dropped"][0]["id"], "COR2")
         self.assertEqual(len(summary["identity"]), 64)
 
+    def test_git_quoted_paths_anchor_inline(self):
+        names = ["caf\u00e9.py", 'say "hi".py']
+        for name in names:
+            (self.root / name).write_text("one\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "unusual names")
+        self.head = self.git("rev-parse", "HEAD").strip()
+        diff = self.git("diff", "--no-color", "--no-ext-diff", "-M", self.base, self.head)
+        self.assertIn('"b/caf\\303\\251.py"', diff)
+        self.assertIn('"b/say \\"hi\\".py"', diff)
+        self.assertEqual(set(rc.parse_diff(diff)), {"app.py", *names})
+        self.assertEqual(rc.unquote_path("plain name.py"), "plain name.py")
+        self.assertEqual(rc.unquote_path('"tab\\there"'), "tab\there")
+        with self.assertRaisesRegex(ValueError, "Unreadable quoted diff path"):
+            rc.unquote_path('"bad\\9.py"')
+        facts_value, _ = self.context()
+        out = Path(self.temp.name) / "session" / "post"
+        out.parent.mkdir()
+        (out.parent / "context.json").write_text(json.dumps(facts_value))
+        value = {**document(finding(anchor={"path": names[0], "side": "RIGHT", "line": 1}, suggestion="ONE")),
+                 "reviewed_commit": self.head}
+        (out.parent / "input.json").write_text(json.dumps(value))
+        with contextlib.chdir(self.root), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = rc.main(["build", "--input", str(out.parent / "input.json"),
+                            "--context", str(out.parent / "context.json"), "--out", str(out)])
+        self.assertEqual(code, 0, stdout.getvalue())
+        payload = json.loads((out / "payload.json").read_text())
+        self.assertEqual([c["path"] for c in payload["comments"]], [names[0]])
+        self.assertIn("```suggestion\nONE\n```", payload["comments"][0]["body"])
+
     def test_prior_threads_trust_only_viewer_markers_across_pages(self):
         own = f"text\n<!-- review-code:v1 run={RUN} finding=COR1 -->"
         threads = [[thread("T1", own), thread("T2", own, login="someone-else")],
@@ -486,7 +530,7 @@ class PriorThreadTests(unittest.TestCase):
 class PostTests(unittest.TestCase):
     def bundle(self):
         result = build(finding("COR1"), finding("COR2", anchor={"path": "src/app.py", "side": "LEFT", "line": 2}))
-        return ({key: result[key] for key in ("payload", "fallback", "visibility")}, result["identity"])
+        return ({key: result[key] for key in rc.BUNDLE_KEYS}, result["identity"])
 
     def post(self, fake, bundle=None, approved=None, **changes):
         bundle, identity = (bundle, approved) if bundle else self.bundle()
@@ -553,6 +597,20 @@ class PostTests(unittest.TestCase):
         bundle["visibility"] = "PUBLIC"
         with self.assertRaisesRegex(ValueError, "approved identity"):
             self.post(FakeGitHub(), bundle, self.bundle()[1])
+
+    def test_another_pull_request_is_not_a_valid_destination(self):
+        for changes in ({"number": 8}, {"repository": "acme/other"}):
+            with self.subTest(changes=changes):
+                fake = FakeGitHub()
+                receipt = self.post(fake, **changes)
+                self.assertEqual((receipt["outcome"], [r["code"] for r in receipt["reasons"]]),
+                                 ("skipped", ["destination"]))
+                self.assertEqual(fake.state["posted"], [])
+        bundle, _ = self.bundle()
+        bundle["destination"] = {"repository": "acme/widgets", "number": 8}
+        with self.assertRaisesRegex(ValueError, "approved identity"):
+            self.post(FakeGitHub(), bundle, self.bundle()[1])
+        self.assertEqual(self.post(FakeGitHub())["outcome"], "posted")
 
     def test_ineligible_post_is_skipped_but_a_moved_head_is_allowed(self):
         pending = [rc.reason("pending", "pending draft")]

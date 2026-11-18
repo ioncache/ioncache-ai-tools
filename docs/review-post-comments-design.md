@@ -248,7 +248,9 @@ Subcommands:
   Rejections name the finding ID and the rule.
 - **`post --approved IDENTITY`**:
   - Re-runs the `context` checks.
-  - Verifies the identity covers the exact payload and fallback bytes.
+  - Verifies the identity covers the exact payload and fallback bytes, plus
+    the visibility and destination repository and PR number `build` used.
+  - Skips with reason `destination` if `--pr-url` names another PR.
   - Skips posting if a review by the viewer already carries this run's marker.
   - Otherwise posts, reads the review back and writes `receipt.json`.
 
@@ -353,7 +355,14 @@ The helper validates each `anchor`:
 - The path must be in the diff. For renamed files, `LEFT` anchors are not used.
 
 A finding with a `null` or invalid anchor is not dropped. Its full comment
-appears in the summary under "Findings outside the diff". The create-review
+appears in the summary under "Findings outside the diff", labelled with its
+anchor and other locations, so findings without agent guidance still say
+where they apply.
+
+Git quotes paths with unusual characters in diff headers (`core.quotePath`,
+on by default; double quotes, backslashes and control characters are always
+escaped). The parser decodes those C-style escapes before matching anchors, so
+a non-ASCII path still anchors inline. The create-review
 endpoint's `comments[]` has no `subject_type`, so file-level comments are not
 available in a batch review.
 

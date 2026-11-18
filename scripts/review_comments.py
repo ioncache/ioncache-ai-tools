@@ -29,6 +29,12 @@ GUIDANCE_PREAMBLE = (
     "applies, skip it with a brief reason. Keep changes minimal and validate them."
 )
 NON_PUBLIC = {"PRIVATE", "INTERNAL"}
+# Parts of a built bundle that the approved identity covers: the inspected bytes
+# plus the visibility and pull request their disclosure decisions assumed.
+BUNDLE_KEYS = ("payload", "fallback", "visibility", "destination")
+# Git's C-style pathname escapes, documented under core.quotePath in git-config.
+C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+OCTAL = re.compile(r"[0-7]{3}")
 PAGE = 100
 HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.DOTALL)
@@ -278,10 +284,31 @@ def parse_diff(text):
 
 
 def diff_path(value, prefix):
-    value = value.rstrip("\t")
+    value = unquote_path(value.rstrip("\t"))
     if value == "/dev/null":
         return None
     return value[len(prefix):] if value.startswith(prefix) else value
+
+
+def unquote_path(value):
+    """Decode a pathname Git quoted for unusual characters; unquoted names pass through unchanged."""
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return value
+    text, raw, index = value[1:-1], bytearray(), 0
+    while index < len(text):
+        char = text[index]
+        if char != "\\":
+            raw += char.encode()
+            index += 1
+        elif text[index + 1:index + 2] in C_ESCAPES:
+            raw.append(C_ESCAPES[text[index + 1]])
+            index += 2
+        else:
+            digits = text[index + 1:index + 4]
+            require(OCTAL.fullmatch(digits) is not None, f"Unreadable quoted diff path: {value}")
+            raw.append(int(digits, 8))
+            index += 4
+    return raw.decode("utf-8", errors="surrogateescape")
 
 
 def anchor_problem(anchor, files):
@@ -341,9 +368,11 @@ def fence(text):
 
 
 def location_label(anchor):
-    if not isinstance(anchor, dict) or not anchor.get("path"):
+    if not isinstance(anchor, dict) or not isinstance(anchor.get("path"), str) or not anchor["path"]:
         return None
     start = anchor.get("start_line", anchor.get("line"))
+    if type(start) is not int or type(anchor.get("line")) is not int:
+        return anchor["path"]
     span = f"{start}-{anchor['line']}" if start != anchor.get("line") else str(anchor.get("line"))
     side = " (deleted lines)" if anchor.get("side") == "LEFT" else ""
     return f"{anchor['path']}:{span}{side}"
@@ -370,6 +399,12 @@ def extra_locations(finding):
             continue
         result.append(text)
     return result
+
+
+def outside_label(finding):
+    """Where an outside-diff finding applies, from its anchor and other locations."""
+    places = [place for place in [location_label(finding.get("anchor"))] + extra_locations(finding) if place]
+    return ", ".join(f"`{place}`" for place in places) or "No file"
 
 
 def agent_guidance(finding):
@@ -554,7 +589,8 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
                 suggestion = finding["suggestion"]
         body = comment_body(finding, document["run"], suggestion)
         if problem:
-            outside.append({"id": fid, "path": (anchor or {}).get("path"), "reason": problem, "body": body})
+            outside.append({"id": fid, "path": (anchor or {}).get("path"), "reason": problem, "body": body,
+                            "label": outside_label(finding)})
             continue
         comment = {"path": anchor["path"], "body": body, "line": anchor["line"], "side": anchor["side"]}
         start = anchor.get("start_line", anchor["line"])
@@ -566,10 +602,10 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
     payload = {"commit_id": document["reviewed_commit"], "event": "COMMENT", "body": summary,
                "comments": comments}
     fallback = {**payload, "comments": [], "body": fallback_body(summary, comments, document["run"])}
-    visibility = facts.get("visibility")
+    bundle = {"payload": payload, "fallback": fallback, "visibility": facts.get("visibility"),
+              "destination": destination(facts)}
     return {
-        "identity": bundle_identity({"payload": payload, "fallback": fallback, "visibility": visibility}),
-        "payload": payload, "fallback": fallback, "visibility": visibility,
+        "identity": bundle_identity(bundle), **bundle,
         "inline": inline,
         "outside_diff": [{key: item[key] for key in ("id", "path", "reason")} for item in outside],
         "withheld": withheld, "already_raised": raised, "suggestions_dropped": dropped,
@@ -578,8 +614,12 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
 
 
 def bundle_identity(bundle):
-    """Identity of the inspected bytes plus the visibility their disclosure decisions assumed."""
-    return hashlib.sha256(encode({key: bundle[key] for key in ("payload", "fallback", "visibility")})).hexdigest()
+    """Identity of the inspected bytes plus the visibility and pull request they were built for."""
+    return hashlib.sha256(encode({key: bundle[key] for key in BUNDLE_KEYS})).hexdigest()
+
+
+def destination(facts):
+    return {"repository": facts.get("repository"), "number": facts.get("number")}
 
 
 def summary_body(document, facts, comments, outside, withheld, raised, excluded):
@@ -618,8 +658,7 @@ def summary_body(document, facts, comments, outside, withheld, raised, excluded)
     if outside:
         lines += ["", "### Findings outside the diff"]
         for item in outside:
-            label = f"`{item['path']}`" if item["path"] else "No file"
-            lines += ["", label, "", item["body"]]
+            lines += ["", item["label"], "", item["body"]]
     lines += ["", run_marker(document["run"])]
     return "\n".join(lines)
 
@@ -694,6 +733,9 @@ def post(facts, bundle, approved):
     if facts.get("visibility") != bundle["visibility"]:
         blocking.append(reason("visibility", "Repository visibility changed since the payload was built; "
                                "build and inspect again"))
+    if destination(facts) != bundle["destination"]:
+        blocking.append(reason("destination", "This is not the pull request the payload was built for; "
+                               "post to the original pull request or build and inspect again"))
     if blocking:
         return {"outcome": "skipped", "reasons": blocking}
     run = final_line(bundle["payload"]["body"]).split("run=", 1)[1].split(" ")[0]
@@ -779,8 +821,9 @@ def main(argv=None):
             write_json(out / "build.json", {k: v for k, v in result.items() if k not in ("payload", "fallback")})
             print(json.dumps({k: v for k, v in result.items() if k not in ("payload", "fallback")}, indent=2))
             return 0
+        built = read_json(out / "build.json")
         bundle = {"payload": read_json(out / "payload.json"), "fallback": read_json(out / "fallback.json"),
-                  "visibility": read_json(out / "build.json").get("visibility")}
+                  "visibility": built.get("visibility"), "destination": built.get("destination")}
         receipt = post(context(args.pr_url, root), bundle, args.approved)
         write_json(out / "receipt.json", receipt)
         print(json.dumps(receipt, indent=2))
