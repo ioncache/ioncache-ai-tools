@@ -390,6 +390,9 @@ Sensitive findings:
     repository it posts those with `introduced: true` and withholds the rest.
   - `all` always posts them.
 - If visibility is unknown, it is treated as `PUBLIC`.
+- The approved identity covers the visibility `build` assumed. `post` skips with
+  reason `visibility` if the repository's visibility has changed since, so
+  disclosure decisions are never applied to a different audience.
 - Posted sensitive findings describe the flaw and its fix, never exploitation
   steps, and never quote a secret's value. A committed secret is reported as
   needing rotation.
@@ -410,8 +413,10 @@ Private local details:
   - findings outside the diff.
 - The summary never copies limitation text, scratch paths, worker IDs, model
   details or other report prose.
-- `build` rejects any free text containing the review root, `HOME` or the
-  private output directory's parent. Repository-relative paths and generic
+- The helper finds the review root with `git rev-parse --show-toplevel`, so
+  running from a subdirectory cannot place output inside the worktree.
+- `build` rejects any absolute anchor path, and any free text containing the
+  review root, `HOME` or the private output directory's parent. Repository-relative paths and generic
   system paths such as `/tmp` are allowed, since findings may discuss them.
 - On rejection, the caller rewrites the named fields once and builds again. If
   the second build still rejects a finding, that finding is excluded from

@@ -365,8 +365,8 @@ def extra_locations(finding):
     result = []
     for text in finding.get("locations", []):
         span = location_span(text)
-        if span and anchor.get("path") == span[0] and isinstance(start, int) and \
-                span[1] <= anchor["line"] and start <= span[2]:
+        if span and anchor.get("path") == span[0] and type(start) is int and \
+                type(anchor.get("line")) is int and span[1] <= anchor["line"] and start <= span[2]:
             continue
         result.append(text)
     return result
@@ -518,6 +518,11 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
             if named:
                 rejections.append({"id": finding["id"], "field": field,
                                    "reason": "names findings that are not posted: " + ", ".join(named)})
+        anchor_path = (finding.get("anchor") or {}).get("path") if isinstance(finding.get("anchor"), dict) else None
+        if isinstance(anchor_path, str) and (Path(anchor_path).is_absolute() or
+                                             any(marker in anchor_path for marker in private)):
+            rejections.append({"id": finding["id"], "field": "anchor",
+                               "reason": "anchor path must be repository-relative"})
     if rejections:
         return {"rejections": rejections}
     open_threads = {thread["id"]: thread for thread in facts.get("prior_threads", []) if not thread["resolved"]}
@@ -561,14 +566,20 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
     payload = {"commit_id": document["reviewed_commit"], "event": "COMMENT", "body": summary,
                "comments": comments}
     fallback = {**payload, "comments": [], "body": fallback_body(summary, comments, document["run"])}
+    visibility = facts.get("visibility")
     return {
-        "identity": hashlib.sha256(encode({"payload": payload, "fallback": fallback})).hexdigest(),
-        "payload": payload, "fallback": fallback,
+        "identity": bundle_identity({"payload": payload, "fallback": fallback, "visibility": visibility}),
+        "payload": payload, "fallback": fallback, "visibility": visibility,
         "inline": inline,
         "outside_diff": [{key: item[key] for key in ("id", "path", "reason")} for item in outside],
         "withheld": withheld, "already_raised": raised, "suggestions_dropped": dropped,
         "not_posted": list(exclude),
     }
+
+
+def bundle_identity(bundle):
+    """Identity of the inspected bytes plus the visibility their disclosure decisions assumed."""
+    return hashlib.sha256(encode({key: bundle[key] for key in ("payload", "fallback", "visibility")})).hexdigest()
 
 
 def summary_body(document, facts, comments, outside, withheld, raised, excluded):
@@ -673,13 +684,16 @@ def mismatches(payload, state, comments):
 
 def post(facts, bundle, approved):
     """Publish the approved payload once, with one fallback after a validation failure."""
-    identity = hashlib.sha256(encode({"payload": bundle["payload"], "fallback": bundle["fallback"]})).hexdigest()
-    require(identity == approved, "The approved identity does not match these payload files; build and inspect again")
+    require(bundle_identity(bundle) == approved,
+            "The approved identity does not match these payload files; build and inspect again")
     # The PR head may move while the review runs; the payload stays pinned to the
     # reviewed commit, which must still be the local HEAD.
     blocking = [item for item in facts.get("reasons", []) if item["code"] != "head"]
     if facts.get("reviewed_commit") != bundle["payload"]["commit_id"]:
         blocking.append(reason("commit", "Local HEAD is no longer the reviewed commit; build again"))
+    if facts.get("visibility") != bundle["visibility"]:
+        blocking.append(reason("visibility", "Repository visibility changed since the payload was built; "
+                               "build and inspect again"))
     if blocking:
         return {"outcome": "skipped", "reasons": blocking}
     run = final_line(bundle["payload"]["body"]).split("run=", 1)[1].split(" ")[0]
@@ -739,8 +753,9 @@ def main(argv=None):
     send.add_argument("--out", required=True)
     send.add_argument("--approved", required=True)
     args = cli.parse_args(argv)
-    root = Path.cwd()
     try:
+        # The reviewed tree is the whole worktree, even when run from a subdirectory.
+        root = Path(command(["git", "rev-parse", "--show-toplevel"]).decode().strip()).resolve()
         if args.operation == "context":
             print(json.dumps(context(args.pr_url, root), indent=2))
             return 0
@@ -764,7 +779,8 @@ def main(argv=None):
             write_json(out / "build.json", {k: v for k, v in result.items() if k not in ("payload", "fallback")})
             print(json.dumps({k: v for k, v in result.items() if k not in ("payload", "fallback")}, indent=2))
             return 0
-        bundle = {"payload": read_json(out / "payload.json"), "fallback": read_json(out / "fallback.json")}
+        bundle = {"payload": read_json(out / "payload.json"), "fallback": read_json(out / "fallback.json"),
+                  "visibility": read_json(out / "build.json").get("visibility")}
         receipt = post(context(args.pr_url, root), bundle, args.approved)
         write_json(out / "receipt.json", receipt)
         print(json.dumps(receipt, indent=2))

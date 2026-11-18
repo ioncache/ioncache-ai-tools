@@ -329,6 +329,20 @@ class DisclosureTests(unittest.TestCase):
         none = build(finding("SEC2", sensitive=True), policy="none")
         self.assertIn("withheld under the `none` policy", none["payload"]["body"])
 
+    def test_anchor_paths_must_be_repository_relative(self):
+        for path in ("/Users/someone/repo/src/app.py", "/tmp/elsewhere.py"):
+            with self.subTest(path=path):
+                result = build(finding(anchor={"path": path, "side": "RIGHT", "line": 2}))
+                self.assertEqual(result["rejections"], [{"id": "COR1", "field": "anchor",
+                                                         "reason": "anchor path must be repository-relative"}])
+
+    def test_non_integer_anchor_coordinates_keep_the_finding(self):
+        item = finding(anchor={"path": "src/app.py", "side": "RIGHT", "start_line": 2, "line": "3"},
+                       locations=["src/app.py:1-5"])
+        result = build(item)
+        self.assertEqual([o["id"] for o in result["outside_diff"]], ["COR1"])
+        self.assertIn("Also affects: src/app.py:1-5", result["payload"]["body"])
+
     def test_posted_text_cannot_name_hidden_findings(self):
         hidden = finding("SEC2", sensitive=True, introduced=False)
         result = build(finding("COR1", fix_steps="Same fix as SEC2."), hidden,
@@ -472,7 +486,7 @@ class PriorThreadTests(unittest.TestCase):
 class PostTests(unittest.TestCase):
     def bundle(self):
         result = build(finding("COR1"), finding("COR2", anchor={"path": "src/app.py", "side": "LEFT", "line": 2}))
-        return {"payload": result["payload"], "fallback": result["fallback"]}, result["identity"]
+        return ({key: result[key] for key in ("payload", "fallback", "visibility")}, result["identity"])
 
     def post(self, fake, bundle=None, approved=None, **changes):
         bundle, identity = (bundle, approved) if bundle else self.bundle()
@@ -532,6 +546,14 @@ class PostTests(unittest.TestCase):
         self.assertIn("review has 1 comments, expected 2", receipt["problems"])
         self.assertEqual(len(fake.state["posted"]), 1)
 
+    def test_visibility_change_after_build_requires_a_new_build(self):
+        receipt = self.post(FakeGitHub(), visibility="PUBLIC")
+        self.assertEqual((receipt["outcome"], [r["code"] for r in receipt["reasons"]]), ("skipped", ["visibility"]))
+        bundle, _ = self.bundle()
+        bundle["visibility"] = "PUBLIC"
+        with self.assertRaisesRegex(ValueError, "approved identity"):
+            self.post(FakeGitHub(), bundle, self.bundle()[1])
+
     def test_ineligible_post_is_skipped_but_a_moved_head_is_allowed(self):
         pending = [rc.reason("pending", "pending draft")]
         receipt = self.post(FakeGitHub(), eligible=False, reasons=pending)
@@ -544,13 +566,21 @@ class PostTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
-    def test_out_directory_must_be_outside_the_worktree_and_errors_exit_2(self):
+    def test_out_directory_must_be_outside_the_whole_worktree_and_errors_exit_2(self):
+        with tempfile.TemporaryDirectory() as temp:
+            subprocess.run(["git", "init", "-q", temp], check=True, capture_output=True)
+            (Path(temp) / "src").mkdir()
+            for cwd, out in ((temp, "out"), (str(Path(temp) / "src"), str(Path(temp) / "private-post"))):
+                with self.subTest(cwd=cwd), contextlib.chdir(cwd), \
+                        contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    code = rc.main(["build", "--input", "in.json", "--context", "c.json", "--out", out])
+                self.assertEqual(code, 2)
+                self.assertIn("outside the reviewed worktree", stderr.getvalue())
+                self.assertIn("The review result stands", stderr.getvalue())
+                self.assertFalse(Path(out if Path(out).is_absolute() else Path(temp) / out).exists())
         with tempfile.TemporaryDirectory() as temp, contextlib.chdir(temp), \
                 contextlib.redirect_stderr(io.StringIO()) as stderr:
-            Path("out").mkdir()
-            code = rc.main(["build", "--input", "in.json", "--context", "c.json", "--out", "out"])
-        self.assertEqual(code, 2)
-        self.assertIn("outside the reviewed worktree", stderr.getvalue())
+            self.assertEqual(rc.main(["build", "--input", "a", "--context", "b", "--out", "/nonexistent-x"]), 2)
         self.assertIn("The review result stands", stderr.getvalue())
 
 
