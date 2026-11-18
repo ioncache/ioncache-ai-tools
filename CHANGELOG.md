@@ -4,6 +4,21 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.0 (2026-11-18)
+
+### New
+
+* **review:** post findings to pull requests and restructure the report ([#57](https://github.com/ioncache/ioncache-ai-tools/issues/57)) ([45d36cd](https://github.com/ioncache/ioncache-ai-tools/commit/45d36cd3fb3992293a2a6688c8d0808d6998904b))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* clarify PR review comment writing and verification ([#59](https://github.com/ioncache/ioncache-ai-tools/issues/59)) ([a25f97a](https://github.com/ioncache/ioncache-ai-tools/commit/a25f97aa7f786c3e8b68e4f709182d22c01032f1))
+* **questions:** fail open for unverified prompt origins ([#60](https://github.com/ioncache/ioncache-ai-tools/issues/60)) ([9a11a08](https://github.com/ioncache/ioncache-ai-tools/commit/9a11a082286d88e49e20c563e4e51deee2e9661b))
+
 ## 1.12.1 (2026-11-16)
 
 ### New
