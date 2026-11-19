@@ -46,6 +46,9 @@ class DevelopmentRunTests(unittest.TestCase):
                     "PYTHONDONTWRITEBYTECODE": "1"}
         for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
             self.env.pop(key, None)
+        environment = patch.dict(os.environ, self.env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Development fixture")
         self.git("config", "user.email", "fixture@example.invalid")
@@ -197,7 +200,7 @@ class DevelopmentRunTests(unittest.TestCase):
             Path(paths[key]).write_bytes(manifest.encode(value))
         return paths, phase
 
-    def review(self, root, *, record=True, files=None, finding=False, advance=True):
+    def review(self, root, *, record=True, files=None, finding=False, advance=True, checks=None):
         assignment = self.state["assignment"]
         base = assignment["comparison_base"]
         args = ["init", "--objective", "Fixture review", "--scope", "fixture", "--base", base,
@@ -213,7 +216,8 @@ class DevelopmentRunTests(unittest.TestCase):
                 {"name": category, "worker": "unobserved (non-identity marker)",
                  "result": "complete", "evidence": "Offline fixture; native identity not observed"}
                 for category in phase["required"]],
-             "checks": [{"name": "fixture", "result": "passed", "evidence": "Fixture command exited zero"}]},
+             "checks": checks if checks is not None else [
+                 {"name": "fixture", "result": "passed", "evidence": "Fixture command exited zero"}]},
             {"type": "advance"},
         ]
         if finding:
@@ -1155,6 +1159,123 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["assignment"]["review_dispatch"], assignment["review_dispatch"])
         self.assertEqual(len(self.state["assignment"]["review_resumptions"]), 2)
 
+    def assert_unwitnessed_continuation_recovers(self, damage, *, relocate=False):
+        import review_history
+
+        if relocate:
+            self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False, advance=False)
+        path = Path(data["ledger"])
+        original = path.read_bytes()
+        checkpoint = {"assignment": self.state["assignment"]["id"], "calls": 3,
+                      "reservations": {}, "reports": []}
+        self.mutate("review-checkpoint", stdin=checkpoint)
+        arguments = ("--ledger", str(path), "--reason", "Recover interrupted review",
+                     "--shutdown-evidence", "Synchronous fixture workers exited")
+        self.mutate("resume-review", *arguments)
+        if damage == "stale":
+            saved = self.review_cli(root, ["status", str(path)])
+            self.review_cli(root, ["apply", str(path), "--revision", str(saved["revision"])], {
+                "type": "stop", "outcome": "failed", "actor": "fixture-owner",
+                "reason": "A newer terminal event must not disappear during recovery",
+            })
+            path.write_bytes(original)
+        else:
+            with patch.dict(os.environ, self.env, clear=True):
+                review_history.witness_path(root, path.parent.name).unlink()
+        before = (self.store / "RUN.json").read_bytes()
+        if relocate:
+            self.git("init", "-q", str(self.store.parent))
+            self.assertIn("freshness", self.mutate("recover-review-storage", *arguments, ok=False))
+            target = self.folder / "retained" / path.parent.parent.name / path.parent.name
+            development.shutil.copytree(path.parent, target)
+            path = target / path.name
+        else:
+            self.assertIn("freshness", self.mutate("resume-review", *arguments, ok=False))
+            self.assertIn("freshness", self.mutate("claim-review", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.state["assignment"]["review_dispatch"]["calls"], 3)
+        closed = self.review_cli(root, [
+            "abandon", str(path), "--reason", "Freshness cannot be established",
+            "--evidence", "The independent witness is missing or newer than this copy",
+            "--shutdown-evidence", "Synchronous fixture workers exited",
+        ])
+        self.assertEqual(closed["allowance"], "unavailable")
+        if relocate:
+            self.review_cli(root, [
+                "recover-ownership", str(path), "--reason", "Retain the closed external copy",
+                "--shutdown-evidence", "Synchronous fixture workers exited",
+            ])
+        else:
+            self.assertIn("abandoned", self.mutate("claim-review", ok=False))
+        self.finish(outcome="blocked")
+        self.mutate("resume", "--reason", "A separate counted review is permitted")
+        retry = self.next()
+        self.assertEqual((retry["role"], retry["attempt"]), ("review", 2))
+        previous = development.load(self.store)["history"][-2]
+        self.assertEqual(previous["review_dispatch"]["calls"], 3)
+        self.assertEqual(path.read_bytes(), original)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_stale_review_cannot_arm_or_consume_continuation(self):
+        self.assert_unwitnessed_continuation_recovers("stale")
+
+    def test_missing_witness_cannot_arm_or_consume_continuation(self):
+        self.assert_unwitnessed_continuation_recovers("missing")
+
+    def test_stale_review_cannot_recover_storage_as_ready(self):
+        self.assert_unwitnessed_continuation_recovers("stale", relocate=True)
+
+    def test_missing_witness_cannot_recover_storage_as_ready(self):
+        self.assert_unwitnessed_continuation_recovers("missing", relocate=True)
+
+    def test_review_continuation_keeps_ownership_through_save(self):
+        self.store = self.folder / "later-repository" / "run"
+        root = self.start_review_fixture()
+        data = self.review(root, record=False, advance=False)
+        original = Path(data["ledger"])
+        revision = len(json.loads(original.read_bytes())["events"])
+        save = development.save
+        attempts = []
+
+        def save_with_competing_closure(folder, state):
+            active = state["active"]
+            ledger = active["storage_recoveries"][-1]["ledger"] if active.get("storage_recoveries") else str(original)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / "review_ledger.py"), "apply", ledger,
+                 "--revision", str(revision)], cwd=root, env=self.env, text=True,
+                input=json.dumps({"type": "stop", "outcome": "failed", "actor": "fixture-owner",
+                                  "reason": "Competing with continuation publication"}),
+                capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("temporarily unavailable", result.stderr)
+            attempts.append(ledger)
+            save(folder, state)
+
+        arguments = ["--ledger", str(original), "--reason", "Reconcile interrupted review",
+                     "--shutdown-evidence", "Synchronous fixture workers exited"]
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(development, "save", save_with_competing_closure):
+            for command in ("resume-review", "claim-review", "recover-review-storage"):
+                if command == "recover-review-storage":
+                    self.git("init", "-q", str(self.store.parent))
+                args = development.parser().parse_args([
+                    command, str(self.store), "--revision", str(self.state["revision"]),
+                    *(arguments if command != "claim-review" else [])])
+                self.state = development.mutate(args, self.store)
+        self.assertEqual(len(attempts), 3)
+        recovered = self.state["assignment"]["recovered_ledger"]
+        self.mutate("claim-review")
+        saved = self.review_cli(root, ["status", recovered])
+        self.assertEqual(saved["revision"], revision)
+        self.review_cli(root, ["apply", recovered, "--revision", str(revision)], {
+            "type": "advance", "actor": "fixture-owner", "reason": "Continue the retained review",
+        })
+        self.finish({**data, "ledger": recovered})
+        self.assertEqual(self.next()["role"], "commit")
+
     def test_review_dispatch_checkpoints_retain_spending_and_reservations(self):
         root = self.start_review_fixture()
         ledger = self.review(root, record=False, advance=False)["ledger"]
@@ -1905,6 +2026,109 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.assertEqual(self.audit_body_updates, [])
 
+    def test_archive_retains_witnessed_stop_when_ledger_publication_fails(self):
+        import review_history
+        import review_ownership
+
+        root = self.start_audit_fixture()
+        _, active, exported = self.audit_export()
+        path = Path(self.state["prs"]["first"]["review"]["ledger"])
+        original = path.read_bytes()
+        public_path = self.store / "reports" / active["id"] / "public.json"
+        public = json.loads(public_path.read_bytes())
+        public["findings"] = []
+        public_path.write_bytes(manifest.encode(public))
+        args = development.review.parser().parse_args([
+            "apply", str(path), "--revision", str(len(json.loads(original)["events"]))])
+        args.event = {"type": "stop", "outcome": "failed", "actor": "fixture-owner",
+                      "reason": "Withdraw the accepted fixture review"}
+        write = development.review.atomic_write
+
+        def interrupted_write(target, content):
+            if target == path:
+                raise OSError("Fixture interrupted ledger publication")
+            write(target, content)
+
+        with patch.dict(os.environ, self.env, clear=True), \
+                review_ownership.guard(root, [path.parent.parent], args), \
+                patch.object(development.review, "atomic_write", interrupted_write):
+            with self.assertRaisesRegex(OSError, "interrupted ledger publication"):
+                development.review.append(args, root)
+            witness = review_history.read(root, path.parent.name)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(witness["outcome"], "failed")
+        self.assertEqual(len(witness["events"]), len(json.loads(original)["events"]) + 1)
+        self.assertIn("reconcile --pr first", self.audit_cli(
+            "export", "--public", str(public_path), ok=False))
+        before = (self.store / "RUN.json").read_bytes()
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public_path))
+        record = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())["reviews"][0]
+        self.assertFalse(record["available"])
+        self.assertEqual(record["outcome"], "failed")
+        self.assertEqual(record["allowance"], "unavailable")
+        self.assertEqual(record["closure_digest"], audit.identity(witness))
+        self.assertNotIn("loops", record)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(self.audit_body_updates, [])
+        self.review_cli(root, [
+            "abandon", str(path), "--reason", "Close interrupted failed publication",
+            "--evidence", "The witnessed failure supersedes the retained completed ledger",
+            "--shutdown-evidence", "Synchronous fixture workers exited",
+        ])
+        self.mutate("retire", "--reason", "The audit cannot publish revoked acceptance",
+                    "--shutdown-evidence", "Synchronous fixture workers exited")
+        self.mutate("reconcile", "--pr", "first", "--reason", "Counted review after revoked acceptance")
+        self.assertEqual(self.next()["attempt"], 2)
+        self.review(root)
+        for role in ("commit", "draft"):
+            self.assertEqual(self.next()["role"], role)
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.next()["role"], "audit-initial")
+        _, _, current = self.audit_export()
+        records = json.loads((Path(current["directory"]) / "audit.json").read_bytes())["reviews"]
+        historical = next(item for item in records if item["id"] == path.parent.name)
+        self.assertFalse(historical["available"])
+        self.assertEqual(historical["outcome"], "failed")
+        self.assertTrue(any(item["available"] and item["outcome"] == "completed" for item in records))
+        with patch.dict(os.environ, self.env, clear=True):
+            inferred_root = audit.review_record(path)
+        self.assertFalse(inferred_root["available"])
+        self.assertEqual(inferred_root["outcome"], "failed")
+
+    def assert_archive_retains_recovered_closure(self, closure):
+        root = self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        path = Path(self.state["prs"]["first"]["review"]["ledger"])
+        original = path.read_bytes()
+        target = self.folder / "recovered" / path.parent.parent.name / path.parent.name
+        development.shutil.copytree(path.parent, target)
+        recovered = target / path.name
+        self.review_cli(root, [
+            "recover-ownership", str(recovered), "--reason", "Recover completed review",
+            "--shutdown-evidence", "Synchronous fixture workers exited",
+        ])
+        self.close_accepted_review(root, closure, ledger=recovered)
+        public_path = self.store / "reports" / active["id"] / "public.json"
+        public = json.loads(public_path.read_bytes())
+        public["findings"] = []
+        public_path.write_bytes(manifest.encode(public))
+        archived = self.audit_cli("archive", "--pr", "first", "--public", str(public_path))
+        record = json.loads((Path(archived["directory"]) / "audit.json").read_bytes())["reviews"][0]
+        self.assertFalse(record["available"])
+        self.assertEqual(record["outcome"], "failed")
+        self.assertEqual(record["allowance"], "unavailable")
+        self.assertTrue(record["closure_digest"])
+        self.assertNotIn("loops", record)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(development.load(self.store), state)
+        self.assertEqual(self.audit_body_updates, [])
+
+    def test_archive_retains_recovered_store_release(self):
+        self.assert_archive_retains_recovered_closure("release")
+
+    def test_archive_retains_recovered_history_abandonment(self):
+        self.assert_archive_retains_recovered_closure("abandon")
+
     def test_legacy_cached_acceptance_requires_counted_rebinding_across_xdg_changes(self):
         root = self.start_review_fixture()
         data = self.review(root)
@@ -2648,6 +2872,28 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_bytes(manifest.encode(original))
         self.finish(data)
 
+    def test_named_acceptance_checks_cannot_be_skipped_or_substituted(self):
+        root = self.start_review_fixture()
+        for scope in ("task", "pr"):
+            for check in (
+                    {"name": "fixture", "result": "not_applicable", "evidence": "Incorrectly skipped"},
+                    {"name": "unrelated", "result": "passed", "evidence": "Different command passed"}):
+                with self.subTest(scope=scope, check=check):
+                    data = self.review(root, record=False, checks=[check])
+                    self.assertEqual(self.review_cli(root, ["status", data["ledger"]])["outcome"], "completed")
+                    before = (self.store / "RUN.json").read_bytes()
+                    self.assertIn("Required acceptance checks did not all pass", self.finish(data, ok=False))
+                    self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+            self.review(root)
+            self.assertEqual(self.next()["role"], "commit")
+            self.execute_fixture(self.state["assignment"])
+            if scope == "task":
+                self.assertEqual(self.next()["role"], "draft")
+                self.execute_fixture(self.state["assignment"])
+                self.assertEqual(self.next()["role"], "review")
+                self.assertIsNone(self.state["assignment"]["task"])
+        self.assertEqual(self.next()["role"], "ready")
+
     def test_legacy_coverage_without_file_inventory_requires_counted_review(self):
         self.init()
         self.preflight()
@@ -3019,6 +3265,23 @@ class DevelopmentRunTests(unittest.TestCase):
         self.state = self.cli("status", self.store)
         self.mutate("resume", "--reason", "Snapshot readable again")
         self.preflight()
+
+    def test_inprocess_checks_preserve_invoking_user_configuration(self):
+        caller = self.folder / "invoking-user"
+        originals = {}
+        for host in (".claude", ".codex", ".copilot"):
+            path = caller / host / "ioncache-ai-tools.local.json"
+            path.parent.mkdir(parents=True)
+            contents = b'{"features":{"autonomous-development":false,"retired-fixture-setting":true}}\n'
+            path.write_bytes(contents)
+            originals[path] = contents
+        environment = {**self.env, "HOME": str(caller), "CODEX_HOME": str(caller / ".codex"),
+                       "COPILOT_HOME": str(caller / ".copilot")}
+        with patch.dict(os.environ, environment, clear=True):
+            result = unittest.TestResult()
+            type(self)("test_unreadable_inputs_keep_shutdown_bookkeeping_available").run(result)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
     def test_readiness_permissions_are_required_before_implementation_starts(self):
         self.plan["permissions"]["mark_ready"] = False

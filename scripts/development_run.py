@@ -480,6 +480,7 @@ def review_result(state, assignment, data):
 
 
 def recover_review_storage(state, args):
+    from review_history import remember_location, require_current
     from review_ownership import require_unreleased
 
     active = state["active"]
@@ -503,6 +504,14 @@ def recover_review_storage(state, args):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         ledger, _ = review.load(path)
         review.ensure_owner(ledger, root)
+        try:
+            require_current(ledger)
+        except review.LedgerError as error:
+            raise review.LedgerError(
+                f"{error}. If freshness cannot be restored in this ineligible store, copy the complete "
+                "run directory, including objects, to unused external <worktree-identity>/<run-id> storage. "
+                "Abandon that copy and recover-ownership of the closed copy with shutdown evidence, then "
+                "retire the assignment and resume with a counted review retry") from error
         baseline = review.migration_snapshot(path.parent)
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         handle = locks.enter_context(review.safe_path(destination, ".lock").open("a"))
@@ -514,6 +523,7 @@ def recover_review_storage(state, args):
         plan.require(review.stored_files(target) == baseline["files"],
                      "Recovery destination conflicts with retained evidence; preserve both copies "
                      "and choose another external XDG_STATE_HOME")
+        remember_location(target / path.name, root)
         active.setdefault("storage_recoveries", []).append({
             "source": str(path), "ledger": str(target / path.name),
             "reason": args.reason, "shutdown_evidence": args.shutdown_evidence,
@@ -787,18 +797,21 @@ def mutate(args, folder):
             state["outcome"] = "blocked"
         elif args.command == "reconcile":
             reconcile(state, args, settings)
-        elif args.command == "recover-review-storage":
+        elif args.command in ("recover-review-storage", "resume-review", "claim-review"):
+            from review_ownership import locked as review_locked
+
             feature(Path(state["root"]), settings)
-            recover_review_storage(state, args)
-        elif args.command == "resume-review":
-            feature(Path(state["root"]), settings)
-            dispatches.resume(state, args)
-        elif args.command == "claim-review":
-            feature(Path(state["root"]), settings)
-            plan.require_provider(state["manifest"], args.provider,
-                                  strict_worktrees="worktree_roots" in state)
-            check_worktree(state, dispatches.active_review(state)["pr"])
-            dispatches.claim(state)
+            active = dispatches.active_review(state)
+            guards.enter_context(review_locked(Path(active["root"])))
+            if args.command == "recover-review-storage":
+                recover_review_storage(state, args)
+            elif args.command == "resume-review":
+                dispatches.resume(state, args)
+            else:
+                plan.require_provider(state["manifest"], args.provider,
+                                      strict_worktrees="worktree_roots" in state)
+                check_worktree(state, active["pr"])
+                dispatches.claim(state)
         elif args.command == "review-checkpoint":
             feature(Path(state["root"]), settings)
             dispatches.checkpoint(state, json.load(sys.stdin))

@@ -85,6 +85,7 @@ def prepare_resume(active, ledger, evidence):
 
 
 def resume_path(active, argument):
+    from review_history import require_current
     from review_ownership import require_unreleased
 
     root = Path(active["root"])
@@ -93,6 +94,7 @@ def resume_path(active, argument):
     require_unreleased(root, path.parent.parent)
     ledger, _ = review.load(path)
     review.ensure_owner(ledger, root)
+    require_current(ledger)
     return path
 
 

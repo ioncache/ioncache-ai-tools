@@ -431,12 +431,17 @@ handback that wins first remains recorded. Report identity and structure are
 validated before acquiring the lock. Blocked reports, interruption, retirement
 and identical recorded-report replay do not require it.
 
-Review-store recovery also requires the ledger's independent freshness witness.
-An older valid copy cannot restore spent review allowances. Interrupted history
-publication or missing freshness evidence keeps spending unavailable: close or
-release the affected review, retire its assignment after shutdown, and use a
-counted retry. A witnessed failed stop or abandonment revokes cached acceptance
-even if its ledger or closure write was interrupted.
+Review-store recovery, continuation preparation and continuation claims require
+the ledger's independent freshness witness. They hold the ownership lock through
+the readiness or claim write. An older valid copy cannot restore spent review
+allowances. Interrupted history publication or missing freshness evidence keeps
+spending unavailable: close or release the affected review, retire its assignment
+after shutdown, and use a counted retry. If stale history is trapped in ineligible
+storage, copy its complete run directory, including objects, to unused external
+`<worktree-identity>/<run-id>` storage. Use `abandon` on the copy, then
+`recover-ownership` of that closed copy before retiring and retrying the assignment.
+Retain the original evidence. A witnessed failed stop or abandonment revokes
+cached acceptance even if its ledger or closure write was interrupted.
 
 `status` reports missing, unreadable, or changed snapshots in `input_error`.
 Status, interruption, and retirement do not require available snapshot bytes,

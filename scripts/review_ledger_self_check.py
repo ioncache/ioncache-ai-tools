@@ -1312,6 +1312,61 @@ class ReviewLedgerTests(unittest.TestCase):
         next(objects.iterdir()).write_bytes(b"corrupt")
         self.cli(["status", self.ledger], ok=False)
 
+    def test_inspection_validates_each_unique_object_and_rechecks_later_corruption(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        path = Path(self.ledger)
+        saved = json.loads(path.read_bytes())
+        objects = {path.parent / "objects" / entry["blob"]
+                   for snapshot in saved["snapshots"].values() for entry in snapshot["files"].values()}
+        read = Path.read_bytes
+        reads = []
+
+        def counted_read(target):
+            if target in objects:
+                reads.append(target)
+            return read(target)
+
+        with patch.object(Path, "read_bytes", counted_read):
+            inspected = review_ledger.status(SimpleNamespace(ledger=self.ledger), None)
+        self.assertEqual(inspected["revision"], self.state["revision"])
+        self.assertCountEqual(reads, objects)
+        damaged = next(iter(objects))
+        damaged.write_bytes(b"corrupt")
+        with self.assertRaisesRegex(review_ledger.LedgerError, "Snapshot object checksum mismatch"):
+            review_ledger.status(SimpleNamespace(ledger=self.ledger), None)
+        self.assertIn("Snapshot object checksum mismatch", self.cli(["inspect", self.ledger], ok=False))
+
+    def test_apply_reuses_locked_history_without_skipping_revision_or_freshness(self):
+        self.init()
+        self.review()
+        self.finding()
+        self.decide()
+        self.fix()
+        load = review_ledger.load
+        with patch.object(review_ledger, "load", wraps=load) as loaded, \
+                patch.object(review_ledger, "worktree", return_value=self.root), \
+                patch.object(sys, "argv", ["review_ledger.py", "apply", self.ledger,
+                                          "--revision", str(self.state["revision"])]), \
+                patch.object(sys, "stdin", io.StringIO(json.dumps(
+                    self.event("decision", id="F001", validation="valid", disposition="fixed",
+                               severity="High", evidence=["Verified fixture correction"])))), \
+                patch.object(sys, "stdout", io.StringIO()) as output, \
+                patch.object(sys, "stderr", io.StringIO()) as errors:
+            self.assertEqual(review_ledger.main(), 0, errors.getvalue())
+        self.assertEqual(loaded.call_count, 1)
+        applied = json.loads(output.getvalue())
+        self.assertEqual(applied["revision"], self.state["revision"] + 1)
+        self.assertEqual(applied["findings"]["F001"]["disposition"], "fixed")
+        self.assertIn("Stale revision", self.reject("advance"))
+        self.state = applied
+        witness = review_history.witness_path(self.root, Path(self.ledger).parent.name)
+        witness.unlink()
+        self.assertIn("freshness", self.reject("advance"))
+
     def test_atomic_failure_preserves_previous_ledger(self):
         """A failed replacement must leave the last durable record and no pending file."""
         path = self.root / "record.json"
@@ -2202,7 +2257,8 @@ sys.exit(review_ledger.main())
         data = json.loads(path.read_text())
         data["events"][0]["snapshot"] = self.state["snapshot"]
         path.write_text(json.dumps(data))
-        self.cli(["status", self.ledger], ok=False)
+        for command in ("status", "inspect"):
+            self.assertIn("Worktree drift", self.cli([command, self.ledger], ok=False))
 
     def test_executable_regression_and_persistent_final_report(self):
         """A durable success report must survive a real failing-then-passing correction."""

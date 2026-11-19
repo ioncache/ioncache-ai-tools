@@ -102,6 +102,12 @@ Unavailable or abandoned histories remain explicit gaps. No counts or findings
 are reconstructed from missing evidence. Worker hashes permit comparison of
 reported identities, not proof of independent contexts.
 
+The independent freshness witness and releases of its recorded storage locations
+take precedence over an older readable ledger. A witnessed failed closure remains
+failed even if the ledger write was interrupted. Stale history stays unavailable;
+its counters and findings are not presented as current or reconstructed from the
+witness.
+
 The assigned worker separately writes publication-safe narrative JSON:
 
 ```json

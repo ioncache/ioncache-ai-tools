@@ -246,14 +246,16 @@ def guard(root, bases, args):
                             known_release(root, Path(args.ledger).parent.name))
         elif not closing:
             check(previous, base, args)
+        validated = None
         if args.command == "apply":
             from review_history import remember_location, require_current
 
             target = ledger.ledger_path(root, args.ledger)
-            saved, _ = ledger.load(target)
+            saved, state = ledger.load(target)
             require_current(saved, closing=closing)
             if bind:
                 remember_location(target, root)
+            validated = target, saved, state
         if bind:
             ledger.atomic_write(path, ledger.encode({"schema": 1, "root": str(root), "storage": str(base)}))
-        yield
+        yield validated

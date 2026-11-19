@@ -19,6 +19,7 @@ import tempfile
 
 import development_manifest as plan
 import development_models as models
+import review_history
 import review_ledger as review
 
 
@@ -69,20 +70,37 @@ def review_record(path, root=None):
     result = {"id": review_identity(path), "history_digest": None, "available": False}
     try:
         path = review.ledger_path(root, str(path), allow_unavailable=True, historical=True)
-        if not path.is_symlink() and path.exists():
+        if not path.is_symlink() and path.is_file():
             result["history_digest"] = review.digest(path.read_bytes())
+        loaded = None
+        if root is None:
+            closed = review.abandoned(path)
+            if closed is not None:
+                root = Path(closed["root"])
+            else:
+                loaded = review.load(path)
+                root = Path(loaded[0]["root"])
+        witness = review_history.read(root, path.parent.name)
+        if witness is not None and witness["outcome"] == "failed":
+            result.update(outcome="failed", allowance="unavailable", closure_digest=identity(witness))
+        if witness is not None and witness["unavailable"]:
+            return result
+        from review_ownership import release_path
+
+        stores = [path.parent.parent, *(Path(base) for base in witness["stores"])] if witness else [path.parent.parent]
+        for base in dict.fromkeys(stores):
+            released = release_path(root, base)
+            if released.exists():
+                result.update(outcome="failed", allowance="unavailable",
+                              closure_digest=review.digest(released.read_bytes()))
+                return result
         closed = review.abandoned(path)
         if closed is not None:
             result.update(outcome=closed["outcome"], allowance=closed["allowance"],
                           closure_digest=identity(closed))
             return result
-        ledger, state = review.load(path)
-        from review_ownership import release_path
-
-        released = release_path(Path(ledger["root"]), path.parent.parent)
-        if released.exists():
-            result.update(outcome="failed", allowance="unavailable",
-                          closure_digest=review.digest(released.read_bytes()))
+        ledger, state = loaded if loaded is not None else review.load(path)
+        if witness is not None and witness["digest"] != review.digest(review.encode(ledger)):
             return result
     except (ValueError, OSError, KeyError, TypeError):
         return result

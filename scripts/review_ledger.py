@@ -228,6 +228,7 @@ def fingerprint(_args, root):
 def validate_snapshots(ledger, folder):
     """Reject malformed manifests or corrupt blobs before trusting saved evidence."""
     require(isinstance(ledger["snapshots"], dict), "Invalid snapshots")
+    verified = set()
     for key, item in ledger["snapshots"].items():
         require(key == digest(encode(item)), "Snapshot checksum mismatch")
         fields(item, "head index files")
@@ -238,8 +239,10 @@ def validate_snapshots(ledger, folder):
             require(isinstance(entry["blob"], str) and
                     re.fullmatch(r"[a-f0-9]{64}", entry["blob"]), "Invalid blob ID")
             require(entry["mode"] in ("100644", "100755", "120000"), "Invalid file mode")
-            content = safe_path(folder, f"objects/{entry['blob']}").read_bytes()
-            require(digest(content) == entry["blob"], "Snapshot object checksum mismatch")
+            if entry["blob"] not in verified:
+                content = safe_path(folder, f"objects/{entry['blob']}").read_bytes()
+                require(digest(content) == entry["blob"], "Snapshot object checksum mismatch")
+                verified.add(entry["blob"])
 
 
 def load_history(path):
@@ -646,16 +649,20 @@ def check_snapshot_transition(ledger, state, event):
                     "Unsafe fix path")
 
 
-def append(args, root):
+def append(args, root, *, validated=None):
     """Persist one stdin event only at its expected revision and allowed snapshot.
 
-    The caller must hold the worktree lock. Rejected events can leave snapshot
-    blobs, but only successful validation replaces the canonical ledger.
+    The caller must hold the worktree lock. A validated load may be reused only
+    within the same ownership guard. Rejected events can leave snapshot blobs,
+    but only successful validation replaces the canonical ledger.
     """
     from review_history import require_current, remember
 
-    path = ledger_path(root, args.ledger)
-    ledger, state = load(path)
+    if validated is None:
+        path = ledger_path(root, args.ledger)
+        ledger, state = load(path)
+    else:
+        path, ledger, state = validated
     ensure_owner(ledger, root)
     require(args.revision == state["revision"], "Stale revision; read status before retrying")
     event = args.event if hasattr(args, "event") else json.load(sys.stdin)
@@ -798,8 +805,9 @@ def main():
                     "Legacy storage is read-only; run migrate with --shutdown-evidence, then retry")
             require(base.name == root_key(root), "Storage directory must retain the worktree identity")
             bases = [safe_path(root, ".review-loop"), base] if args.command == "migrate" else [base]
-            with guard(root, bases, args):
-                result = handlers[args.command](args, root)
+            with guard(root, bases, args) as validated:
+                result = (append(args, root, validated=validated) if args.command == "apply"
+                          else handlers[args.command](args, root))
                 if (args.command == "migrate" and bases[0].exists() and
                         set(bases[0].iterdir()) == {bases[0] / ".lock"}):
                     (bases[0] / ".lock").unlink()
