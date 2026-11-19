@@ -60,6 +60,12 @@ never replace its approved provider. A completed report must be read and recorde
 reserving another assignment. On a helper failure, preserve the error and
 interrupt scheduling; do not edit private state to make it pass.
 
+When the adapter requests `claim-dispatch`, pass its exact assignment ID and
+`--provider claude-workflows`. Return the helper's exact JSON, not the earlier
+reservation. The adapter launches review-dependent workers only after a new
+durable claim. On failure, preserve the reservation and error and interrupt;
+do not replay an already claimed dispatch or refund its attempt.
+
 An outstanding review with `review_resume_ready` has a recorded shutdown
 declaration. Consume that one-use handoff with `claim-review --provider
 claude-workflows`; return the same assignment, not a new reservation.

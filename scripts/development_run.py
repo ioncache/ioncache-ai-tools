@@ -262,6 +262,27 @@ def permission(manifest, role):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
 
+def cached_review_identity(reviewed):
+    return plan.digest(plan.encode({key: reviewed[key] for key in ("ledger", "history", "snapshot")}))
+
+
+def cached_revocation(state, reviewed, reason=None):
+    identity = cached_review_identity(reviewed)
+    folder = review.safe_path(Path(state["store"]), "review-revocations")
+    path = review.safe_path(folder, identity + ".json")
+    if path.exists():
+        plan.require(path.is_file() and path.stat().st_size <= 8192,
+                     "Cached review revocation is not a regular bounded record")
+        record = json.loads(path.read_bytes())
+        plan.fields(record, "review reason")
+        plan.require(record["review"] == identity, "Cached review revocation identity changed")
+        return plan.text(record["reason"])
+    if reason is not None:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        review.atomic_write(path, plan.encode({"review": identity, "reason": reason}))
+    return reason
+
+
 def require_cached_review_usable(state, pr_id, root):
     from itertools import chain
     from review_ownership import recovered_ledgers, require_unreleased
@@ -271,19 +292,48 @@ def require_cached_review_usable(state, pr_id, root):
         return
     path = Path(reviewed["ledger"])
     try:
+        retained_revocation = cached_revocation(state, reviewed)
+        plan.require(retained_revocation is None, retained_revocation)
         plan.require(path.is_absolute() and path.parent.parent.name == review.root_key(root),
                      "Cached review lacks a pinned external store; migrate any retained legacy ledgers first")
         for retained in chain((path,), recovered_ledgers(root, path.parent.name)):
             require_unreleased(root, retained.parent.parent)
             invalidation = review.cached_invalidation(root, retained, reviewed)
+            if invalidation is not None:
+                cached_revocation(state, reviewed, invalidation)
             plan.require(invalidation is None, invalidation)
-    except (review.LedgerError, plan.ManifestError) as error:
+    except (ValueError, OSError, KeyError, TypeError) as error:
         raise plan.ManifestError(
             f"Cached review cannot authorize further work: {error}. "
             "For this development run, preserve existing Git and publication effects, stop and "
             "retire any outstanding worker with shutdown evidence, then use "
             f"reconcile --pr {pr_id} with --revision and --reason for a counted review. "
             "Do not replace cached acceptance or refund attempts") from error
+
+
+@contextmanager
+def claim_dispatch(state, args, settings):
+    from review_ownership import locked as review_locked
+
+    feature(Path(state["root"]), settings)
+    assignment = state["active"]
+    plan.require(state["outcome"] == "running" and assignment is not None and
+                 assignment["id"] == args.assignment and assignment["role"] in REVIEW_DEPENDENT_ROLES,
+                 "Dispatch claim requires the current review-dependent assignment")
+    plan.require(not assignment.get("dispatch_claim"),
+                 "Dispatch already claimed; inspect native effects and retire with shutdown evidence "
+                 "before a counted retry. Do not launch the assignment again")
+    permission(state["manifest"], assignment["role"])
+    root = check_worktree(state, assignment["pr"])
+    with review_locked(root):
+        require_cached_review_usable(state, assignment["pr"], root)
+        unchanged(assignment["before"], capture(root))
+        assignment["dispatch_claim"] = {
+            "review": cached_review_identity(state["prs"][assignment["pr"]]["review"]),
+            "revision": state["revision"] + 1,
+        }
+        state["history"][-1] = assignment
+        yield
 
 
 def reserve(state, settings, launch_models=None):
@@ -601,6 +651,7 @@ def request(state, settings):
                   else progress.get("base"))
     recoveries = assignment.get("storage_recoveries", [])
     return {**assignment, "before": before_identity, "comparison_base": comparison,
+            "requires_dispatch_claim": assignment["role"] in REVIEW_DEPENDENT_ROLES,
             "recovered_ledger": recoveries[-1]["ledger"] if recoveries else None,
             "store": state["store"], "approval": state["approval"],
             "manifest_file": str(Path(state["store"]) / "MANIFEST.json"),
@@ -685,7 +736,7 @@ def reconcile(state, args, settings):
 
 
 def mutate(args, folder):
-    with locked(folder):
+    with locked(folder), ExitStack() as guards:
         state = load(folder)
         if args.command not in ("interrupt", "retire"):
             plan.validate(state["manifest"], folder / "inputs")
@@ -698,6 +749,10 @@ def mutate(args, folder):
             plan.require_provider(state["manifest"], args.provider,
                                   strict_worktrees="worktree_roots" in state)
             reserve(state, settings, args.models)
+        elif args.command == "claim-dispatch":
+            plan.require_provider(state["manifest"], args.provider,
+                                  strict_worktrees="worktree_roots" in state)
+            guards.enter_context(claim_dispatch(state, args, settings))
         elif args.command == "record":
             feature(Path(state["root"]), settings)
             complete(state, report, settings)
@@ -762,13 +817,16 @@ def parser():
     for name in ("approved", "root", "store"):
         initialize.add_argument("--" + name, required=True)
     for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile",
-                 "model-fallback", "recover-review-storage", "resume-review", "claim-review", "review-checkpoint"):
+                 "model-fallback", "recover-review-storage", "resume-review", "claim-review", "review-checkpoint",
+                 "claim-dispatch"):
         command = commands.add_parser(name)
         command.add_argument("store")
         if name != "status":
             command.add_argument("--revision", type=int, required=True)
-        if name in ("next", "claim-review"):
+        if name in ("next", "claim-review", "claim-dispatch"):
             command.add_argument("--provider", help="Check the packaged adapter before reserving capacity")
+        if name == "claim-dispatch":
+            command.add_argument("--assignment", required=True)
         if name == "next":
             command.add_argument("--models", type=json.loads,
                                  help="Complete JSON launch choices, retained without changing the manifest")

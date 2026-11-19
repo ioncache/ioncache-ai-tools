@@ -404,11 +404,25 @@ without requiring snapshot objects or comparing the pre-commit review against
 the current HEAD. A retained failed stop still invalidates acceptance when its
 snapshot objects are lost. Unavailable history alone is not evidence of
 revocation; it does not revoke a pinned acceptance without a release or
-readable invalidation record.
+readable invalidation record. Once observed, an explicit review closure remains
+revoked in a private acceptance-specific receipt, even if its ledger later
+becomes unavailable. A new counted review creates a different acceptance;
+rejected operations do not refund or consume assignments.
 Recorded `recover-ownership` locations are checked for release or closure of the
 same review, even after ownership selects another store. Failed stop evidence
 must extend the accepted history. The cached reference and its original evidence
 are not rewritten.
+
+The native adapter must claim each review-dependent assignment with
+`claim-dispatch --assignment <id> --provider claude-workflows` before launch.
+The helper holds the worktree ownership lock through the authority check and
+durable claim write. Ledger closure and store release use that same lock.
+If revocation wins, do not launch; retire the unused reservation with shutdown
+evidence and reconcile. If the claim wins, dispatch has begun: later revocation
+still invalidates successful handback, but does not undo native effects.
+A claim consumes no extra assignment and cannot be replayed. After a lost
+response, inspect native work and effects, then collect or retire the assignment
+before a counted retry. Never infer a fresh launch from an existing claim.
 
 `status` reports missing, unreadable, or changed snapshots in `input_error`.
 Status, interruption, and retirement do not require available snapshot bytes,

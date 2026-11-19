@@ -404,6 +404,24 @@ async function persistedScenario(fixture) {
     }))
   }
   /**
+   * Closes the real ledger at a selected native-dispatch boundary.
+   * @param {object} state - Reserved or claimed controller state
+   * @returns {void}
+   * @throws {Error} If the closure cannot be persisted
+   * @example
+   * closeAcceptedReview(state)
+   */
+  function closeAcceptedReview(state) {
+    const accepted = state.prs[state.assignment.pr].review
+    const ledger = JSON.parse(fs.readFileSync(accepted.ledger, 'utf8'))
+    execFileSync(fixture.python, [path.join(__dirname, 'review_ledger.py'), 'apply',
+      accepted.ledger, '--revision', String(ledger.events.length)], {
+      cwd: state.assignment.root, input: JSON.stringify({
+        type: 'stop', outcome: 'failed', actor: 'fixture', reason: 'Closed at the dispatch boundary'
+      }), stdio: 'pipe'
+    })
+  }
+  /**
    * Executes the workflow's bookkeeping instructions with the real controller.
    * @param {string} prompt - Adapter bookkeeping request
    * @returns {object} Persisted helper state
@@ -415,6 +433,18 @@ async function persistedScenario(fixture) {
     let state = helper('status')
     const checkpoint = prompt.match(/^Review checkpoint: (.+)$/m)
     if (checkpoint) return helper('review-checkpoint', checkpoint[1])
+    if (prompt.includes('Claim this dispatch with claim-dispatch')) {
+      assert(prompt.includes(JSON.stringify(state.assignment.id)))
+      try {
+        const claimed = helper('claim-dispatch', '--assignment', state.assignment.id, '--provider', 'claude-workflows')
+        if (fixture.scenario === 'close-after-dispatch' && claimed.assignment.role === 'commit') {
+          closeAcceptedReview(claimed)
+        }
+        return claimed
+      } catch (error) {
+        return helper('interrupt', '--reason', String(error.stderr || error))
+      }
+    }
     if (prompt.includes('Read status.')) {
       if (state.assignment?.review_resume_ready) {
         assert(prompt.includes('claim-review --provider claude-workflows'))
@@ -425,7 +455,11 @@ async function persistedScenario(fixture) {
       assert(prompt.includes('--provider claude-workflows'))
       assert(prompt.includes('pass --models'))
       try {
-        return helper('next', '--provider', 'claude-workflows', '--models', JSON.stringify(fixtureModels))
+        const reserved = helper('next', '--provider', 'claude-workflows', '--models', JSON.stringify(fixtureModels))
+        if (fixture.scenario === 'close-before-dispatch' && reserved.assignment?.role === 'commit') {
+          closeAcceptedReview(reserved)
+        }
+        return reserved
       } catch (error) {
         return helper('interrupt', '--reason', String(error.stderr || error))
       }
@@ -531,13 +565,20 @@ async function persistedScenario(fixture) {
         fs.unlinkSync(assignment.artifacts.find(item => item.id === 'design').snapshot)
       }
     }
-    const outcome = options.label === 'implement' ? 'complete' : 'blocked'
+    const committing = options.label === 'commit' && fixture.scenario === 'close-after-dispatch'
+    const data = {}
+    if (committing) {
+      execFileSync('git', ['add', 'app.txt'], { cwd: assignment.root, stdio: 'pipe' })
+      execFileSync('git', ['commit', '-qm', 'Fixture claimed commit'], { cwd: assignment.root, stdio: 'pipe' })
+      data.commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: assignment.root, encoding: 'utf8' }).trim()
+    }
+    const outcome = options.label === 'implement' || committing ? 'complete' : 'blocked'
     fs.writeFileSync(assignment.result_file, JSON.stringify({
       assignment: assignment.id, worker: null, outcome,
       summary: 'Offline fixture stops at the next review or commit boundary',
       evidence: ['Local fixture worker only; no model or network calls'],
       artifacts: Object.fromEntries(assignment.artifacts.map(item => [item.id, item.sha256])),
-      data: {}
+      data
     }))
     return { outcome, result_file: assignment.result_file, requests: [] }
   }

@@ -66,8 +66,9 @@ def external_directory(path, root=None):
     while not probe.exists():
         probe = probe.parent
     environment = {key: value for key, value in os.environ.items()
-                   if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")}
+                   if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES")}
     environment["LC_ALL"] = "C"
+    environment["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "1"
     result = subprocess.run(["git", "-C", str(probe), "rev-parse", "--git-dir"],
                             capture_output=True, env=environment)
     require(result.returncode != 0,
@@ -768,10 +769,11 @@ def main():
             bases = [safe_path(root, ".review-loop"), base] if args.command == "migrate" else [base]
             with guard(root, bases, args):
                 result = handlers[args.command](args, root)
-            if args.command == "migrate" and set(bases[0].iterdir()) == {bases[0] / ".lock"}:
-                (bases[0] / ".lock").unlink()
-                bases[0].rmdir()
-                sync_directory(root)
+                if (args.command == "migrate" and bases[0].exists() and
+                        set(bases[0].iterdir()) == {bases[0] / ".lock"}):
+                    (bases[0] / ".lock").unlink()
+                    bases[0].rmdir()
+                    sync_directory(root)
         else:
             result = handlers[args.command](args, root)
         print(json.dumps(result, indent=2, ensure_ascii=True))

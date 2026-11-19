@@ -1583,6 +1583,81 @@ class DevelopmentRunTests(unittest.TestCase):
     def test_stopped_cached_review_requires_counted_reconciliation(self):
         self.assert_closed_cached_review_recovers()
 
+    def test_observed_revocation_survives_unavailable_history(self):
+        root = self.start_review_fixture()
+        data = self.review(root)
+        source = Path(data["ledger"]).parent.parent
+        self.close_accepted_review(root)
+        self.assertIn("reconcile --pr first", self.mutate("next", ok=False))
+        hidden = self.folder / "offline-revoked-review"
+        source.rename(hidden)
+        self.assertIn("reconcile --pr first", self.mutate("next", ok=False))
+        hidden.rename(source)
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace revoked acceptance")
+        self.assertEqual(self.next()["attempt"], 2)
+        self.review(root)
+        self.assertEqual(self.next()["role"], "commit")
+
+    def test_workflow_rejects_closure_between_reservation_and_launch(self):
+        root = self.start_review_fixture()
+        self.review(root)
+        before = self.git("rev-parse", "HEAD", root=root)
+        roles = self.workflow("close-before-dispatch")
+        self.assertNotIn("commit", roles)
+        self.assertEqual(self.git("rev-parse", "HEAD", root=root), before)
+        self.assertIn("reconcile --pr first", self.state["reason"])
+        self.mutate("retire", "--reason", "The commit worker never launched",
+                    "--shutdown-evidence", "The synchronous fixture returned without a commit launch")
+        self.mutate("reconcile", "--pr", "first", "--reason", "Replace revoked acceptance")
+        self.assertIn("commit", self.workflow("review-complete"))
+
+    def test_dispatch_claim_holds_ownership_through_save_and_cannot_replay(self):
+        root = self.start_review_fixture()
+        data = self.review(root)
+        assignment = self.next()
+        arguments = ("claim-dispatch", str(self.store), "--revision", str(self.state["revision"]),
+                     "--assignment", assignment["id"], "--provider", "claude-workflows")
+        original = development.save
+        ledger_revision = len(json.loads(Path(data["ledger"]).read_bytes())["events"])
+
+        def save_with_competing_closure(folder, state):
+            competing = subprocess.run(
+                [sys.executable, str(SCRIPTS / "review_ledger.py"), "apply", data["ledger"],
+                 "--revision", str(ledger_revision)], cwd=root, env=self.env,
+                input=json.dumps({"type": "stop", "outcome": "failed", "actor": "fixture",
+                                  "reason": "Closure competing with a dispatch claim"}),
+                text=True, capture_output=True, timeout=5)
+            self.assertEqual(competing.returncode, 2, competing.stdout + competing.stderr)
+            self.assertIn("temporarily unavailable", competing.stderr)
+            original(folder, state)
+
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(development, "save", save_with_competing_closure):
+            self.state = development.mutate(development.parser().parse_args(arguments), self.store)
+        self.assertIn("already claimed", self.mutate(
+            "claim-dispatch", "--assignment", assignment["id"], "--provider", "claude-workflows", ok=False))
+        consumed = self.state["consumed_assignments"]
+        self.mutate("retire", "--reason", "Reconcile a lost claim response without replay",
+                    "--shutdown-evidence", "Fixture did not launch a worker or create external effects")
+        self.mutate("resume", "--reason", "Counted retry after confirming native shutdown")
+        retry = self.next()
+        self.assertEqual((retry["role"], retry["attempt"]), ("commit", 2))
+        self.assertEqual(self.state["consumed_assignments"], consumed + 1)
+        self.mutate("claim-dispatch", "--assignment", retry["id"], "--provider", "claude-workflows")
+        self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.next()["role"], "draft")
+
+    def test_workflow_preserves_claimed_dispatch_effects_after_closure(self):
+        root = self.start_review_fixture()
+        (root / "app.txt").write_text("reviewed change\n")
+        self.review(root)
+        before = self.git("rev-parse", "HEAD", root=root)
+        roles = self.workflow("close-after-dispatch")
+        self.assertIn("commit", roles)
+        self.assertNotEqual(self.git("rev-parse", "HEAD", root=root), before)
+        self.assertIn("reconcile --pr first", self.state["reason"])
+        self.assertIsNotNone(self.state["assignment"]["dispatch_claim"])
+
     def test_abandoned_cached_review_requires_counted_reconciliation(self):
         self.assert_closed_cached_review_recovers("abandon")
 
@@ -1633,6 +1708,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.review(root)
         first_commit = self.next()
         self.assertEqual(first_commit["role"], "commit")
+        self.mutate("claim-dispatch", "--assignment", first_commit["id"], "--provider", "claude-workflows")
         self.git("add", "app.txt", root=root)
         self.git("commit", "-qm", "fixture dispatched commit", root=root)
         committed = self.git("rev-parse", "HEAD", root=root)
@@ -1652,6 +1728,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.review(root)
         retry_commit = self.next()
         self.assertEqual((retry_commit["role"], retry_commit["attempt"]), ("commit", 2))
+        self.mutate("claim-dispatch", "--assignment", retry_commit["id"], "--provider", "claude-workflows")
         self.execute_fixture(retry_commit)
         self.assertEqual(self.git("rev-parse", "HEAD", root=root), committed)
         self.assertEqual(self.next()["role"], "draft")
@@ -1727,6 +1804,9 @@ class DevelopmentRunTests(unittest.TestCase):
         archived = json.loads((Path(archive["directory"]) / "audit.json").read_bytes())
         self.assertTrue(archive["historical"])
         self.assertEqual(archived["reviews"][0]["outcome"], "failed")
+        source = Path(self.state["prs"]["first"]["review"]["ledger"]).parent.parent
+        source.rename(self.folder / "offline-audit-review")
+        self.assertIn("reconcile --pr first", self.audit_cli("export", "--public", str(public_path), ok=False))
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.assertEqual(self.audit_body_updates, [])
 
@@ -2160,8 +2240,9 @@ class DevelopmentRunTests(unittest.TestCase):
         path = self.store / "progress" / self.state["assignment"]["id"] / "000002.json"
         private = self.folder / "private.json"
         private.write_text('{"private":"DO-NOT-PRINT"}')
-        path.unlink()
-        path.symlink_to(private)
+        replacement = path.with_name(".invalid-progress")
+        replacement.symlink_to(private)
+        replacement.replace(path)
         observed = self.watch_line(watcher)
         self.assertIsNotNone(observed["progress_error"])
         self.assertNotIn("DO-NOT-PRINT", json.dumps(observed))

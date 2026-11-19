@@ -470,10 +470,23 @@ if (state.assignment && state.assignment.configuration.execution.provider !== 'c
   if (!state) throw new Error('Could not record the execution-provider mismatch')
 }
 for (let step = 0; step < state.limits.assignments && state.outcome === 'running'; step += 1) {
-  const assignment = state.assignment
+  let assignment = state.assignment
   if (!assignment) throw new Error('Running controller returned no assignment')
   phase(assignment.role)
   try {
+    if (assignment.requires_dispatch_claim) {
+      state = await control(
+        `Claim this dispatch with claim-dispatch --assignment ${JSON.stringify(assignment.id)} ` +
+        '--provider claude-workflows before native launch. If claiming fails, interrupt with the error ' +
+        'and preserve the reservation; never launch from the old response. Return the exact helper JSON.'
+      )
+      if (state?.outcome === 'blocked') return state
+      if (!state || state.outcome !== 'running' || state.assignment?.id !== assignment.id ||
+          !state.assignment.dispatch_claim) {
+        throw new Error('No durable dispatch claim; preserve the reservation without launching')
+      }
+      assignment = state.assignment
+    }
     const result = assignment.role === 'review'
       ? await reviewAssignment(assignment)
       : await launchAgent({

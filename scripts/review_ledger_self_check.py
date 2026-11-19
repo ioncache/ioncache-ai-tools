@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the ledger CLI against isolated Git repositories, without host agents."""
 
+from contextlib import contextmanager
 import fcntl
+import io
 import json
 from itertools import count, product
 import os
@@ -857,6 +859,16 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.assertFalse(destination.exists())
         self.assertEqual(review_ledger.external_run_directory(destination, "a" * 32, self.root), destination)
 
+    def test_external_storage_ignores_git_discovery_ceiling(self):
+        other = self.folder / "another-repository"
+        subprocess.run(["git", "init", "-q", str(other)], env=self.env, check=True)
+        nested = other / "nested"
+        nested.mkdir()
+        with patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(other),
+                                    "GIT_DISCOVERY_ACROSS_FILESYSTEM": "0"}):
+            with self.assertRaisesRegex(review_ledger.LedgerError, "outside every repository"):
+                review_ledger.external_directory(nested / self.storage.name, self.root)
+
     def legacy_run(self):
         source = self.root / ".review-loop" / Path(self.ledger).parent.name
         source.parent.mkdir(exist_ok=True)
@@ -900,6 +912,30 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertFalse(self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])["migrated"])
         self.assertFalse((self.root / ".review-loop").exists())
+
+    def test_migration_retry_after_guard_release_keeps_cleanup_successful(self):
+        self.init()
+        source = self.legacy_run()
+        legacy = str(source / "REVIEW_LEDGER.json")
+        original = review_ownership.guard
+        retried = []
+
+        @contextmanager
+        def retry_after_unlock(*args):
+            with original(*args):
+                yield
+            retried.append(self.cli(["migrate", legacy, "--shutdown-evidence", "Fixture writers stopped"]))
+
+        with patch.object(review_ownership, "guard", retry_after_unlock), \
+                patch.object(review_ledger, "worktree", return_value=self.root), \
+                patch.object(sys, "argv", ["review_ledger.py", "migrate", legacy,
+                                          "--shutdown-evidence", "Fixture writers stopped"]), \
+                patch.object(sys, "stdout", io.StringIO()), \
+                patch.object(sys, "stderr", io.StringIO()) as errors:
+            self.assertEqual(review_ledger.main(), 0, errors.getvalue())
+        self.assertEqual(len(retried), 1)
+        self.assertEqual(self.cli(["inspect", self.ledger])["revision"], self.state["revision"])
+        self.assertFalse(source.parent.exists())
 
     def test_migration_retry_after_partial_source_deletion_preserves_history(self):
         self.init()
@@ -1527,6 +1563,22 @@ sys.exit(review_ledger.main())
         self.assertIn("released", self.cli(["status", old_ledger], ok=False))
         self.assertEqual(self.cli(["inspect", old_ledger])["outcome"], "interrupted")
         self.assertEqual(owner.read_bytes(), replacement_owner)
+
+    def test_closing_returned_store_preserves_unused_replacement_owner(self):
+        self.init()
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        hidden = self.folder / "unmounted-store"
+        self.storage.rename(hidden)
+        target = self.folder / "replacement" / self.storage.name
+        self.cli(["release-ownership", "--storage", str(self.storage),
+                  "--replacement-storage", str(target), "--reason", "Store lost",
+                  "--shutdown-evidence", "Fixture writers stopped"])
+        replacement = owner.read_bytes()
+        hidden.rename(self.storage)
+        self.send("stop", outcome="interrupted")
+        self.assertEqual(owner.read_bytes(), replacement)
+        self.init("--storage", str(target))
+        self.assertEqual(self.state["outcome"], "running")
 
     def test_interrupted_ownership_release_can_retry_without_lost_evidence(self):
         script = """

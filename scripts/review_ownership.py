@@ -233,7 +233,7 @@ def guard(root, bases, args):
             except (ledger.LedgerError, OSError) as error:
                 print(f"review-ledger: ownership unchanged during closure: {error}", file=sys.stderr)
             else:
-                bind = True
+                bind = not release_path(root, base).exists()
         elif not closing:
             check(previous, base, args)
         if bind:
