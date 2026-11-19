@@ -179,6 +179,7 @@ hints; `--help` is the portable option list, not a promised cross-host picker.
 
 ## Autonomous development
 
+This skill is user-invoked only, never automatically selected for matching tasks.
 Invoke `/ioncache-ai-tools:autonomous-development` in Claude/Copilot, or
 `$ioncache-ai-tools:autonomous-development` in Codex. Choose planning, design,
 and execution destinations independently. Review and approve the plan, content
@@ -188,14 +189,28 @@ The initial execution adapter is the Claude Workflow
 `/ioncache-ai-tools:autonomous-development-run`. It uses fresh workers, private
 durable state, per-task and full-PR reviews, and human-controlled PR merging.
 Copilot and Codex currently support preparation and state inspection only.
-This adapter uses configured models; unsupported review-role overrides require
-their declared fallback or leave the affected work incomplete.
+Use the exact execution provider `claude-workflows`. The adapter applies
+resolved native role models/efforts, with explicit overrides and separate
+requested/observed model records. Independent review leaves run concurrently;
+fixers remain sequential.
 The adapter is **not yet live-host qualified**; offline checks do not establish
 unattended permissions, cloud operation, or shared team controls.
 
+The launcher supplies the private store path and a cross-session monitor:
+
+```sh
+python3 "/absolute/plugin/scripts/development_run.py" watch "/private/development-run"
+```
+
+It reports assignment and review progress, stopped outcomes and inactivity
+without changing the run. Worktrees may follow the project's sibling-directory
+convention; the private store must remain separate from every worktree.
+
 When approved, runs automatically publish initial and final process audit bundles
-on a separate branch in the same GitHub repository and link immutable versions
-from PR comments. Private inputs and raw reports stay local. The public narrative
+in the modified repository's wiki, update its newest-first
+`Automated-Pull-Request-Audits` table, and add report/data/index links to the PR
+body. The wiki must already be initialized and writable. No audit branch or
+manual upload is used. Private inputs and raw reports stay local. The public narrative
 requires publication review. Set `autonomous-development-audit` to `false` to
 disable this independently. See [skills/autonomous-development/AUDIT.md](skills/autonomous-development/AUDIT.md).
 
@@ -222,7 +237,7 @@ Use `review-validate-fix-loop` when you want findings fixed:
 
 ```text
 /ioncache-ai-tools:review-validate-fix-loop branch --max-loops 3 --max-fix-cycles 3
-/ioncache-ai-tools:review-validate-fix-loop --resume .review-loop/<run-id>/REVIEW_LEDGER.json
+/ioncache-ai-tools:review-validate-fix-loop --resume /absolute/private/reviews/<worktree-identity>/<run-id>/REVIEW_LEDGER.json
 ```
 
 Defaults are three outer review loops and three fix cycles per outer loop.

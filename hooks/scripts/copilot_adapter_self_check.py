@@ -204,6 +204,26 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('task', {'prompt': 'Finish the report'}), {})
         self.assertFalse((self.home / '.cache/ioncache-ai-tools/claim-evidence').exists())
 
+    def test_autonomous_skill_is_user_only_without_fencing_existing_work(self):
+        for name in ('autonomous-development', 'ioncache-ai-tools:autonomous-development'):
+            output = self.tool('skill', {'skill': name})
+            self.assertEqual(output.get('permissionDecision'), 'deny')
+            self.assertIn('ordinary tools', output['permissionDecisionReason'])
+        self.assertEqual(self.tool('view', {'path': str(ROOT / 'skills/autonomous-development/SKILL.md')}), {})
+        command = 'printf continued > continued.txt'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, check=True, cwd=self.project, env=self.env, timeout=5)
+        self.assertEqual((self.project / 'continued.txt').read_text(), 'continued')
+        self.assertEqual(self.tool('skill', {'skill': 'review-code'}), {})
+        self.assertEqual(self.tool('skill', {'skill': 'autonomous-development'})['permissionDecision'], 'deny')
+        self.prompt('/ioncache-ai-tools:autonomous-development')
+        self.assertEqual(self.tool('view', {'path': str(ROOT / 'skills/autonomous-development/SKILL.md')}), {})
+        self.assertEqual(self.tool('skill', {'skill': 'autonomous-development'})['permissionDecision'], 'deny')
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
+                          {'features': {'autonomous-development-explicit-only': False}})
+        self.assertEqual(self.tool('skill', {'skill': 'autonomous-development'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'killall node'})['permissionDecision'], 'deny')
+
     def test_checker_failure_does_not_require_human_recovery(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
         data = {**self.payload, 'toolName': 'create', 'toolArgs': {'path': 'report.txt', 'file_text': 'x'}}

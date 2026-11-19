@@ -7,6 +7,9 @@ import re
 from graphlib import CycleError, TopologicalSorter
 
 
+EXECUTION_ADAPTERS = {"claude-workflows": "ioncache-ai-tools:autonomous-development-run"}
+
+
 class ManifestError(ValueError):
     pass
 
@@ -51,6 +54,40 @@ def relative(value, *, root=False):
     require("\\" not in value and not any(char in value for char in "\0\r\n"),
             f"Unsupported path: {value!r}")
     return value
+
+
+def worktree_path(value):
+    text(value)
+    path = PurePosixPath(value)
+    require(path.name not in ("", ".", "..") and path.as_posix() == value and
+            not any(part in (".git", ".review-loop") for part in path.parts) and
+            "\\" not in value and not any(char in value for char in "\0\r\n"),
+            f"Unsafe or non-normalized worktree path: {value!r}")
+    return value
+
+
+def executable_worktree(value):
+    worktree_path(value)
+    require(not value.startswith("-") and not any(ord(char) < 32 or ord(char) == 127 for char in value),
+            "Worktree path cannot be an option or contain control characters")
+
+
+def execution(manifest):
+    provider = manifest["configuration"]["execution"]["provider"]
+    adapter = EXECUTION_ADAPTERS.get(provider)
+    return {"provider": provider, "adapter": adapter}
+
+
+def require_provider(manifest, provider, *, strict_worktrees=True):
+    if provider is None:
+        return
+    require(provider in EXECUTION_ADAPTERS, f"No packaged adapter for execution provider {provider!r}")
+    require(execution(manifest)["provider"] == provider,
+            f"Execution provider mismatch: this adapter requires {provider!r}; "
+            "use the approved provider's executor, or correct the manifest before approval. "
+            "No assignment was reserved.")
+    for item in manifest["prs"]:
+        (executable_worktree if strict_worktrees else relative)(item["worktree"])
 
 
 def encode(value):
@@ -102,9 +139,14 @@ def configuration(value):
         fields(value[concern], "provider location")
         for item in value[concern].values():
             text(item)
-    fields(value["execution"], "provider environment")
-    for item in value["execution"].values():
-        text(item)
+    execution = value["execution"]
+    require(isinstance(execution, dict) and {"provider", "environment"} <= execution.keys() <=
+            {"provider", "environment", "models", "review_options"}, "Invalid execution configuration")
+    for name in ("provider", "environment"):
+        text(execution[name])
+    if "models" in execution or "review_options" in execution:
+        import development_models
+        development_models.configuration(execution)
 
 
 def artifacts(value, folder):
@@ -133,7 +175,7 @@ def pull_requests(value):
         fields(item, "id goal branch worktree base target dependencies checks rollout")
         text(item["goal"])
         text(item["rollout"])
-        relative(item["worktree"])
+        worktree_path(item["worktree"])
         require(item["worktree"] not in worktrees, "PR worktrees must be distinct")
         worktrees.add(item["worktree"])
         for key in ("branch", "target"):
@@ -154,13 +196,15 @@ def pull_requests(value):
 def tasks(value, prs, sources):
     records = indexed(value)
     for item in records.values():
-        fields(item, "id pr goal paths dependencies artifacts checks compatibility completion")
+        fields(item, "id pr goal dependencies artifacts checks compatibility completion" +
+               (" paths" if "paths" in item else ""))
         require(item["pr"] in prs, "Unknown PR")
         for key in ("goal", "compatibility", "completion"):
             text(item[key])
-        strings(item["paths"])
-        for path in item["paths"]:
-            relative(path, root=True)
+        if "paths" in item:
+            strings(item["paths"])
+            for path in item["paths"]:
+                relative(path, root=True)
         strings(item["artifacts"])
         require(set(item["artifacts"]) <= sources.keys(), "Unknown task artifact")
         checks(item["checks"])
@@ -200,7 +244,19 @@ def validate(manifest, folder):
                 item["branch"] != item["target"] for item in prs.values()),
             "Owned branches cannot be the default or target branch")
     tasks(manifest["tasks"], prs, sources)
-    return {"manifest": manifest, "identity": digest(encode(manifest))}
+    selected = execution(manifest)
+    warnings = [] if selected["adapter"] else [
+        f"No packaged adapter for execution provider {selected['provider']!r}. "
+        "The packaged Claude adapter requires exactly 'claude-workflows'. "
+        "Preparation remains valid; select a compatible executor before approval."
+    ]
+    for item in manifest["prs"]:
+        try:
+            executable_worktree(item["worktree"])
+        except ManifestError as error:
+            warnings.append(str(error))
+    return {"manifest": manifest, "identity": digest(encode(manifest)),
+            "execution": selected, "warnings": warnings}
 
 
 def read(path):

@@ -41,6 +41,7 @@ remain after synchronization finishes.
 | ID | Controls |
 | --- | --- |
 | `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts; native origin detection is currently unavailable |
+| `autonomous-development-explicit-only` | Reject assistant skill-tool calls to autonomous development; direct human invocation and ordinary work remain available |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -68,6 +69,13 @@ subject to host behavior.
 When a skill is disabled, continue with other available tools. The worktree
 guard supplies its setup helper's path, so recovery does not depend on loading
 the `create-worktree` skill.
+
+Autonomous development is separately user-invoked only. Its native metadata
+sets `disable-model-invocation: true` and `user-invocable: true` for Claude and
+Copilot, plus `policy.allow_implicit_invocation: false` in `agents/openai.yaml`
+for Codex. The tool-call guard closes Copilot's by-name loading route; disabling
+that guard does not change the native discovery metadata. No prompt-classifier
+state or conversation-wide fence is involved.
 
 Disabling `skill:engineering-judgment` also suppresses the reminder to load
 that skill. Apart from these dependencies, guard and skill settings are
@@ -103,6 +111,14 @@ from generic composing skills. That reminder remains stateless and advisory;
 native instruction delivery and model compliance require separate verification.
 
 ## Synchronization and recovery
+
+Autonomous development has independent `autonomous-development-progress` and
+`autonomous-development-model-selection` controls. Disabling progress removes
+worker checkpoint writes, not the read-only `watch` command or assignment state.
+Disabling automatic role selection leaves unspecified roles configured while
+preserving explicit model/effort choices. `review-auto-model-selection` separately
+controls unspecified review roles. None of these switches disables acceptance
+checks, refunds attempts, or changes native permissions.
 
 Do not mix old and new catalog writers while using the new review controls.
 An older cached plugin removes keys it does not recognize; a newer copy then

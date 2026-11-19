@@ -424,58 +424,58 @@ function selfTest() {
   const os = require('os')
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-worktree-self-test-'))
-  const root = fs.mkdtempSync(path.join(tmp, 'root-'))
-  const outside = fs.mkdtempSync(path.join(tmp, 'outside-'))
-
-  assert.strictEqual(resolveWithinRoot(root, 'a/b.txt'), path.resolve(root, 'a/b.txt'))
-  assert.throws(() => resolveWithinRoot(root, '../../etc/passwd'), /escapes its root/)
-  assert.throws(() => resolveWithinRoot(root, `../${path.basename(outside)}/x`), /escapes its root/)
-
-  // Symlink-based escape: no literal ".." in the config, but an existing
-  // ancestor is a symlink that redirects outside root once resolved.
-  fs.symlinkSync(outside, path.join(root, 'escape-link'), 'dir')
-  fs.writeFileSync(path.join(outside, 'x'), 'secret')
-  assert.throws(() => resolveWithinRoot(root, 'escape-link/x'), /escapes its root/, 'source path via a symlinked ancestor should be rejected')
-  assert.throws(() => resolveWithinRoot(root, 'escape-link/new-file.txt'), /escapes its root/, 'destination path via a symlinked ancestor should be rejected, even though the file itself does not exist yet')
-
-  const missingTarget = path.join(outside, 'not-created.txt')
-  fs.symlinkSync(missingTarget, path.join(root, 'dangling-link'))
-  fs.writeFileSync(path.join(root, SETUP_FILE), JSON.stringify({
-    afterCopy: [{ path: 'dangling-link', content: 'must not escape' }]
-  }))
-  assert.throws(() => applySetup(root, root), /symlink/, 'a dangling link must not redirect an afterCopy write')
-  assert(!fs.existsSync(missingTarget), 'the outside target must remain absent')
-  fs.unlinkSync(path.join(root, SETUP_FILE))
-  fs.symlinkSync(path.join(outside, 'missing-directory'), path.join(root, 'dangling-directory'))
-  assert.throws(() => resolveWithinRoot(root, 'dangling-directory/file'), /symlink/)
-  assert(!fs.existsSync(path.join(outside, 'missing-directory')))
-
-  // Filesystem-root regression: a root that already ends with path.sep
-  // (e.g. "/" on POSIX) made a naive `startsWith(realRoot + path.sep)`
-  // check require a doubled separator, wrongly rejecting every real child.
-  const fsRoot = path.parse(tmp).root
-  const relFromFsRoot = path.relative(fsRoot, tmp)
-  assert.doesNotThrow(() => resolveWithinRoot(fsRoot, relFromFsRoot), 'a real child of the filesystem root should not be rejected as escaping it')
-
-  const configFiles = [
-    '.claude/ioncache-ai-tools.local.json',
-    '.github/copilot/settings.local.json',
-    '.github/copilot/ioncache-ai-tools.local.json'
-  ]
-  fs.mkdirSync(path.join(root, '.github/copilot'), { recursive: true })
-  fs.mkdirSync(path.join(root, '.claude'), { recursive: true })
-  for (const rel of configFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
-  fs.writeFileSync(path.join(root, '.graphifyignore'), 'private/\n')
-  const worktree = fs.mkdtempSync(path.join(tmp, 'worktree-'))
-  applySetup(root, worktree)
-  assert(!fs.existsSync(path.join(worktree, '.graphifyignore')))
-  assert.strictEqual(fs.readFileSync(path.join(root, '.graphifyignore'), 'utf8'), 'private/\n')
-  for (const rel of configFiles) {
-    assert(fs.lstatSync(path.join(worktree, rel)).isSymbolicLink())
-    assert.strictEqual(fs.realpathSync(path.join(worktree, rel)), fs.realpathSync(path.join(root, rel)))
-  }
-
   try {
+    const root = fs.mkdtempSync(path.join(tmp, 'root-'))
+    const outside = fs.mkdtempSync(path.join(tmp, 'outside-'))
+
+    assert.strictEqual(resolveWithinRoot(root, 'a/b.txt'), path.resolve(root, 'a/b.txt'))
+    assert.throws(() => resolveWithinRoot(root, '../../etc/passwd'), /escapes its root/)
+    assert.throws(() => resolveWithinRoot(root, `../${path.basename(outside)}/x`), /escapes its root/)
+
+    // Symlink-based escape: no literal ".." in the config, but an existing
+    // ancestor is a symlink that redirects outside root once resolved.
+    fs.symlinkSync(outside, path.join(root, 'escape-link'), 'dir')
+    fs.writeFileSync(path.join(outside, 'x'), 'secret')
+    assert.throws(() => resolveWithinRoot(root, 'escape-link/x'), /escapes its root/, 'source path via a symlinked ancestor should be rejected')
+    assert.throws(() => resolveWithinRoot(root, 'escape-link/new-file.txt'), /escapes its root/, 'destination path via a symlinked ancestor should be rejected, even though the file itself does not exist yet')
+
+    const missingTarget = path.join(outside, 'not-created.txt')
+    fs.symlinkSync(missingTarget, path.join(root, 'dangling-link'))
+    fs.writeFileSync(path.join(root, SETUP_FILE), JSON.stringify({
+      afterCopy: [{ path: 'dangling-link', content: 'must not escape' }]
+    }))
+    assert.throws(() => applySetup(root, root), /symlink/, 'a dangling link must not redirect an afterCopy write')
+    assert(!fs.existsSync(missingTarget), 'the outside target must remain absent')
+    fs.unlinkSync(path.join(root, SETUP_FILE))
+    fs.symlinkSync(path.join(outside, 'missing-directory'), path.join(root, 'dangling-directory'))
+    assert.throws(() => resolveWithinRoot(root, 'dangling-directory/file'), /symlink/)
+    assert(!fs.existsSync(path.join(outside, 'missing-directory')))
+
+    // Filesystem-root regression: a root that already ends with path.sep
+    // (e.g. "/" on POSIX) made a naive `startsWith(realRoot + path.sep)`
+    // check require a doubled separator, wrongly rejecting every real child.
+    const fsRoot = path.parse(tmp).root
+    const relFromFsRoot = path.relative(fsRoot, tmp)
+    assert.doesNotThrow(() => resolveWithinRoot(fsRoot, relFromFsRoot), 'a real child of the filesystem root should not be rejected as escaping it')
+
+    const configFiles = [
+      '.claude/ioncache-ai-tools.local.json',
+      '.github/copilot/settings.local.json',
+      '.github/copilot/ioncache-ai-tools.local.json'
+    ]
+    fs.mkdirSync(path.join(root, '.github/copilot'), { recursive: true })
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true })
+    for (const rel of configFiles) fs.writeFileSync(path.join(root, rel), '{}\n')
+    fs.writeFileSync(path.join(root, '.graphifyignore'), 'private/\n')
+    const worktree = fs.mkdtempSync(path.join(tmp, 'worktree-'))
+    applySetup(root, worktree)
+    assert(!fs.existsSync(path.join(worktree, '.graphifyignore')))
+    assert.strictEqual(fs.readFileSync(path.join(root, '.graphifyignore'), 'utf8'), 'private/\n')
+    for (const rel of configFiles) {
+      assert(fs.lstatSync(path.join(worktree, rel)).isSymbolicLink())
+      assert.strictEqual(fs.realpathSync(path.join(worktree, rel)), fs.realpathSync(path.join(root, rel)))
+    }
+
     fs.mkdirSync(path.join(root, 'cache/nested'), { recursive: true })
     fs.writeFileSync(path.join(root, 'cache/nested/x'), 'copied')
     fs.writeFileSync(path.join(root, SETUP_FILE), JSON.stringify({ copies: ['cache'] }))
@@ -494,6 +494,30 @@ function selfTest() {
     assert.strictEqual(fs.readFileSync(path.join(worktree, 'cache/nested/x'), 'utf8'), 'copied')
     selfTestRestoredWorktree(tmp)
     selfTestConcurrentWorktree(tmp)
+    for (const failure of ['setup', 'assertion']) {
+      const before = fs.readdirSync(tmp).sort()
+      const probe = `
+        const fs = require('fs')
+        const assert = require('assert')
+        const make = fs.mkdtempSync
+        let allocations = 0
+        fs.mkdtempSync = (...args) => {
+          if (++allocations === 2 && process.argv[2] === 'setup') {
+            throw new Error('injected early self-test failure')
+          }
+          return make(...args)
+        }
+        assert.strictEqual = () => { throw new Error('injected early self-test failure') }
+        const script = process.argv[1]
+        process.argv = [process.execPath, script, '--self-test']
+        require(script)
+      `
+      const result = spawnSync(process.execPath, ['-e', probe, __filename, failure],
+        { env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp }, encoding: 'utf8', timeout: 10000 })
+      assert.strictEqual(result.status, 1, result.stderr)
+      assert.match(result.stderr, /injected early self-test failure/)
+      assert.deepStrictEqual(fs.readdirSync(tmp).sort(), before, 'failed self-test must remove its fixture')
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

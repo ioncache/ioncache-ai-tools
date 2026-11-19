@@ -473,7 +473,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_workflows_ship_as_native_skills(self):
         for name in (
             'create-worktree', 'engineering-judgment', 'investigate', 'review-code',
-            'triage-errors', 'verify-unresolved-pr-comments',
+            'triage-errors', 'verify-unresolved-pr-comments', 'autonomous-development',
         ):
             with self.subTest(name=name):
                 path = ROOT / 'skills' / name / 'SKILL.md'
@@ -485,6 +485,12 @@ class CodexAdapterTests(unittest.TestCase):
         worktree_skill = (ROOT / 'skills/create-worktree/SKILL.md').read_text()
         self.assertIn('"', worktree_skill)
         self.assertIn('../../scripts/create-worktree.py', worktree_skill)
+        autonomous = ROOT / 'skills/autonomous-development'
+        frontmatter = (autonomous / 'SKILL.md').read_text().split('---', 2)[1]
+        self.assertIn('\ndisable-model-invocation: true\n', frontmatter)
+        self.assertIn('\nuser-invocable: true\n', frontmatter)
+        self.assertEqual((autonomous / 'agents/openai.yaml').read_text(),
+                         'policy:\n  allow_implicit_invocation: false\n')
 
     def test_worktree_skill_example_quotes_installed_helper_path(self):
         install = self.root / 'plugin with spaces'

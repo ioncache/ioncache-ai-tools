@@ -119,7 +119,8 @@ make a recorded decision, or stop as blocked/stalled.
 ## Nested correction cycles
 
 Only in-scope, valid `Act` findings are eligible for `start_fix`. Use their IDs
-and an exact list of files the batch may change, including new tests/docs.
+and any known file hints, including likely tests/docs; use an empty list when
+the affected files are not yet known. These are not an edit allowlist.
 Eligibility comes from the semantic assessment, not visibility in the report
 or a ledger disposition alone. This records intent and consumes one inner cycle.
 Use one writer and do not stage or commit changes. Preserve pre-existing edits
@@ -131,8 +132,9 @@ applied/failed result and check evidence. This saves the after snapshot needed b
 Persist that plan and options in an internal `stop` (`interrupted`)/`resume`
 checkpoint before launching workers, without consuming another review or fix cycle.
 An attempted fix is not yet a verified
-resolution. The helper rejects changes outside the declared files or changed
-HEAD/index metadata. It never reverts code to resolve such conflicts.
+resolution. Necessary discovered files enter the saved delta and its review.
+The helper rejects changed HEAD/index metadata. It never reverts code to resolve
+such conflicts. The approved corrections and explicit constraints still bound work.
 
 Use `diff` with the cycle's `before` and `after` snapshots for focused review.
 Use the same review boundary with a `focused` request. Include each attempted
@@ -256,12 +258,13 @@ Reports between iterations distinguish new findings from repeated observations.
 Do not claim token or cost limits; Phase 1 does not collect usage.
 
 Saved snapshots cover tracked and non-ignored untracked files across the
-worktree, excluding `.review-loop/`. Ignored inputs and external systems are
+worktree. Ignored inputs and external systems are
 not snapshotted. Submodules and special files are currently unsupported and
 cause explicit errors. Symlinks are saved as target text, never dereferenced;
 the helper rejects symlink paths in fix declarations.
 
-Artifacts are local, private-by-default files under `.review-loop/<run-id>/`.
+Artifacts are local, private-by-default files in external storage described in
+`LEDGER.md`. Worktree cleanup does not remove their ledger or source objects.
 They may contain project source. Do not stage, commit, or upload them. They
 are retained until explicitly removed; do not auto-delete evidence. The
 helper does not modify a consuming project's ignore files.

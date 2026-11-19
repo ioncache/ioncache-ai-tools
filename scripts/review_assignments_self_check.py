@@ -108,6 +108,110 @@ class ReviewAssignmentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unregistered"):
             assignments.prepare(self.request)
 
+    def test_ambient_instructions_are_ignored_without_invalidating_coverage(self):
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        coverage = handoff["attempts"][0]["result"]["coverage"]
+        coverage.update(isolation="unknown", ambient_sources=["CLAUDE.md", ".claude/rules/testing.md"],
+                        context_conflicts=[])
+        result = assignments.check(plan, handoff)
+        self.assertTrue(result["structurally_complete"], result)
+        self.assertTrue(any("excluded from the review ruleset" in item for item in result["limitations"]))
+        coverage["isolation"] = "contaminated"
+        result = assignments.check(plan, handoff)
+        self.assertFalse(result["structurally_complete"], result)
+        coverage.update(isolation="unknown", context_conflicts=["Received a sibling review report"])
+        result = assignments.check(plan, handoff)
+        self.assertFalse(result["structurally_complete"], result)
+        self.assertIn("Known context conflicts", json.dumps(result))
+        coverage["isolation"] = "contaminated"
+        self.assertFalse(assignments.check(plan, handoff)["structurally_complete"])
+        coverage.update(isolation="uncontaminated", context_conflicts=[])
+        self.assertTrue(assignments.check(plan, handoff)["structurally_complete"])
+
+    def test_project_reference_reads_recover_through_adjudication_without_replacement(self):
+        source = ".github/instructions/swr.instructions.md"
+        path = self.root / source
+        path.parent.mkdir(parents=True)
+        path.write_text("Project SWR-specific guidance.")
+        self.request["project_categories"] = [{
+            "id": "project:swr", "title": "SWR", "source": source,
+            "source_identity": assignments.digest(path.read_text()), "content": path.read_text(),
+            "applicability": "**/*", "exceptions": [],
+        }]
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        affected = [attempt for attempt in handoff["attempts"]
+                    if attempt["packet"]["review_type"] in ("design-coherence", "documentation")]
+        for attempt in affected:
+            attempt["result"]["coverage"]["reference_sources"] = [source]
+        self.assertTrue(assignments.check(plan, handoff)["structurally_complete"])
+        corrections = []
+        originals = {}
+        for attempt in affected:
+            result = attempt["result"]
+            result["outcome"] = "partial"
+            result["coverage"].update(isolation="contaminated", reference_sources=[source],
+                                      context_conflicts=["Opened the plan's SWR reference as evidence"])
+            originals[attempt["id"]] = copy.deepcopy(result)
+            corrections.append({
+                "attempt": attempt["id"], "packet_identity": attempt["packet"]["identity"],
+                "result_identity": assignments.digest(result), "kind": "evidence-read-only",
+                "sources": [source], "assigned_ruleset_only": True, "otherwise_complete": True,
+                "evidence": ["The complete original report traces every applicable file; "
+                             "the only claimed breach is reading the plan reference, not applying SWR rules."],
+            })
+        self.assertFalse(assignments.check(plan, handoff)["structurally_complete"])
+        handoff["other_workers"][0]["isolation_assessments"] = corrections
+        result = assignments.check(plan, handoff)
+        self.assertTrue(result["structurally_complete"], result)
+        self.assertTrue(any("read-only isolation classification" in item for item in result["limitations"]))
+        self.assertEqual(set(result["replacement_rounds_used"].values()), {0})
+        for attempt in handoff["attempts"]:
+            if attempt["id"] in originals:
+                self.assertEqual(attempt["result"], originals[attempt["id"]])
+        for field, value in (("result_identity", "stale"), ("packet_identity", "wrong-packet"),
+                             ("assigned_ruleset_only", False), ("otherwise_complete", False),
+                             ("evidence", [])):
+            with self.subTest(field=field):
+                broken = copy.deepcopy(handoff)
+                broken["other_workers"][0]["isolation_assessments"][0][field] = value
+                self.assertFalse(assignments.check(plan, broken)["structurally_complete"])
+        reused = copy.deepcopy(handoff)
+        reused["other_workers"][0]["worker"] = handoff["attempts"][0]["worker"]
+        self.assertFalse(assignments.check(plan, reused)["structurally_complete"])
+        for defect in ("failed", "missing-files", "malformed"):
+            with self.subTest(defect=defect):
+                broken = copy.deepcopy(handoff)
+                assessment = broken["other_workers"][0]["isolation_assessments"][0]
+                report = next(item["result"] for item in broken["attempts"]
+                              if item["id"] == assessment["attempt"])
+                if defect == "failed":
+                    report["outcome"] = "failed"
+                else:
+                    report["coverage"] = (None if defect == "malformed" else
+                                          {**report["coverage"], "files": []})
+                assessment["result_identity"] = assignments.digest(report)
+                self.assertFalse(assignments.check(plan, broken)["structurally_complete"])
+        wrong_role = copy.deepcopy(handoff)
+        wrong_role["other_workers"][0]["role"] = "validator"
+        with self.assertRaisesRegex(ValueError, "Only the separate adjudicator"):
+            assignments.check(plan, wrong_role)
+        for attempt, assessment in zip(affected, corrections):
+            category = attempt["packet"]["review_type"]
+            packet = assignments.derive_packet(
+                plan, category, category + "-replacement", str(self.scratch / (category + "-replacement.json")))
+            replacement = self.attempt(packet, number=1, outcome="partial")
+            replacement["result"]["coverage"] = copy.deepcopy(attempt["result"]["coverage"])
+            handoff["attempts"].append(replacement)
+            handoff["active"][category] = [replacement["id"]]
+            assessment.update(attempt=replacement["id"], packet_identity=packet["identity"],
+                              result_identity=assignments.digest(replacement["result"]))
+        result = assignments.check(plan, handoff)
+        self.assertTrue(result["structurally_complete"], result)
+        self.assertEqual(result["replacement_rounds_used"]["design-coherence"], plan["replacement_rounds"])
+        self.assertEqual(result["replacement_rounds_used"]["documentation"], plan["replacement_rounds"])
+
     def test_focused_delta_and_history_remain_bound_to_their_scope_and_category(self):
         self.request["kind"] = "focused"
         with self.assertRaisesRegex(ValueError, "focused request needs"):
