@@ -1658,6 +1658,101 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("reconcile --pr first", self.state["reason"])
         self.assertIsNotNone(self.state["assignment"]["dispatch_claim"])
 
+    def ready_fixture(self):
+        root = self.start_review_fixture()
+        reviewed = self.review(root)
+        assignment = self.next()
+        while assignment["role"] != "ready":
+            self.execute_fixture(assignment)
+            assignment = self.next()
+        return root, reviewed
+
+    def test_ready_handback_serializes_acceptance_through_save(self):
+        root, reviewed = self.ready_fixture()
+        report = self.report({"commit": self.git("rev-parse", "HEAD", root=root),
+                              "url": "https://example.invalid/pull/1", "state": "ready",
+                              "evidence": "Offline ready receipt"})
+        arguments = development.parser().parse_args([
+            "record", str(self.store), "--revision", str(self.state["revision"]), "--report", str(report)])
+        original = development.save
+        closures = []
+
+        def save_with_competing_closure(folder, state):
+            closures.append(subprocess.run(
+                [sys.executable, str(SCRIPTS / "review_ledger.py"), "apply", reviewed["ledger"],
+                 "--revision", str(len(json.loads(Path(reviewed["ledger"]).read_bytes())["events"]))],
+                cwd=root, env=self.env, text=True, capture_output=True, timeout=5,
+                input=json.dumps({"type": "stop", "outcome": "failed", "actor": "fixture",
+                                  "reason": "Close between authority validation and handback persistence"})))
+            original(folder, state)
+
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(development, "save", save_with_competing_closure):
+            self.state = development.mutate(arguments, self.store)
+        self.assertIsNone(self.next())
+        self.assertEqual(self.state["outcome"], "completed")
+        self.assertEqual(len(closures), 1)
+        self.assertEqual(closures[0].returncode, 2,
+                         "The run completed although closure won before its final handback was saved")
+        self.assertIn("temporarily unavailable", closures[0].stderr)
+        self.close_accepted_review(root)
+        with patch.dict(os.environ, self.env, clear=True):
+            import review_ownership
+
+            with review_ownership.locked(root):
+                replayed = self.mutate("record", "--report", report)
+        self.assertEqual(replayed["outcome"], "completed")
+
+    def test_closure_before_ready_handback_requires_counted_reconciliation(self):
+        root, _ = self.ready_fixture()
+        prior = [item for item in development.load(self.store)["history"] if item["role"] == "review"]
+        self.close_accepted_review(root)
+        before = (self.store / "RUN.json").read_bytes()
+        self.assertIn("reconcile --pr first", self.finish(
+            {"commit": self.git("rev-parse", "HEAD", root=root),
+             "url": "https://example.invalid/pull/1", "state": "ready",
+             "evidence": "Already-published offline fixture effect"}, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.mutate("retire", "--reason", "Retain the existing published effects",
+                    "--shutdown-evidence", "Synchronous ready worker exited")
+        self.mutate("reconcile", "--pr", "first", "--reason", "Review before accepting readiness")
+        while self.next():
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        reviews = [item for item in development.load(self.store)["history"] if item["role"] == "review"]
+        self.assertEqual(reviews[:-1], prior)
+        self.assertEqual(reviews[-1]["attempt"], 2)
+
+    def test_locked_ready_handback_keeps_failure_and_retirement_reachable(self):
+        self.plan["limits"]["attempts"] = 3
+        root, _ = self.ready_fixture()
+        data = {"commit": self.git("rev-parse", "HEAD", root=root),
+                "url": "https://example.invalid/pull/1", "state": "ready",
+                "evidence": "Offline ready receipt"}
+        with patch.dict(os.environ, self.env, clear=True):
+            import review_ownership
+
+            with review_ownership.locked(root):
+                report = self.report(data)
+                malformed = json.loads(report.read_bytes())
+                malformed["assignment"] = "not-the-active-assignment"
+                report.write_bytes(manifest.encode(malformed))
+                self.assertIn("Unexpected assignment", self.mutate("record", "--report", report, ok=False))
+                before = (self.store / "RUN.json").read_bytes()
+                self.assertIn("temporarily unavailable", self.finish(data, ok=False))
+                self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+                self.mutate("interrupt", "--reason", "Collect the completed worker before retrying")
+                self.mutate("retire", "--reason", "No live ready worker",
+                            "--shutdown-evidence", "Synchronous fixture has exited")
+                self.mutate("resume", "--reason", "Count a fresh ready assignment")
+                self.assertEqual(self.next()["attempt"], 2)
+                self.finish(outcome="blocked")
+        self.mutate("resume", "--reason", "Ownership is available again")
+        self.assertEqual(self.next()["attempt"], 3)
+        self.finish(data)
+        self.assertIsNone(self.next())
+        self.assertEqual(self.state["outcome"], "completed")
+
     def test_abandoned_cached_review_requires_counted_reconciliation(self):
         self.assert_closed_cached_review_recovers("abandon")
 

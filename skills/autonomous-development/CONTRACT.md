@@ -424,6 +424,20 @@ A claim consumes no extra assignment and cannot be replayed. After a lost
 response, inspect native work and effects, then collect or retire the assignment
 before a counted retry. Never infer a fresh launch from an existing claim.
 
+Successful review-dependent handbacks hold that same ownership lock from
+authority validation through saving acceptance and advancing the PR position,
+including final readiness. Closure that wins first rejects acceptance; a saved
+handback that wins first remains recorded. Report identity and structure are
+validated before acquiring the lock. Blocked reports, interruption, retirement
+and identical recorded-report replay do not require it.
+
+Review-store recovery also requires the ledger's independent freshness witness.
+An older valid copy cannot restore spent review allowances. Interrupted history
+publication or missing freshness evidence keeps spending unavailable: close or
+release the affected review, retire its assignment after shutdown, and use a
+counted retry. A witnessed failed stop or abandonment revokes cached acceptance
+even if its ledger or closure write was interrupted.
+
 `status` reports missing, unreadable, or changed snapshots in `input_error`.
 Status, interruption, and retirement do not require available snapshot bytes,
 but still check approval and manifest integrity. Execution, acceptance, resume,

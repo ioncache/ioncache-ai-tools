@@ -563,6 +563,7 @@ def delivery_result(state, assignment, data, settings):
     progress["url"] = data["url"]
 
 
+@contextmanager
 def complete(state, report, settings):
     fields = "assignment worker outcome summary evidence artifacts data"
     plan.fields(report, fields + (" model_report" if "model_report" in report else ""))
@@ -578,20 +579,26 @@ def complete(state, report, settings):
     plan.require(isinstance(report["data"], dict), "Result data must be an object")
     if "model_report" in report:
         models.report_reference(state, active, report["model_report"])
-    if report["outcome"] == "complete":
-        complete_role(state, active, report["data"], settings)
-        if active["pr"]:
-            state["prs"][active["pr"]]["position"] += 1
+    with ExitStack() as guards:
+        if report["outcome"] == "complete":
+            if active["role"] in REVIEW_DEPENDENT_ROLES:
+                from review_ownership import locked as review_locked
+
+                guards.enter_context(review_locked(check_worktree(state, active["pr"])))
+            complete_role(state, active, report["data"], settings)
+            if active["pr"]:
+                state["prs"][active["pr"]]["position"] += 1
+            else:
+                state["preflight"] = True
+        elif report["outcome"] == "waiting" and active["role"] == "prepare":
+            state["prs"][active["pr"]]["waiting"] = True
         else:
-            state["preflight"] = True
-    elif report["outcome"] == "waiting" and active["role"] == "prepare":
-        state["prs"][active["pr"]]["waiting"] = True
-    else:
-        state["outcome"] = "blocked"
-        state.pop("stop_kind", None)
-    active.update(worker=report["worker"], outcome=report["outcome"], report=report)
-    state["history"][-1] = active
-    state["active"] = None
+            state["outcome"] = "blocked"
+            state.pop("stop_kind", None)
+        active.update(worker=report["worker"], outcome=report["outcome"], report=report)
+        state["history"][-1] = active
+        state["active"] = None
+        yield
 
 
 def complete_role(state, assignment, data, settings):
@@ -755,7 +762,7 @@ def mutate(args, folder):
             guards.enter_context(claim_dispatch(state, args, settings))
         elif args.command == "record":
             feature(Path(state["root"]), settings)
-            complete(state, report, settings)
+            guards.enter_context(complete(state, report, settings))
         elif args.command == "interrupt":
             plan.text(args.reason)
             state["outcome"], state["reason"] = "blocked", args.reason

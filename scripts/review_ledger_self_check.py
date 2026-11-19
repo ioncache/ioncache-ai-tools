@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import review_ledger
 import review_ownership
+import review_history
 import review_options
 import review_assignments
 
@@ -315,6 +316,8 @@ class ReviewLedgerTests(unittest.TestCase):
         event.update(snapshot=self.state["snapshot"], sequence=self.state["revision"] + 1,
                      time="historical fixture")
         history["events"].append(event)
+        with review_ownership.locked(self.root):
+            review_history.remember(path, history, review_ledger.replay(history))
         path.write_text(json.dumps(history))
         original = path.read_bytes()
         self.state = self.cli(["status", self.ledger])
@@ -1505,6 +1508,256 @@ sys.exit(review_ledger.main())
         self.assertFalse(self.storage.exists())
         self.assertEqual(json.loads(next(owner.parent.glob("RELEASE-*.json")).read_bytes()), released)
 
+    def test_recovery_rejects_stale_copy_after_newer_store_is_lost(self):
+        self.init("--max-loops", "2")
+        backup = self.folder / "backup" / self.storage.name
+        shutil.copytree(self.storage, backup)
+        stale = backup / Path(self.ledger).parent.name / "REVIEW_LEDGER.json"
+        self.review()
+        self.finding()
+        self.decide()
+        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
+        self.storage.rename(self.folder / "offline-latest")
+        before = stale.read_bytes()
+        owner = review_ownership.directory(self.root) / "OWNER.json"
+        ownership = owner.read_bytes()
+        self.assertIn("freshness", self.cli(
+            ["recover-ownership", str(stale), "--reason", "Only the older backup is available",
+             "--shutdown-evidence", "All fixture workers exited"], ok=False))
+        self.assertEqual(owner.read_bytes(), ownership)
+        self.assertEqual(stale.read_bytes(), before)
+        self.assertEqual(self.cli(["inspect", str(stale)])["loops"], [])
+        self.assertIn("freshness", self.cli(
+            ["apply", str(stale), "--revision", "0"], self.event("stop", outcome="interrupted"), ok=False))
+        closed = self.cli(["abandon", str(stale), "--reason", "Backup predates consumed work",
+                           "--evidence", "Freshness witness identifies a later revision",
+                           "--shutdown-evidence", "All fixture workers exited"])
+        self.assertEqual(closed["allowance"], "unavailable")
+        self.assertEqual(stale.read_bytes(), before)
+        self.assertEqual(self.cli(["recover-ownership", str(stale), "--reason", "Retain terminal loss",
+                                   "--shutdown-evidence", "All fixture workers exited"]), closed)
+        self.init("--storage", str(backup))
+        self.send("start_review")
+        self.assertEqual(len(self.state["loops"]), 1)
+
+    def test_recovery_preserves_current_copy_and_spent_allowances(self):
+        self.init("--max-loops", "2")
+        self.review()
+        self.finding()
+        self.decide()
+        self.send("start_fix", findings=["F001"], files=["app.txt"])
+        backup = self.folder / "backup" / self.storage.name
+        shutil.copytree(self.storage, backup)
+        copied = backup / Path(self.ledger).parent.name / "REVIEW_LEDGER.json"
+        self.storage.rename(self.folder / "offline-latest")
+        restored = self.cli(["recover-ownership", str(copied), "--reason", "Current verified copy",
+                             "--shutdown-evidence", "All fixture workers exited"])
+        self.assertEqual(restored["revision"], self.state["revision"])
+        self.assertEqual(restored["loops"], self.state["loops"])
+        self.ledger, self.state = str(copied), restored
+        self.send("stop", outcome="interrupted")
+        self.send("resume")
+        self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
+        self.send("stop", outcome="failed")
+
+    def assert_missing_freshness_recovers(self, damage):
+        self.init()
+        self.send("start_review")
+        path = Path(self.ledger)
+        before = path.read_bytes()
+        witness = review_history.witness_path(self.root, path.parent.name)
+        witness.unlink()
+        if damage == "malformed":
+            witness.write_text("{broken")
+        if damage == "symlink":
+            sentinel = self.folder / "not-a-witness"
+            sentinel.write_text("untouched")
+            witness.symlink_to(sentinel)
+        self.assertIn("freshness", self.cli(
+            ["recover-ownership", self.ledger, "--reason", "Recover retained history",
+             "--shutdown-evidence", "All fixture workers exited"], ok=False))
+        self.assertIn("freshness", self.reject("stop", outcome="interrupted"))
+        self.assertEqual(len(self.cli(["inspect", self.ledger])["loops"]), 1)
+        closed = self.cli(["abandon", self.ledger, "--reason", "Freshness cannot be established",
+                           "--evidence", "Independent witness is unavailable",
+                           "--shutdown-evidence", "All fixture workers exited"])
+        self.assertEqual(closed["allowance"], "unavailable")
+        self.assertEqual(path.read_bytes(), before)
+        if damage == "symlink":
+            self.assertEqual(sentinel.read_text(), "untouched")
+        self.init()
+        self.send("start_review")
+
+    def test_missing_freshness_uses_unavailable_spending_recovery(self):
+        self.assert_missing_freshness_recovers("missing")
+
+    def test_corrupt_freshness_uses_unavailable_spending_recovery(self):
+        self.assert_missing_freshness_recovers("malformed")
+
+    def test_symlink_freshness_uses_unavailable_spending_recovery(self):
+        self.assert_missing_freshness_recovers("symlink")
+
+    def interrupt_apply(self, event, boundary):
+        script = """
+import os
+import sys
+import review_ledger
+
+boundary = sys.argv.pop(1)
+write = review_ledger.atomic_write
+def interrupted_write(path, data):
+    if (boundary == "ledger" and path.name == "REVIEW_LEDGER.json" or
+            boundary == "witness" and path.name.startswith("HISTORY-")):
+        os._exit(75)
+    write(path, data)
+review_ledger.atomic_write = interrupted_write
+sys.exit(review_ledger.main())
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script, boundary, "apply", self.ledger,
+             "--revision", str(self.state["revision"])], cwd=self.root,
+            env={**self.env, "PYTHONPATH": str(HELPER.parent)}, text=True,
+            input=json.dumps(event), capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_interrupted_witness_write_allows_one_counted_retry(self):
+        self.init()
+        before = Path(self.ledger).read_bytes()
+        self.interrupt_apply(self.event("start_review"), "witness")
+        self.assertEqual(Path(self.ledger).read_bytes(), before)
+        self.assertEqual(self.cli(["status", self.ledger])["revision"], 0)
+        self.send("start_review")
+        self.assertEqual(len(self.state["loops"]), 1)
+
+    def test_interrupted_history_write_cannot_resume_old_counters(self):
+        self.init()
+        before = Path(self.ledger).read_bytes()
+        self.interrupt_apply(self.event("start_review"), "ledger")
+        self.assertEqual(Path(self.ledger).read_bytes(), before)
+        self.assertIn("freshness", self.cli(["status", self.ledger], ok=False))
+        self.assertIn("freshness", self.reject("start_review"))
+        self.assertIn("freshness", self.cli(
+            ["recover-ownership", self.ledger, "--reason", "Recover interrupted history write",
+             "--shutdown-evidence", "Fixture process exited"], ok=False))
+        closed = self.cli(["abandon", self.ledger, "--reason", "History publication was interrupted",
+                           "--evidence", "The witnessed event is absent from the ledger",
+                           "--shutdown-evidence", "Fixture process exited"])
+        self.assertEqual(closed["allowance"], "unavailable")
+        self.assertEqual(len(review_history.read(self.root, Path(self.ledger).parent.name)["events"]), 1)
+        self.init()
+        self.send("start_review")
+
+    def test_interrupted_failed_stop_revokes_cached_acceptance(self):
+        self.init()
+        self.review()
+        self.send("advance")
+        accepted = self.cli(["status", self.ledger])
+        before = Path(self.ledger).read_bytes()
+        self.interrupt_apply(self.event("stop", outcome="failed"), "ledger")
+        self.assertEqual(Path(self.ledger).read_bytes(), before)
+        self.storage.rename(self.folder / "offline-history")
+        self.assertIn("invalidated", review_ledger.cached_invalidation(self.root, Path(self.ledger), accepted))
+
+    def test_interrupted_abandonment_retains_revocation_and_can_finish(self):
+        self.init()
+        self.review()
+        self.send("advance")
+        accepted = self.cli(["status", self.ledger])
+        path = Path(self.ledger)
+        blob = next((path.parent / "objects").iterdir())
+        content = blob.read_bytes()
+        blob.unlink()
+        arguments = ["abandon", self.ledger, "--reason", "A required object is unavailable",
+                     "--evidence", "Inspected the incomplete snapshot",
+                     "--shutdown-evidence", "All fixture workers exited"]
+        args = review_ledger.parser().parse_args(arguments)
+        write = review_ledger.atomic_write
+
+        def interrupted_write(target, data):
+            if target.name == "ABANDONED.json":
+                raise OSError("fixture closure publication failure")
+            write(target, data)
+
+        with review_ownership.guard(self.root, [self.storage], args), \
+                patch.object(review_ledger, "atomic_write", interrupted_write):
+            with self.assertRaisesRegex(OSError, "fixture closure publication failure"):
+                review_ledger.abandon(args, self.root)
+        self.assertFalse((path.parent / "ABANDONED.json").exists())
+        self.assertIn("unavailable", review_ledger.cached_invalidation(self.root, path, accepted))
+        blob.write_bytes(content)
+        self.assertEqual(self.cli(arguments)["allowance"], "unavailable")
+        self.init()
+        self.send("start_review")
+
+    def test_failed_relocated_event_cannot_hide_a_later_store_release(self):
+        self.init()
+        self.send("start_review")
+        backup = self.folder / "backup" / self.storage.name
+        shutil.copytree(self.storage, backup)
+        copy = backup / Path(self.ledger).parent.name / "REVIEW_LEDGER.json"
+        self.git("init", "-q", str(self.storage.parent))
+        self.cli(["apply", str(copy), "--revision", str(self.state["revision"])],
+                 self.event("advance"), ok=False)
+        owner = json.loads((review_ownership.directory(self.root) / "OWNER.json").read_bytes())
+        self.assertEqual(owner["storage"], str(backup))
+        retained = self.folder / "retained" / self.storage.name
+        shutil.copytree(backup, retained)
+        backup.rename(self.folder / "offline-copy")
+        replacement = self.folder / "replacement" / self.storage.name
+        self.cli(["release-ownership", "--storage", str(backup), "--replacement-storage", str(replacement),
+                  "--reason", "The selected store was lost", "--shutdown-evidence", "Fixture workers exited"])
+        restored = retained / copy.parent.name / copy.name
+        ownership = (review_ownership.directory(self.root) / "OWNER.json").read_bytes()
+        self.cli(["apply", str(restored), "--revision", str(self.state["revision"])],
+                 self.event("stop", outcome="failed"))
+        self.assertEqual((review_ownership.directory(self.root) / "OWNER.json").read_bytes(), ownership)
+        self.assertIn("freshness", self.cli(
+            ["recover-ownership", str(restored), "--reason", "Try another copy",
+             "--shutdown-evidence", "Fixture workers exited"], ok=False))
+        self.assertEqual(self.cli(
+            ["abandon", str(restored), "--reason", "The review was released",
+             "--evidence", "Retained release receipt", "--shutdown-evidence", "Fixture workers exited"]
+        )["allowance"], "unavailable")
+        self.init("--storage", str(replacement))
+        self.send("start_review")
+
+    def test_migration_retains_release_identity_before_new_events(self):
+        self.init()
+        self.send("start_review")
+        source = self.legacy_run()
+        self.env["XDG_STATE_HOME"] = str(self.folder / "migrated-state")
+        migrated = self.cli(["migrate", str(source / "REVIEW_LEDGER.json"),
+                             "--shutdown-evidence", "Fixture workers exited"])
+        current = Path(migrated["ledger"])
+        retained = self.folder / "retained" / self.storage.name
+        shutil.copytree(current.parent.parent, retained)
+        current.parent.parent.rename(self.folder / "offline-migrated")
+        replacement = self.folder / "replacement" / self.storage.name
+        self.cli(["release-ownership", "--storage", str(current.parent.parent),
+                  "--replacement-storage", str(replacement), "--reason", "Migrated storage was lost",
+                  "--shutdown-evidence", "Fixture workers exited"])
+        self.assertIn("freshness", self.cli(
+            ["recover-ownership", str(retained / current.parent.name / current.name),
+             "--reason", "Try the retained copy", "--shutdown-evidence", "Fixture workers exited"], ok=False))
+
+    def test_unwitnessed_legacy_history_can_migrate_and_close_without_refunding(self):
+        self.init()
+        self.send("start_review")
+        source = self.legacy_run()
+        review_history.witness_path(self.root, source.name).unlink()
+        migrated = self.cli(["migrate", str(source / "REVIEW_LEDGER.json"),
+                             "--shutdown-evidence", "Fixture workers exited"])
+        self.assertEqual(len(self.cli(["inspect", migrated["ledger"]])["loops"]), 1)
+        self.assertIn("freshness", self.cli(["status", migrated["ledger"]], ok=False))
+        closed = self.cli(["abandon", migrated["ledger"], "--reason", "No freshness witness survives",
+                           "--evidence", "Retained legacy history is inspectable but not verifiably current",
+                           "--shutdown-evidence", "Fixture workers exited"])
+        self.assertEqual(closed["allowance"], "unavailable")
+        self.init()
+        self.send("start_review")
+
     def test_release_preserves_available_and_reappearing_store_ownership(self):
         self.init()
         self.send("start_review")
@@ -1892,11 +2145,12 @@ sys.exit(review_ledger.main())
             with self.assertRaisesRegex(OSError, "fixture archive failure"):
                 review_ledger.recover_closure(args, self.root)
         self.assertEqual(marker.read_bytes(), b"damaged terminal closure")
-        self.assertEqual(json.loads(path.read_bytes())["events"][-1]["outcome"], "failed")
+        self.assertEqual(path.read_bytes(), original)
         self.cli(["status", self.ledger], ok=False)
         self.reject("resume")
-        self.state = self.cli(["recover-closure", *flags])
-        self.assertEqual(self.state["outcome"], "failed")
+        closed = self.cli(["recover-closure", *flags])
+        self.assertEqual(closed["outcome"], "failed")
+        self.assertEqual(closed["allowance"], "unavailable")
         self.reject("resume")
         self.assertEqual(self.cli(["status", self.ledger])["outcome"], "failed")
 

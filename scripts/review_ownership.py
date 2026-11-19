@@ -177,14 +177,21 @@ def check(previous, base, args):
     raise ledger.LedgerError(f"Existing active run: {active[0]}; resume or stop it first")
 
 
-def recover(path, root, base, args):
+def recover(path, root, args):
+    from review_history import close, remember, require_current
+
     ledger.text(args.reason)
     ledger.text(args.shutdown_evidence)
     target = ledger.ledger_path(root, args.ledger, allow_unavailable=True)
     saved = ledger.abandoned(target)
     if saved is None:
-        saved, _ = ledger.load(target)
-    ledger.ensure_owner(saved, root)
+        saved, state = ledger.load(target)
+        ledger.ensure_owner(saved, root)
+        require_current(saved)
+        remember(target, saved, state)
+    else:
+        ledger.ensure_owner(saved, root)
+        close(target, root)
     if path.exists():
         archive = path.with_name(f"OWNER-{uuid4().hex}.json")
         ledger.atomic_write(archive, path.read_bytes())
@@ -226,16 +233,27 @@ def guard(root, bases, args):
         if args.command == "recover-ownership":
             if previous is not None and previous.is_dir():
                 check(previous, base, args)
-            recover(path, root, base, args)
+            recover(path, root, args)
         elif closing and previous is not None:
+            from review_history import known_release
+
             try:
                 check(previous, base, args)
             except (ledger.LedgerError, OSError) as error:
                 print(f"review-ledger: ownership unchanged during closure: {error}", file=sys.stderr)
             else:
-                bind = not release_path(root, base).exists()
+                bind = not (release_path(root, base).exists() or
+                            known_release(root, Path(args.ledger).parent.name))
         elif not closing:
             check(previous, base, args)
+        if args.command == "apply":
+            from review_history import remember_location, require_current
+
+            target = ledger.ledger_path(root, args.ledger)
+            saved, _ = ledger.load(target)
+            require_current(saved, closing=closing)
+            if bind:
+                remember_location(target, root)
         if bind:
             ledger.atomic_write(path, ledger.encode({"schema": 1, "root": str(root), "storage": str(base)}))
         yield

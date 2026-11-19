@@ -302,6 +302,11 @@ def abandoned(path):
 
 def cached_invalidation(root, path, accepted):
     """Detect retained closure without revalidating cached snapshots or granting fresh acceptance."""
+    from review_history import cached_invalidation as witnessed_invalidation
+
+    witnessed = witnessed_invalidation(root, accepted)
+    if witnessed:
+        return witnessed
     try:
         path = ledger_path(root, str(path), allow_unavailable=True, historical=True)
         require(path.parent.name == Path(accepted["ledger"]).parent.name,
@@ -335,6 +340,8 @@ def cached_invalidation(root, path, accepted):
 
 def recover_closure(args, root):
     """Close readable history before removing a damaged marker's terminal fence."""
+    from review_history import require_current, remember
+
     path = ledger_path(root, args.ledger, allow_unavailable=True)
     for value in (args.reason, args.evidence, args.shutdown_evidence):
         text(value)
@@ -347,6 +354,10 @@ def recover_closure(args, root):
         require(closed is None, "Valid abandonment is terminal; it cannot be recovered")
     ledger, state = load_history(path)
     ensure_owner(ledger, root)
+    try:
+        require_current(ledger, closing=True)
+    except LedgerError:
+        return abandon(args, root)
     terminal_failure = state["outcome"] in ("failed", "stalled", "limit_reached")
     if error is None:
         require(terminal_failure, "No damaged closure record to recover")
@@ -360,6 +371,7 @@ def recover_closure(args, root):
                  "time": datetime.now(timezone.utc).isoformat()}
         apply_event(state, event)
         ledger["events"].append(event)
+        remember(path, ledger, state)
         atomic_write(path, encode(ledger))
     os.rename(path.parent / "ABANDONED.json", path.parent / f"ABANDONED-{uuid4().hex}.json")
     sync_directory(path.parent)
@@ -368,6 +380,8 @@ def recover_closure(args, root):
 
 def abandon(args, root):
     """Close unreadable history as failed without rewriting any surviving evidence."""
+    from review_history import close, require_current
+
     path = ledger_path(root, args.ledger, allow_unavailable=True)
     require(path.parent.is_dir() and re.fullmatch(r"[a-f0-9]{32}", path.parent.name),
             "Abandon requires an existing published run directory")
@@ -378,15 +392,18 @@ def abandon(args, root):
     except (LedgerError, OSError, ValueError, TypeError, KeyError):
         existing = None
     if existing is not None:
+        close(path, root)
         return existing
     try:
-        load_history(path)
+        retained, _ = load_history(path)
+        require_current(retained)
     except (LedgerError, OSError, ValueError, TypeError, KeyError) as error:
         unavailable = str(error)
     else:
         raise LedgerError("History is readable; use stop to retain its decisions and counters, "
                           "or recover-closure if the closure record is damaged")
     record = path.parent / "ABANDONED.json"
+    close(path, root)
     previous = None
     if record.exists() or record.is_symlink():
         previous = f"ABANDONED-{uuid4().hex}.json"
@@ -474,6 +491,8 @@ def init(args, root):
 
 def create_ledger(args, root, folder):
     """Persist a stable baseline and return its absolute ledger path and initial state."""
+    from review_history import remember
+
     initial = snapshot(root, folder)
     require(initial == snapshot(root), "Worktree changed during initial snapshot")
     key = digest(encode(initial))
@@ -484,8 +503,10 @@ def create_ledger(args, root, folder):
               "limits": {"outer": args.max_loops, "inner": args.max_fix_cycles},
               "initial": key, "snapshots": {key: initial}, "events": []}
     path = folder / "REVIEW_LEDGER.json"
+    state = replay(ledger)
+    remember(path, ledger, state)
     atomic_write(path, encode(ledger))
-    return {"ledger": str(path), **replay(ledger)}
+    return {"ledger": str(path), **state}
 
 
 def stored_files(folder):
@@ -562,6 +583,8 @@ def copy_run_evidence(source, target, baseline):
 
 def migrate(args, root):
     """Move complete legacy evidence, preserving newer destination history on retry."""
+    from review_history import remember_location
+
     text(args.shutdown_evidence)
     candidate = Path(os.path.abspath(root / args.ledger))
     require(candidate.name == "REVIEW_LEDGER.json" and
@@ -579,6 +602,7 @@ def migrate(args, root):
                 else migration_snapshot(source))
     if checkpoint.exists():
         require(target.is_dir(), "Verified migration destination is missing; restore it before retrying cleanup")
+    remember_location(target / candidate.name, root)
     if not target.exists():
         copy_run_evidence(source, target, baseline)
     migration_preserved(baseline, target)
@@ -628,12 +652,15 @@ def append(args, root):
     The caller must hold the worktree lock. Rejected events can leave snapshot
     blobs, but only successful validation replaces the canonical ledger.
     """
+    from review_history import require_current, remember
+
     path = ledger_path(root, args.ledger)
     ledger, state = load(path)
     ensure_owner(ledger, root)
     require(args.revision == state["revision"], "Stale revision; read status before retrying")
     event = args.event if hasattr(args, "event") else json.load(sys.stdin)
     require(isinstance(event, dict), "Event must be an object")
+    require_current(ledger, closing=event.get("type") == "stop")
     require(not ({"snapshot", "sequence", "time"} & event.keys()), "Reserved event fields")
     if event.get("type") == "start_fix":
         for name in event.get("files", []):
@@ -650,6 +677,7 @@ def append(args, root):
     check_reconcile_request(state, event)
     apply_event(state, event)
     ledger["events"].append(event)
+    remember(path, ledger, state)
     atomic_write(path, encode(ledger))
     return {"ledger": str(path), **state}
 
@@ -667,6 +695,9 @@ def status(args, root):
     ledger, state = load(path)
     if root is not None:
         ensure_owner(ledger, root)
+        from review_history import require_current
+
+        require_current(ledger)
     current = snapshot(root) if root is not None else None
     before = ledger["snapshots"][state["snapshot"]]
     return {"ledger": str(path), "objective": ledger["objective"],

@@ -40,12 +40,11 @@ and `status` still require the owning live checkout.
 Ownership and its lock live under
 `~/.local/state/ioncache-ai-tools/review-ownership/<worktree-identity>/`,
 independently of `--storage` and `XDG_STATE_HOME`. They retain the selected
-storage path and recovery declarations, not ledger history or snapshot objects.
-Initialization and live
+storage path, recovery declarations and per-run freshness witnesses, not raw
+ledger history or snapshot objects. Initialization and live
 mutations share this lock; changing storage cannot authorize another active run.
 An active run in the default store is discovered when adopting older records.
-Before starting new work after upgrading, resume or close existing custom-store
-runs using their saved paths so their ownership is registered.
+Keep this directory with the retained review evidence when moving private state.
 
 If that ownership directory is inside a repository, stop its writers and move
 only that worktree's complete `<worktree-identity>` directory to unused external
@@ -66,6 +65,25 @@ It preserves ledger history and limits, and cannot displace a readable active
 run in another store. Read-only inspection and closure remain available when
 the ownership record is damaged. Shutdown evidence is a caller declaration,
 not independent native-process verification.
+
+Live history must match its independent `HISTORY-<run-id>.json` witness. The
+witness records the latest ledger digest, event digests, outcome and storage
+identities before the corresponding ledger or closure write, under the same
+ownership lock. A valid older copy or caller-supplied revision cannot restore
+spent loops or fix attempts. A current complete copy can recover unchanged.
+Releasing any registered location keeps that run unavailable through other copies.
+Closing a released run through a surviving copy does not rebind ownership away
+from its replacement store.
+
+An interruption before the witness write leaves the previous history usable.
+If the witness advances but the ledger write does not finish, do not roll the
+witness back or continue from older counters. Restore the exact latest history
+if it survives; otherwise use `abandon`, or `release-ownership` for an absent
+store, then a separately authorized counted retry. Missing or damaged witnesses,
+including runs created before freshness tracking, cannot establish live
+authority from a valid ledger alone. Use `inspect` for surviving evidence and
+the same unavailable-spending recovery. Do not initialize a replacement for an
+outstanding development assignment without retiring it and counting the retry.
 
 If the entire recorded store is absent and no usable copy survives, stop all
 native workers that could still use it. A missing or unmounted directory is not
@@ -179,9 +197,11 @@ Supply actual observations, not these example claims. `abandon` records a
 terminal failed outcome in `ABANDONED.json`, without rewriting surviving history,
 snapshots, or project files. Unknown spending stays unknown; the abandoned run's
 remaining allowance is unavailable. It cannot resume or satisfy a completed
-review. Readable ledgers use the ordinary `stop` event instead.
+review. Readable, current ledgers use the ordinary `stop` event instead.
 `status` and repeated `abandon` calls return the saved closure. A damaged closure
-record is archived before replacement only when history is unreadable.
+record is archived before replacement when history is unreadable or freshness
+cannot be established. The independent witness preserves terminal unavailability
+even if closure publication is interrupted or another copy survives.
 An unusable symlink at the ledger entry can be abandoned without following,
 removing or replacing it. Its target does not supply trusted history.
 The run directory must still be real, owned storage. Closure status and audit
@@ -202,6 +222,9 @@ failed `stop` before archiving the damaged marker, unless the history is already
 failed, stalled or limit-exhausted. Those terminal failures remain unchanged.
 It retains findings, decisions, snapshots and consumed counters, without making
 remaining allowance reusable.
+If freshness is unavailable or the independent witness already records
+abandonment, recovery repairs the unavailable-spending closure instead, without
+rewriting surviving ledger bytes.
 Even previously completed history becomes failed: a damaged closure is not
 evidence that the run may resume or satisfy a review. Ordinary `stop` may also
 downgrade a completed outcome to failed, but cannot reopen it.
