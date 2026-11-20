@@ -22,6 +22,8 @@ the assignment or stop workers. Hand-backs are not user questions.
 1. Read the repository instructions and supplied idea, issue, design, or plan.
    Investigate and expand existing artifacts rather than treating them as complete.
    Resolve contradictory requirements before handover.
+   An existing issue may supply both requirements and design. Keep implementation
+   notes in the plan instead of inventing a competing design source.
 2. Configure planning, design documentation, and execution independently. Ask
    where each belongs when it is not already explicit. Do not bundle GitHub,
    Notion, and Claude into a preset.
@@ -40,8 +42,8 @@ the assignment or stop workers. Hand-backs are not user questions.
 6. Resolve permissions and finite limits explicitly. Approval of document content
    is not native host permission. Do not infer publication or model budgets.
    Resolve native model and effort choices before launch under
-   [MODELS.md](MODELS.md), including the cheapest suitable bookkeeping choice
-   and the strongest suitable implementation, adjudication and fixing choices.
+   [MODELS.md](MODELS.md), including suitable implementation, adjudication and
+   fixing choices. Bookkeeping runs in Python, not a model.
    Present the role table, evidence, cost trade-offs and configured-only
    limitations explicitly, not buried in constraints. Put explicit overrides in
    `configuration.execution.models` or `configuration.execution.review_options`.
@@ -80,13 +82,41 @@ python3 "/absolute/plugin/scripts/development_run.py" init "/private/bundle/mani
   --provider claude-workflows
 ```
 
-The packaged execution adapter is a Claude Workflow named
-`ioncache-ai-tools:autonomous-development-run`. In Claude, ask the main agent
-to run it with structured `store`, `pluginRoot`, a unique `invocation` string,
-and the complete resolved `models` role map from MODELS.md. Copy the effective
-control choice into that map before the first bookkeeping call.
-Do not launch it from a subagent or silently substitute an external CLI.
-The invocation string distinguishes a new launch from native replay.
+The launching agent owns a script-driven dispatch loop. Resolve
+`../../scripts/development_handoff.py` relative to this skill. Save the resolved
+role map from MODELS.md as private JSON, then run:
+
+```sh
+python3 "/absolute/plugin/scripts/development_handoff.py" prepare "/private/development-run" \
+  --models-file "/private/role-models.json"
+```
+
+Python pins the executor's resources and version inside the private run store,
+reserves work, and writes a complete native workflow script with frozen jobs.
+Use the returned pinned `helper` path for every later handoff command. Never
+switch the executing scripts to the implementation worktree or edit resources
+used by a running review.
+
+For `action: launch`, run `claim STORE --batch B000001` with the returned batch ID.
+After that command succeeds, launch the returned `script` through Claude's native
+Workflow tool as `scriptPath`, without `args`. Do not invoke the packaged template
+directly, paste state into workflow arguments, or ask a model to reproduce JSON.
+Each generated workflow runs just one bounded batch: independent readers or one
+exclusive fixer. It cannot reserve work, accept results, or declare the run complete.
+
+After native completion, run `collect STORE --batch B000001`. Python reads and
+checks actual report files, then advances durable state. Repeat `prepare` only
+after collection. A lost `prepare` or `collect` reply can be recovered by repeating
+that command. A lost `claim` reply cannot authorize another launch: inspect native
+activity and reports first. `action: collect` means the batch was already claimed;
+`action: inspect` means inspect durable state, not silently resume a stopped run.
+Use [RECOVERY.md](RECOVERY.md) for failures and incomplete results.
+
+The generic skill does not require Claude for planning or bookkeeping. The
+packaged native batch adapter currently targets Claude. Do not silently substitute
+another provider or launch an external CLI. An explicitly selected headless Claude
+session can use the native Workflow tool under its normal host permissions;
+that is different from replacing native orchestration with ad hoc CLI workers.
 
 Preflight must establish actual artifact access, native permissions, fresh
 workers, independent review, result delivery, and cancellation. The adapter
@@ -101,7 +131,10 @@ ambient sources; their presence must not stop execution, make coverage partial,
 or trigger replacements.
 
 The controller and adapter have offline checks, not completed live-host
-qualification. Obtain separate approval and resource limits for live trials.
+qualification. Disclose that limitation and distinguish a separately scoped
+qualification experiment from executing already approved work. Do not invent
+another "live-trial approval" gate for actions and limits the human already approved.
+Ask only for a genuinely missing decision, permission or increased allowance.
 Copilot and Codex can prepare manifests and inspect state; they do not yet have
 packaged execution adapters. Do not imply cloud hosting or shared controls have
 been provisioned.
@@ -117,8 +150,9 @@ python3 "/absolute/plugin/scripts/development_run.py" watch "/private/developmen
 ```
 
 The launching agent must also run this monitor immediately after launch.
-Verify its first output and check preflight early, using `--stale-after 60`
-for the initial watch. Continue watching through execution, rather than ending
+Verify its first output and check preflight early. Use the default 300-second
+inactivity threshold unless observed worker behavior warrants another value.
+Continue watching through execution, rather than ending
 the turn and relying only on the workflow-completion notification. A native
 process-monitor tool may run this same command and deliver its output; do not
 replace it with repeated model calls or an independent monitoring protocol.
@@ -126,6 +160,10 @@ replace it with repeated model calls or an independent monitoring protocol.
 Report promptly when the monitor reports blocked, interrupted, waiting,
 exhausted, complete, unavailable state, or no durable advancement. The default
 inactivity threshold is 300 seconds and can be changed with `--stale-after`.
+Give a visible update at least every five minutes during long work, even if the
+worker is active without a new checkpoint. State the current phase, durable
+advancement, outstanding worker activity, and any blocker. A monitor exit is not
+a failed task assertion; a native return is not verified completion.
 Inactivity is an observation, not proof of a dead worker. Inspect native status
 and outstanding effects before deciding whether recovery is needed. If the
 worker is still legitimately active, report that and restart the same monitor
@@ -147,8 +185,13 @@ python3 "/absolute/plugin/scripts/development_run.py" status "/private/developme
 Read persisted state before resuming. Keep attempts, findings, completed commits,
 and PRs. Collect outstanding results before issuing another assignment. If a
 worker is gone, inspect local and remote effects and record native shutdown
-evidence with `retire`, then `resume`. Never reset the run to regain allowances.
-See [CONTRACT.md](CONTRACT.md) for exact commands.
+evidence before using the matching recovery in [RECOVERY.md](RECOVERY.md).
+Retain readable reviews with `resume-review`, rather than retiring them by default.
+Never reset the run to regain allowances.
+
+Cancellation stops scheduling and owned native work, not implementation files,
+issues, commits or evidence. Rollback is a separate destructive action. Clarify an
+ambiguous "undo" before modifying either the target work or durable history.
 
 Report per-PR progress, readiness, exceptions, consumed allowances, incomplete
 work, and evidence references. A runtime success is not acceptance. Mark a PR

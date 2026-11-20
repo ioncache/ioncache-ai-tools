@@ -722,7 +722,7 @@ def summary(state, settings=None):
     observed = monitoring.snapshot(state)
     return {"run": state["id"], "store": state["store"], "revision": state["revision"],
             "outcome": state["outcome"], "reason": state.get("reason"),
-            **{key: observed[key] for key in ("condition", "updated_at", "review_progress", "progress_error")},
+            **{key: observed[key] for key in ("condition", "updated_at", "review_progress", "progress_error", "handoff")},
             "execution": {**plan.execution(state["manifest"]),
                           "models": state["manifest"]["configuration"]["execution"].get("models", {})},
             "model_selection": model_policy(state, settings),

@@ -185,14 +185,17 @@ Invoke `/ioncache-ai-tools:autonomous-development` in Claude/Copilot, or
 and execution destinations independently. Review and approve the plan, content
 snapshots, permissions, and finite limits before execution.
 
-The initial execution adapter is the Claude Workflow
-`/ioncache-ai-tools:autonomous-development-run`. It uses fresh workers, private
-durable state, per-task and full-PR reviews, and human-controlled PR merging.
+The initial execution adapter uses Python-generated Claude Workflow batches,
+fresh workers, private durable state, per-task and full-PR reviews, and
+human-controlled PR merging. The skill prepares and claims each generated script;
+do not invoke the `/ioncache-ai-tools:autonomous-development-run` template directly.
+Python reads and validates report files instead of accepting model-relayed state.
 Copilot and Codex currently support preparation and state inspection only.
 Use the exact execution provider `claude-workflows`. The adapter applies
 resolved native role models/efforts, with explicit overrides and separate
 requested/observed model records. Independent review leaves run concurrently;
-fixers remain sequential.
+fixers remain sequential. Recovery preserves work and consumed allowances;
+stopping a run does not roll back its implementation.
 The adapter is **not yet live-host qualified**; offline checks do not establish
 unattended permissions, cloud operation, or shared team controls.
 

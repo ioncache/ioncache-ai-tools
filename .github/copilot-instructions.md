@@ -133,8 +133,12 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   its `api()` function; the self-check replaces it with fakes and never posts.
 - `scripts/development_manifest.py` validates approved inputs, and
   `scripts/development_run.py` owns private development-run bookkeeping outside
-  the repository. It does not launch models or publish. The Claude script in
-  `workflows/` dispatches fresh workers and flat review roles; keep offline
+  the repository. It does not launch models or publish. `development_handoff.py`
+  owns script-generated batches, persisted claims, report validation and collection.
+  `development_executor.py` pins runtime resources outside the reviewed tree;
+  `development_jobs.py` generates purpose-only jobs and validates report contracts.
+  The Claude template in `workflows/` runs one generated batch with no control
+  models or acceptance authority. Keep offline
   lifecycle checks distinct from live-host qualification. Forward frozen
   single-purpose packets, not generic catalogs or the implementation context.
   Final acceptance reuses the shared category checker and pins its full-phase
