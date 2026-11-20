@@ -54,6 +54,22 @@ scope. In change reviews, prioritize introduced or worsened issues. Flag
 discovered pre-existing security risks separately without attributing them
 to the change. Out-of-scope does not mean invalid.
 
+## Before dispatch
+
+Follow [ORCHESTRATION.md#pre-launch-readiness](ORCHESTRATION.md#pre-launch-readiness)
+before allocating dependent passes or launching a coordinator. Identify and
+read the authoritative requirements and design, resolve essential reference
+access, and establish the actual collection and cancellation mechanisms.
+An inaccessible supporting copy does not displace an accessible authoritative
+source. Missing essential evidence defers affected assignments, not unrelated
+authorized work.
+
+Before each launch batch, disclose the actual model-selection mode, proposed
+models or configured defaults, and any fallback reason and stopping limitation.
+Use [the selection record](ORCHESTRATION.md#selection-record-and-disclosure);
+`auto` in normalized options is not evidence that automatic selection occurred.
+This preparation adds no approval prompt, permission state or review purpose.
+
 ## Review method
 
 Every review task requires a fresh subagent with one review purpose and only
@@ -104,7 +120,8 @@ runtime-selection policy. Invocation permits bounded automatic selection where
 the host allows it, not a bypass of host restrictions. Honor explicit choices
 without second-guessing their suitability. For unspecified roles, attempt
 evidence-backed selection, otherwise preserve configured defaults and explain
-the limitation. Never ship or invent a model ranking.
+the evidenced limitation before launch. An omitted model flag alone does not
+justify fallback. Never ship or invent a model ranking.
 
 Reuse the caller's snapshot. For a standalone Git review, resolve
 `../../scripts/review_ledger.py` relative to this installed skill and run:

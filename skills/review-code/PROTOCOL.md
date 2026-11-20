@@ -63,6 +63,11 @@ The target is read-only. Write only the assigned private result file, plus
 disposable files that a permitted check creates outside the reviewed tree, such
 as a self-check's temporary directory. Never write the reviewed tree or another
 worker's report.
+On an explicit cancellation from the user or assignment owner, stop the
+assignment immediately. Do not finish investigation, checks or report writes
+first. Return only the status needed by the host; existing incomplete evidence
+remains incomplete. A pause suspends work until the user or owner explicitly
+resumes it.
 Do not edit code, update a ledger, commit, publish or change model/settings.
 Checks require the caller's permission; distinguish actual execution from
 source reasoning. An unavailable check or instruction source is a limitation,
