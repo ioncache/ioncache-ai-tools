@@ -8,9 +8,9 @@ version-pinned fallback chain. A public catalog does not prove account access.
 
 ## Role requirements
 
-Choose the cheapest suitable model and supported low effort for
-`development-control`: it executes a helper and relays JSON without semantic
-judgment. For `implement`, `adjudicator` and `fixer`, choose the most capable
+Python performs bookkeeping without a `development-control` model. That role name
+remains readable in historical maps and observations, but is never dispatched.
+For `implement`, `adjudicator` and `fixer`, choose the most capable
 supported model for the actual task, with supported high reasoning effort.
 Review options affect adjudication, not the fixing model.
 
@@ -63,19 +63,19 @@ overrides the launch-time researched default. An explicit review model with no
 effort uses that model's native effort default, not an unrelated model's tuning.
 `model_selection: configured` keeps unspecified review roles configured.
 
-Supply a complete `models` object in the workflow's structured arguments,
-with an entry of the shape above for every role:
-`development-control`, `preflight`, `prepare`, `implement`, `review-owner`,
+Supply a private JSON model-map file to `development_handoff.py prepare
+--models-file FILE`, with an entry of the shape above for every active role:
+`preflight`, `prepare`, `implement`, `review-owner`,
 `reviewer`, `adjudicator`, `validator`, `fixer`, `commit`, `draft`,
 `audit-initial`, `audit-final`, `evidence`, `ready`.
 Resolve it from the approved overrides, normalized review options and current
-host evidence. Include the effective control choice before the first call,
-since the script cannot read files before launching a bookkeeping worker.
-Missing choices are rejected before any worker starts, rather than silently
-putting every role on the main session's model.
+host evidence. A legacy `development-control` entry is accepted but unused.
+The Python helper reads this file directly and embeds native choices in generated
+jobs. Missing choices are rejected before reservation. `--configured-models` is
+the explicit alternative when native defaults have been selected.
 
-The controller passes this complete map to every `next --models '<JSON>'`
-reservation. It freezes launch choices and selection policy with that assignment,
+The handoff helper supplies the complete map to the controller's reservation
+function. It freezes launch choices and selection policy with that assignment,
 separately from the approved manifest. Dispatch and durable fallback consult that
 saved selection; a later invocation cannot silently replace a failed attempt's
 `fallback: fail`. Older assignments lacking a saved choice do not imply permission
@@ -128,7 +128,7 @@ an actual identity field.
 The helper writes under the private store's `models/`, without changing the run
 revision or acceptance. Include its `model_report` path in the development
 report; review leaves retain the path in their shared `selection` object.
-Bookkeeping workers write the observation but still return exact controller JSON.
+There are no model observations for Python bookkeeping.
 Private report failures are visible limitations, not permission fences.
 Old reports stay valid and their absent identities stay unknown.
 

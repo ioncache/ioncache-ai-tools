@@ -122,10 +122,22 @@ def snapshot(state):
         "assignment": ({key: active[key] for key in ("id", "role", "pr", "task", "attempt")}
                        if active else None),
         "progress_assignment": latest["id"] if latest else None,
+        "handoff": handoff_progress(state, latest),
         "review_progress": progress, "progress_error": error,
         "prs": {key: {name: value[name] for name in ("position", "waiting", "url")}
                 for key, value in state["prs"].items()},
     }
+
+
+def handoff_progress(state, assignment):
+    batch = state.get("handoffs", {}).get(assignment.get("handoff")) if assignment else None
+    if not batch:
+        return None
+    return {"batch": batch["id"], "status": batch["status"],
+            "started_jobs": len(batch["started"]), "validated_reports": len(batch["submitted"]),
+            "validation_failures": sum(batch["failures"].values()),
+            "diagnostic_reference": str(Path(state["store"]) / "RUN.json") +
+            f"#/handoffs/{batch['id']}/last_error" if batch.get("last_error") else None}
 
 
 def emit(value):
