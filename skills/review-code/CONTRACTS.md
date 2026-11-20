@@ -14,13 +14,13 @@ The caller supplies:
 | --- | --- |
 | `objective`, `kind` | User objective and `full` or `focused` review. |
 | `target`, `base`, `snapshot` | Scope, pinned comparison commit when applicable, and root plus snapshot identity including local changes. State when a base is not applicable. |
-| `standards`, `constraints` | The CRITERIA.md standards inventory, scoped source identities and exceptions; execution constraints, user-supplied exclusions with provenance, read-only authority, allowed checks, and limits. |
+| `standards`, `constraints` | The CRITERIA.md standards inventory, authoritative requirements/design references, source identities, read/access evidence, essential versus supporting roles, and exceptions; execution constraints, user-supplied exclusions with provenance, read-only authority, allowed checks, and limits. |
 | `phase_plan` | PACKETS.md's phase identity, frozen effective registry, source-language inventory/evidence, technical-applicability decisions, complete policy-resource snapshot, category packets and replacement bounds. Shipped review controls are independent of writing-skill activation. |
 | `settled_decisions` | Decisions already made and their rationale, or an explicit empty list. Do not reopen them without new contradictory evidence. |
 | `history` | Relevant previous findings and evidence-backed dispositions, or an explicit empty history. |
-| `mode`, `capabilities` | `nested` or `flat`, plus current host lifecycle and selection observations and their sources. No inline execution. |
+| `mode`, `capabilities` | `nested` or `flat`, plus current host lifecycle and selection observations and their sources. Include actual collection/cancellation controls, possible synchronous-to-background transitions, and disclosed stopping limitations. No inline execution. |
 | `strategy`, `main_min_severity` | The options helper's `effective_strategy`, `specialists` or `sweep-first`; ordering cannot change required assignments or isolation. Main-table floor `High`, `Medium`, or `Low` (default), applied after actionability assessment. |
-| `selection` | Coordinator/adjudicator selection record under ORCHESTRATION.md. |
+| `selection` | Per-role choices under ORCHESTRATION.md, including the actual execution mode, its evidence, and the pre-launch disclosure. Distinguish initial selection limitations from launch-failure retries. |
 | `review_options` | Normalized OPTIONS.md request, explicit-choice provenance, effective configuration, per-role fallback, and any resume overrides. Defaults are not explicit user model choices. |
 | `scratch_directory` | Caller-owned private absolute directory outside the reviewed tree for assigned result files, or an explicit permitted fallback. |
 | `completion` | Required coverage and the evidence needed before returning complete. |
@@ -29,7 +29,11 @@ The caller supplies:
 A focused request also contains the correction delta, affected callers, and
 all outstanding relevant findings. It does not authorize a full review.
 The caller resolves shared file references to accessible absolute paths before
-dispatch. If a worker cannot read a reference, it reports missing coverage.
+dispatch, retaining authoritative URLs and content identities for fetched
+documents. Apply [pre-launch readiness](ORCHESTRATION.md#pre-launch-readiness):
+missing essential evidence defers dependent assignments rather than launching
+them with a known missing prerequisite. If access fails after dispatch, the
+worker reports missing coverage without inventing requirements.
 
 ### Shared request context
 
@@ -256,7 +260,12 @@ not by adding fields to exact-keyed events. Workers never write that ledger.
 | An instruction directory mixes code standards and conversational rules | Caller inventories source identities and objective language prerequisites, assigning general and technically applicable standards separately. | Preserve conversational rules as execution constraints. Workers verify remaining applicability; predicted usefulness cannot remove a purpose. |
 | No JavaScript exists in the evidenced candidate scope | The frozen language inventory establishes absence; the helper omits JSDoc without a worker. | Keep general documentation and contracts. An unknown language remains unresolved, not absent. |
 | The actual unit tests use another runner | The unit-test reviewer follows its framework-neutral purpose and the target suite's native conventions. | Do not apply Vitest-only rules or reject that work solely because Vitest is absent. |
-| Model overrides are not authorized | Caller records the restriction before selection research. | Use configured defaults without catalog research; record the actual model only when exposed and retain all required independent contexts. |
+| Model overrides are not authorized | Caller records the actual restriction and discloses `auto-restricted` before launch. | Use configured defaults without irrelevant catalog research; do not claim automatic selection or infer the actual model. Retain all required independent contexts. |
+| Automatic selection is permitted but one bounded lookup cannot establish suitability | Caller retains the consulted evidence and its gap, then discloses `auto-unsubstantiated`. | Use configured defaults without treating omitted model flags or an unperformed lookup as evidence for fallback. |
+| A selected native launch is rejected | Caller retains the initial selection, rejection, and allowed retry policy. | Disclose `launch-retry` before a permitted configured retry; do not rewrite the initial choice or reset replacement spending. |
+| A plan names an issue as its authoritative design and an inaccessible local copy | Caller reads the issue and establishes the references' actual roles. | Use the accessible authoritative design; do not declare it missing because the supporting copy is unreadable. |
+| Every review purpose depends on an unreadable authoritative design | Caller identifies the essential source and allowed recovery paths before dispatch. | Defer dependent launches, use an authorized authoritative equivalent if available, and continue unrelated authorized work. Reevaluate when evidence becomes available. |
+| Cancellation messaging rejects one handle in a batch | Caller uses observed lifecycle information and isolates the failed recipient. | Stop remaining running workers through valid controls; do not wake completed workers, repeat the invalid batch, or equate delivery with termination. |
 | A shared request record changes or disappears | Each affected recipient reports the identity or access failure. | Preserve available evidence and incomplete coverage; never infer missing constraints or substitute a summary. |
 | A caller receives a pending adjudicator-originated assessment | Caller schedules bounded independent validation using original reports and the pinned snapshot. | Keep the assessment pending until evidence-backed validation returns; failed validation cannot authorize a fix or completion. |
 | A tiny change needs security and documentation checks | Caller allocates separate fresh workers and purpose-specific instruction sets, even if one worker could read all the code. | No inline shortcut or bundling; each reviewer reports its own applicability and evidence. |

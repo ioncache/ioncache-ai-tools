@@ -17,7 +17,7 @@ The posting options are review-code only; the loop rejects them.
 | `--reviewer-model MODEL` | Default for correctness, each standards pass, and the separate integration specialist. Omitted: selection policy. |
 | `--validator-model MODEL` | Independent caller validation. Omitted: selection policy. |
 | `--lead-effort LEVEL`, `--reviewer-effort LEVEL`, `--validator-effort LEVEL` | Omitted: host/model default. Explicit values must be supported by the native host and selected model. |
-| `--fallback configured\|fail` | Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. |
+| `--fallback configured\|fail` | Launch-failure recovery only. Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. It does not choose the initial model. |
 | `--strategy auto\|sweep-first\|specialists` | `auto`: deterministically use `specialists`. `sweep-first` runs correctness first without changing the remaining required single-purpose assignments. |
 | `--post-comments` | Review-code only. Off by default. After the review, publish reportable findings as one `COMMENT` review on the reviewed PR under [POSTING.md](POSTING.md). |
 | `--post-sensitive none\|private\|all` | Review-code only, with posting. Applies to findings the adjudicator marks sensitive (exploitable weaknesses or personal-data exposure). Default `private`: post them on private or internal repositories; on public ones, post only those the change introduces and withhold pre-existing ones. `none` never posts them; `all` always does. |
@@ -27,6 +27,24 @@ Model and effort values are opaque native identifiers, not a plugin-maintained
 catalog. There is no `--main-model`: the lead is a review agent, not the existing
 host conversation. Changing the conversation model uses the host's own controls.
 Do not rewrite host settings, agent definitions, or plugin configuration for a run.
+
+### Initial selection versus launch recovery
+
+With effective `auto`, an unspecified role model requests evidence-backed
+selection, not configured defaults. Initial use of defaults requires an evidenced
+host restriction or a bounded lookup that cannot justify a suitable choice,
+under [ORCHESTRATION.md#runtime-model-selection](ORCHESTRATION.md#runtime-model-selection).
+Explicit `configured` mode or the selection opt-out is a separate choice.
+Do not treat missing model flags, convenience or an unperformed lookup as
+evidence that automatic selection is unavailable.
+
+`--fallback` applies to a rejected or unsupported native launch choice, not
+that initial selection decision. Preserve the initial selection and rejection
+when recording a retry. Disclose the actual execution mode and its reason
+before the affected launch under
+[ORCHESTRATION.md#selection-record-and-disclosure](ORCHESTRATION.md#selection-record-and-disclosure).
+Neither using defaults initially nor retrying with them counts as successful
+automatic model selection.
 
 Examples use placeholders, not recommendations or verified available models:
 
@@ -133,6 +151,8 @@ not establish model access, suitability, or host permission. Apply
 [ORCHESTRATION.md#runtime-model-selection](ORCHESTRATION.md#runtime-model-selection)
 before native launches. Automatic selection is best effort, not a reason to ask
 for a setup decision or block when configured defaults can satisfy the role.
+That recovery still requires an evidenced reason and pre-launch disclosure;
+do not silently reinterpret effective `auto` as `configured`.
 
 An explicit role model or effort requires execution of that role rather than
 silently treating it as an unused hint. Execute the complete single-purpose

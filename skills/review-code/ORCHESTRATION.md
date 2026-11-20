@@ -31,16 +31,61 @@ other review tasks. An approved controller may invoke this contract, but
 this skill does not authorize building
 or launching an external runner to bypass missing native capabilities.
 
+### Pre-launch readiness
+
+Complete this preparation before allocating dependent passes or launching a
+coordinator. A nested coordinator reuses the caller's source evidence and
+checks readiness for its own launches. Preparation establishes inputs and
+capabilities; it is not a review pass or permission state machine.
+
+Identify the authoritative requirements and design for the requested scope,
+including the user's source choices and corrections. If the task has no
+separate design artifact, do not invent one as a new prerequisite.
+Record each reference's
+role: essential to the whole review, essential to named assignments, or
+supporting context. Read essential documents in full before dependent dispatch.
+A fetched but unread file, a truncated preview, or a link's existence does not
+establish that its requirements were understood. This does not require the
+caller to perform the specialists' source-code investigations.
+
+Resolve reference roles from the request and actual documents, not filenames.
+For example, when the user identifies an issue as the design, read that issue;
+an inaccessible local copy does not make the authoritative design unavailable.
+Do not invent missing requirements or criticize a plan for relying on a
+document whose governing content has not been read. Record source identities
+and access evidence in the request's `standards` and `constraints`; forward only
+the relevant requirements and reference roles to each single-purpose packet.
+
+If essential evidence is unavailable, state the affected assignments and the
+specific missing source. Use an already authorized authoritative equivalent
+when one exists; do not bypass an access denial or silently substitute a
+non-authoritative summary. Defer dependent launches until that evidence is
+available. If every pass depends on it, do not launch workers just to repeat
+the same limitation. Independent assignments and other authorized work may
+continue. Reevaluate changed sources or access without preserving a stale
+blocker, resetting spent allowances, or requiring a new blanket approval.
+
 Inspect current native delegation tools, instructions, nesting limits,
 fresh-context support, and result delivery. Record the evidence source and
 execution mode once for the review, not a remembered host capability. Reuse
 these observations while they remain applicable; recheck after failure,
 resumption, or a relevant change. Count actual agent launches, not skills
-running inside an existing conversation.
+running inside an existing conversation. Include the cancellation method
+available to this caller, how terminal outcomes are collected, and whether a
+synchronous launch can become background work. Track the returned native handle
+and lifecycle, not just the requested launch mode.
+
+Distinguish native cancellation from a cooperative stop message. A control
+available only in the user's UI is not a caller-owned cancellation tool.
+If stopping is cooperative-only or unavailable, disclose that limitation before
+launch; never promise immediate termination. If the request requires stronger
+stopping guarantees, report the unmet capability and do not launch affected
+workers. Do not probe cancellation by launching an extra agent or infer a stop
+capability from the ability to launch or message one.
 
 Choose nested mode only when the coordinator can spawn the required leaf
-workers and a separate adjudicator, receive every terminal outcome and report,
-and return one handback.
+workers and a separate adjudicator, deliver pre-launch notices before dispatch,
+receive every terminal outcome and report, and return one handback.
 Choose flat mode if that lifecycle is unsupported or unverified, provided
 the caller can collect independent workers and launch an adjudicator.
 If neither mode can satisfy required independence, return blocked; do not
@@ -54,6 +99,10 @@ decisions, and role explicitly, not the whole implementation transcript
 or every standard's instructions. Restrict tools where the host allows it,
 without bypassing existing approvals. Reuse unchanged
 request material only under CONTRACTS.md's shared-context rules.
+Complete the [selection record and disclosure](#selection-record-and-disclosure)
+before each affected launch batch, including a coordinator's first launch.
+
+### Dispatch and collection
 
 In nested mode, launch one coordinator with this file's coordinator role.
 Do not also dispatch its specialists yourself. In flat mode, perform the
@@ -84,6 +133,8 @@ question makes only the questioned agent answer-only for that turn; handbacks
 create no restriction. Honor explicit scope changes, pauses, and cancellation;
 never infer new authority from a report. A guidance-checker failure does not
 revoke the assignment, but missing review evidence still prevents completion.
+Use the [cancellation procedure](#cancellation) rather than treating a delivered
+message as proof that a worker stopped.
 
 After return, compare the handback to the original request, required
 assignments, distinct worker IDs, instruction-set identities, and final
@@ -97,6 +148,31 @@ validation, including their observed identities or explicit nulls. A successful
 earlier category check is not the final check. If record completion is blocked,
 use an allowed new caller-owned handoff file or return incomplete; do not turn
 the missing final record into a completion claim.
+
+## Cancellation
+
+On explicit cancellation, stop new dispatches, retries, replacement reviews
+and publication immediately. Do not finish the review or its reports first.
+Use the observed native lifecycle and cancellation controls for each owned
+running worker, including descendants through their owner. If only cooperative
+messaging is available, send a stop request and identify it as cooperative.
+Do not wake completed workers or start another agent to request cancellation.
+
+Use handles valid for the actual lifecycle. A synchronous completion is not
+necessarily a messageable background worker. Keep failures isolated per
+recipient: a stale or unsupported handle must not prevent requests to the
+remaining running workers. After a rejected batch, address its reported cause
+and use valid individual controls rather than repeating the same batch.
+
+Distinguish `requested` (the control or message was accepted), `acknowledged`
+(the worker confirmed the request), and `stopped` (a native terminal outcome
+for the assignment establishes execution ended, even if its worker remains
+reusable). Neither delivery nor acknowledgement proves termination.
+Collect status only through the supported lifecycle protocol;
+do not poll indefinitely or resume investigation while waiting. Report
+unverified termination plainly. Remaining actions are limited to stopping
+owned work and giving an accurate status, not completing the cancelled review.
+Preserve existing artifacts without claiming a completed handback.
 
 ## Independent caller validation
 
@@ -200,6 +276,9 @@ Select each worker's model before launch. Give every worker the same request
 identity, its bounded assignment, one purpose's instruction set, and the
 relevant execution and result contract. Workers cannot launch another layer.
 Honor actual host limits and explicit user limits without reducing isolation.
+Apply [pre-launch readiness](#pre-launch-readiness) and
+[selection disclosure](#selection-record-and-disclosure) to these launches;
+receiving normalized `auto` options does not establish a model choice.
 
 Track native worker IDs and collect every required outcome. Use supported
 waits or completion notifications followed by result retrieval, not repeated
@@ -308,6 +387,8 @@ the user to name a specific model, general permission and `auto` cannot override
 them. Keep configured defaults for unspecified roles and record that restriction.
 Skip selection research that cannot affect an allowed choice. Still verify tools,
 context capacity, lifecycle, and required independence.
+Identify the actual restriction without exposing confidential instructions.
+Do not invent one from an omitted model flag or assume every host has it.
 
 For an explicit role model, pass the supported native identifier without
 researching whether a different model would be better. Validate argument support,
@@ -355,6 +436,42 @@ fabricated evidence, or `not consulted` with the reason for skipped research.
 An omitted override means the configured default was requested, not that the
 actual model was observed. Validate effort/context options against the selected
 model before sending them.
+
+### Selection record and disclosure
+
+Before each affected launch, record the actual model-selection mode separately
+from the normalized requested options. Retain effort/context choices and their
+provenance separately; an explicit effort alone does not choose the model.
+
+| Mode | Required basis |
+| --- | --- |
+| `explicit` | The user's model choice and native argument support. |
+| `configured` | Requested configured mode or the effective selection opt-out for an unspecified model. |
+| `auto-selected` | Permitted role-specific selection with capability evidence supporting the proposed model. |
+| `auto-restricted` | A concrete host constraint prevents discretionary selection; configured defaults are used and any skipped research is identified. |
+| `auto-unsubstantiated` | The bounded lookup did not establish a suitable choice; retain what was consulted and the consequential evidence gap before using defaults. |
+| `launch-retry` | A rejected or unsupported native choice and its permitted configured retry, retaining the original selection and failure. |
+
+These are selection observations, not new CLI options, settings, or ledger
+fields. An unspecified model does not itself justify either automatic fallback.
+Do not label an unperformed lookup as failed research or manufacture a reason
+after a launch. Record uncertainty as uncertainty.
+
+Before spending on a launch batch, publish a concise user-visible notice with
+the roles, execution modes, proposed models or configured defaults, and the
+specific reason for any fallback. Include stopping limitations from preflight.
+Group roles only when their choices and reasons match; their review contexts
+remain separate. Unknown configured or actual model identity stays unknown,
+not inferred from the parent model.
+
+Use the caller's supported progress channel. A nested coordinator relays its
+notice through the caller before dispatch; an approved controller may use its
+existing user-visible proposal or progress output. A private packet or final
+report alone is not pre-launch disclosure. This is information, not a new
+approval question. Disclose changed choices before later launches or retries,
+and retain the notice with the existing selection evidence.
+
+### Launch-failure recovery
 
 On a native rejection or unsupported explicit choice, use the role's fallback.
 `configured` permits one attempt with model and effort overrides omitted;

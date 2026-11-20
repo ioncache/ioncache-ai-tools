@@ -5,6 +5,12 @@ installed skill. It reads JSON and writes JSON to stdout, never launches models
 or creates a state store. Keep request, plan and result files in caller-owned
 private storage outside the reviewed tree.
 
+Before preparing packets, complete the caller's
+[pre-launch readiness](ORCHESTRATION.md#pre-launch-readiness) for authoritative
+inputs and native lifecycle controls. Preserve applicable source roles and
+limitations in the existing request fields below; do not add helper schema
+fields or treat successful packet preparation as proof of readiness.
+
 ```sh
 python3 -B "/absolute/plugin/scripts/review_assignments.py" prepare "/private/request.json"
 python3 -B "/absolute/plugin/scripts/review_assignments.py" prepare "/private/revised-request.json" \
