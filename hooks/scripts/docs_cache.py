@@ -38,6 +38,11 @@ SESSION_ID = re.compile(r'[A-Za-z0-9_-]+')
 VOLATILE = re.compile(
     r'release-?notes|/releases\b|changelog|/latest\b|whats-?new', re.IGNORECASE,
 )
+# An agent skips the cache by starting a WebFetch prompt with [live], or by adding
+# #live to the URL where the tool has no prompt. A fragment stays client-side
+# (RFC 3986), so it should not change the page; host tool acceptance is unverified.
+LIVE_PROMPT = re.compile(r'^\s*\[live\]', re.IGNORECASE)
+LIVE_FRAGMENT = 'live'
 DISTILL_SYSTEM_PROMPT = (
     "You extract reference facts from documentation for a coding agent's "
     "cache. Use only what the page text states; never add anything from "
@@ -83,6 +88,26 @@ def is_volatile(url):
         # Only a commit SHA pins the content; a branch name moves.
         return len(segments) < 3 or not re.fullmatch(r'[0-9a-f]{40}', segments[2])
     return False
+
+
+def live_requested(url, prompt=None):
+    """Reports whether the caller explicitly asked to skip the cache."""
+    return (urlsplit(url).fragment.strip().lower() == LIVE_FRAGMENT
+            or (isinstance(prompt, str) and LIVE_PROMPT.match(prompt) is not None))
+
+
+def fetch_question(prompt):
+    """Returns the question a fetch asked, without the live marker, or None."""
+    if not isinstance(prompt, str):
+        return None
+    return LIVE_PROMPT.sub('', prompt, count=1).strip() or None
+
+
+def same_question(left, right):
+    """Compares questions ignoring case and spacing, since agents vary both."""
+    def normalized(value):
+        return ' '.join(value.split()).casefold() if isinstance(value, str) and value.strip() else None
+    return normalized(left) == normalized(right)
 
 
 def cache_key(url, start):
@@ -166,7 +191,11 @@ def evict(now=None):
 
 
 def take_bypass(session_id, key):
-    """Record a denial; on the repeat of a denied call, allow it once."""
+    """Record a denial; every repeat of a denied call then fetches live.
+
+    Repeating a denied call means the cached facts did not answer it, and a
+    later live fetch stores another summary that would not answer it either.
+    """
     if not SESSION_ID.fullmatch(session_id or ''):
         raise ValueError('invalid session id')
     root = cache_dir()
@@ -178,13 +207,21 @@ def take_bypass(session_id, key):
             return True
         path = root / 'sessions' / session_id
         denied = set(path.read_text().split()) if path.exists() else set()
-        bypass = key in denied
-        if bypass:
-            denied.discard(key)
-        else:
-            denied.add(key)
+        if key in denied:
+            return True
+        denied.add(key)
         write_private(path, '\n'.join(sorted(denied)))
-        return bypass
+        return False
+
+
+LIVE_HOW = {
+    # WebFetch answers from at most a page's first 100,000 characters, so a live
+    # fetch still is not the raw page: https://code.claude.com/docs/en/tools-reference
+    'WebFetch': ('start the prompt with [live] (WebFetch reads at most the first '
+                 '100,000 characters; for the raw page use curl)'),
+    'web.run': 'add #live to the URL',
+    'web_fetch': 'add #live to the URL',
+}
 
 
 def render(url, facts, tool='web_fetch'):
@@ -201,8 +238,8 @@ def render(url, facts, tool='web_fetch'):
         question = f' Answered question: {fact["question"]}' if fact.get('question') else ''
         lines.append(f'- (fetched {day}){question}\n  {fact["fact"]}')
     lines.append(
-        "If this doesn't answer what you need, repeat the exact same "
-        f'{tool} call and it will fetch live.'
+        "If this doesn't answer what you need, fetch it live: "
+        f'{LIVE_HOW[tool]}, or repeat the exact same {tool} call.'
     )
     return '\n'.join(lines)
 
@@ -238,10 +275,26 @@ def record_cache_delivery(request, facts, reason):
         print(f'docs-cache: evidence recording failed: {error}', file=sys.stderr)
 
 
-def reference_facts(url):
+def reference_facts(url, question=None):
+    """Returns recent URL-level facts usable for a request.
+
+    A request that asks a question (Claude's WebFetch prompt) can only be served
+    an answer to that same question; a summary made for another question or of
+    a page chunk cannot stand in for it. Requests without a question keep
+    URL-level reuse.
+    """
     facts = [fact for start in (None, 0) for fact in fresh_facts(cache_key(url, start))
-             if fact.get('reference_only') is True or covers(fact.get('length'), 1)]
+             if (fact.get('reference_only') is True or covers(fact.get('length'), 1))
+             and (question is None or same_question(fact.get('question'), question))]
     return sorted(facts, key=lambda fact: fact['fetched_at'], reverse=True)[:MAX_FACTS_PER_KEY]
+
+
+def live_fetch(url, harness, prompt=None):
+    """Logs and reports an explicit live request, which never reads the cache."""
+    if not live_requested(url, prompt):
+        return False
+    log_event('live', url, harness)
+    return True
 
 
 def native_denial(reason):
@@ -274,12 +327,13 @@ def claude_fetch_args(data):
 
 def claude_pre(data):
     args = claude_fetch_args(data)
-    if args is None:
+    if args is None or live_fetch(args['url'], 'claude', args['prompt']):
         return None
     request = {'url': args['url'], 'args': args, 'harness': 'claude',
                'tool': 'WebFetch', 'session_id': native_session('claude', data),
                'hook_input': data}
-    return native_denial(cached_reason(request, reference_facts(args['url'])))
+    question = fetch_question(args['prompt'])
+    return native_denial(cached_reason(request, reference_facts(args['url'], question)))
 
 
 def native_notice(harness, data):
@@ -308,7 +362,7 @@ def claude_post(data):
                 and normalize_url(source_url) == normalize_url(args['url'])):
             queue_distillation({
                 'url': args['url'], 'start': None, 'length': None,
-                'text': text[:MAX_PROMPT_BYTES], 'question': args['prompt'],
+                'text': text[:MAX_PROMPT_BYTES], 'question': fetch_question(args['prompt']),
                 'harness': 'claude', 'reference_only': True,
             })
     return native_notice('claude', data)
@@ -357,7 +411,7 @@ def codex_fetch_args(data):
 
 def codex_pre(data):
     args = codex_fetch_args(data)
-    if args is None:
+    if args is None or live_fetch(args['open'][0]['ref_id'], 'codex'):
         return None
     url = args['open'][0]['ref_id']
     request = {'url': url, 'args': args, 'harness': 'codex', 'tool': 'web.run',
@@ -414,7 +468,7 @@ def copilot_pre(data):
     if not enabled('docs-cache', {**data, '_ioncache_harness': 'copilot'}):
         return None
     args = copilot_fetch_args(data)
-    if args is None or is_volatile(args['url']):
+    if args is None or is_volatile(args['url']) or live_fetch(args['url'], 'copilot'):
         return None
     url = args['url']
     key = cache_key(url, args.get('start_index'))

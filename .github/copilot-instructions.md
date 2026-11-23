@@ -101,6 +101,9 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Codex single-URL `webrun` opens, and Copilot `web_fetch`. Claude answers and
   Codex excerpts are reference-only; never turn their byte or line counts into
   page coverage. Keep bypass and notice state separate by harness and session.
+  A Claude `WebFetch` hit needs a fact distilled for the same question. Every
+  hit names the live marker (`[live]` prompt prefix, or a `#live` URL fragment
+  for tools without a prompt); marked calls never read the cache or emit allow.
 - `skills/*/SKILL.md` contains both workflow and behavior instructions with
   activation descriptions. Do not rely on legacy `commands/` migration:
   Codex may ignore templates or large commands. Their examples describe behavior
