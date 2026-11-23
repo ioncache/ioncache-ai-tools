@@ -100,11 +100,13 @@ async function persistedScenario(fixture) {
     execFileSync(fixture.python, start.slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
     const assignment = status().assignment
     const resultFile = JSON.parse(prompt.match(/^Assigned result file: (.+)$/m)[1])
+    const submit = JSON.parse(prompt.match(/^Submit arguments: (.+)$/m)[1])
+    assert.equal(submit[submit.indexOf('--candidate') + 1], `${resultFile}.candidate.json`)
     const modelArgs = JSON.parse(prompt.match(/^Model report arguments: (.+)$/m)[1])
     const modelRecord = JSON.parse(execFileSync(fixture.python, [...modelArgs.slice(1),
       '--actual-model', `observed-${options.label}`, '--source', 'native-context'],
     { input: '', encoding: 'utf8', stdio: 'pipe', timeout: 30000 }))
-    let report
+    let report, candidate
     if (options.label === 'review-owner' && fixture.scenario.startsWith('review-')) {
       if (fixture.scenario === 'review-recovered') report = reviewWorker('finish-recovered')
       else if (review) report = reviewWorker('finish')
@@ -149,23 +151,22 @@ async function persistedScenario(fixture) {
         data.commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: assignment.root, encoding: 'utf8' }).trim()
       }
       const outcome = options.label === 'implement' || committing ? 'complete' : 'blocked'
+      // Development workers submit a candidate; the helper supplies assignment and artifact identities.
       const development = {
-        assignment: assignment.id, worker: null, outcome, summary: 'Offline fixture result',
+        outcome, summary: 'Offline fixture result',
         evidence: ['Local fixture worker only; no model or network calls'],
-        artifacts: Object.fromEntries(assignment.artifacts.map(item => [item.id, item.sha256])),
         data, model_report: modelRecord.model_report
       }
-      fs.writeFileSync(assignment.result_file, JSON.stringify(development))
-      report = options.label === 'review-owner'
-        ? { outcome, result_file: assignment.result_file, requests: [] } : development
+      report = options.label === 'review-owner' ? { outcome, requests: [], report: development } : development
+      candidate = submit[submit.indexOf('--candidate') + 1]
     }
-    fs.writeFileSync(resultFile, JSON.stringify(report))
+    fs.writeFileSync(candidate || resultFile, JSON.stringify(report))
     if (options.label === 'reviewer' && fixture.scenario === 'review-throw') {
       throw new Error('Fixture review native call failed')
     }
     const finish = JSON.parse(prompt.match(/^Finish arguments: (.+)$/m)[1])
     try {
-      execFileSync(fixture.python, finish.slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
+      execFileSync(fixture.python, (candidate ? submit : finish).slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
     } catch (error) {
       throw new Error(String(error.stdout || error.stderr || error))
     }

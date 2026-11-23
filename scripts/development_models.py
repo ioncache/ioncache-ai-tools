@@ -16,6 +16,8 @@ ROLES = ("development-control", "preflight", "prepare", "implement", "review-own
 REVIEW_ROLES = {"review-owner": "lead", "adjudicator": "lead",
                 "reviewer": "reviewer", "validator": "validator"}
 SOURCES = ("unavailable", "native-context", "native-transcript")
+# Effort levels Claude's workflow agent() accepts; a model may support fewer.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_FIELDS = ("selected_model", "selected_effort", "actual_model", "actual_effort")
 
 
@@ -32,7 +34,9 @@ def configuration(execution):
     for choice in choices.values():
         plan.fields(choice, "model effort fallback")
         native_value(choice["model"])
-        native_value(choice["effort"])
+        plan.require(choice["effort"] is None or choice["effort"] in EFFORTS,
+                     f"Effort must be null or one of {', '.join(EFFORTS)}; an unsupported value "
+                     "would fail only after the batch is claimed")
         plan.require(choice["fallback"] in ("configured", "fail"), "Unknown model fallback")
     values = execution.get("review_options", {})
     plan.require(isinstance(values, dict), "Review options must be an object")

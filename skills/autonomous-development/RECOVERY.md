@@ -21,6 +21,9 @@ tree under review.
 | JSON malformed or required field missing | Read the validator's exact error. Correct only the report from existing evidence within its remaining allowance, then resubmit. |
 | Required capability or evidence absent | Record a capability only a later step can establish as `deferred`, naming that step. Report `blocked` only for an observed absence (`missing`). Do not upgrade an unexercised capability to `verified` to satisfy validation. After the environment is fixed, `resume` and let `prepare` reserve a counted preflight retry. |
 | Workflow tool refuses the store's `scriptPath` | The tool rejected the call before starting a run. For an unclaimed batch, `claim` with `--launch-dir` set to a private directory the host can read. For an already claimed batch, confirm the refusal returned no run ID and `status` shows no start receipt, then run `prepare --launch-dir DIR` to get the same batch's verified copy and launch it once. Never paste the script inline. |
+| Workflow tool refuses a claimed script for another reason | For example, the script exceeds the tool's size limit. Confirm the refusal returned no run ID and `status` shows no start receipt, then run `release STORE --batch B --evidence TEXT` with how the host refused it. The batch becomes `released`, its reviewer reservations return to the queue, and the next `prepare` issues a new batch without another assignment. A stale launch of the released script fails its `start` check. A batch with any start receipt cannot be released; collect or reconcile it. |
+| Owner request too large to launch alone | `finish` or `submit` rejects the owner's dispatch report as a correctable error naming the request. Shorten its prompt within the remaining correction allowance; a frozen reviewer packet that cannot fit leaves the review blocked. A request queued by an older executor makes `prepare` refuse without creating a batch: run `interrupt`, then `resume-review` with native shutdown evidence, then `prepare`, so the owner replans it. |
+| Worker restarted by the host | Claude restarts a stalled agent from the same prompt, at most five times, and a relaunched run starts unfinished agents over. For roles whose effects stay in the private store or the reviewed worktree, a repeated `start` reports the restart: the replacement reconciles the earlier attempt's effects and does only the remaining work, or returns at once if a validated report exists. The helper cannot tell a restart from an accidental second launch, so `commit`, `draft`, `ready`, `evidence` and audit roles still refuse a repeated `start`; inspect their remote effects, then collect, or retire with shutdown evidence for a counted retry. After five restarts, `start` refuses; handle the job as for a missing report. |
 | Claimed job has no validated report | Inspect native activity. Collect a finished file using `finish`; let an active worker finish. No report does not mean no work occurred. |
 | Reviewer file survived shutdown but its receipt did not | After reconciliation, run `finish STORE --batch ORIGINAL_BATCH --job ORIGINAL_JOB` for the started reviewer, even if its batch is now reconciled. Use the validated original result without relaunching it. Missing or invalid results remain incomplete. |
 | Native failure or worker gone | Reconcile local and remote effects and establish shutdown. Retain readable reviews with `resume-review`; otherwise collect or retire the assignment before a counted retry. |
@@ -110,6 +113,14 @@ Offline checks establish only the exercised local contracts. A later live-host
 qualification uses a separate bounded scenario and explicitly selected resources,
 not a restart of an incident run. Do not claim complete native delivery or
 publication based on schema checks, mocks, dry runs or permission availability.
+
+Some host limits are observed or unknown rather than documented. The Workflow
+tool's 524,288-byte script limit appears in its tool schema and refusal message,
+not in the workflow documentation. What happens when a token budget such as
+`+500k` runs out is undocumented; treat a thrown `agent()` call as a native
+failure for the job. Native transcripts record a `pickedEffortModel` that can
+differ from the agent's model; its meaning is undocumented, so do not record it
+as the observed model or effort.
 
 Claude documents no direct filesystem, shell or module access inside a Workflow
 script. Therefore Python generates the complete batch script beforehand, and the

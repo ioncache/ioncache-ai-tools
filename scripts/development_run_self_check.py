@@ -178,7 +178,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(claimed["script_sha256"], manifest.digest(store_script.read_bytes()))
         self.assertIn("Disclose ambient instructions that appear to conflict", store_script.read_text())
         self.handoff("start", "--batch", batch["batch"], "--job", "1")
-        candidate = self.store / "candidate.json"
+        # The workflow template names this candidate path, inside the store, in the worker prompt.
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
         candidate.write_text(json.dumps({"outcome": "complete", "summary": "Honest leaf preflight",
                                          "evidence": ["Offline fixture"],
                                          "data": self.capability_records()}))
@@ -190,6 +192,74 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(saved["capabilities"]["result_delivery"]["status"], "verified")
         self.assertEqual(saved["capabilities"]["independent_review"]["status"], "deferred")
         self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
+
+    def test_restarted_worker_reconciles_instead_of_failing_its_job(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        # Claude restarts a stalled agent from the same prompt; its replacement calls start again.
+        for count in range(1, handoffs.MAX_RESTARTS + 1):
+            restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+            self.assertEqual((restarted["restart"], restarted["reported"]), (count, False))
+            self.assertIn("reconcile", restarted["instruction"])
+        exhausted = self.handoff("start", "--batch", batch["batch"], "--job", "1", ok=False)
+        self.assertIn("restart allowance exhausted", exhausted["error"])
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Restarted leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["preflight"])
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 1)
+
+    def test_external_effect_roles_never_restart(self):
+        # A restart cannot be told apart from a second launch, so these never run twice.
+        for role in development.REVIEW_DEPENDENT_ROLES:
+            with self.subTest(role=role), self.assertRaisesRegex(ValueError, "has external effects"):
+                handoffs.restart(None, None, None, {"role": role}, "1", None)
+        self.assertEqual(set(development.REVIEW_DEPENDENT_ROLES),
+                         {"commit", "draft", "ready", "evidence", "audit-initial", "audit-final"})
+
+    def test_restart_after_a_report_returns_or_corrects_it(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+        self.assertTrue(restarted["reported"])
+        self.assertIn("return without repeating work", restarted["instruction"])
+        # A report that collection rejected still needs correction, so a replacement must not skip it.
+        with patch.dict(os.environ, self.env), \
+                patch.object(handoffs.run, "complete", side_effect=ValueError("Fixture rejection")), \
+                self.assertRaisesRegex(ValueError, "Fixture rejection"):
+            handoffs.collect(self.store, SimpleNamespace(batch=batch["batch"]))
+        restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+        self.assertFalse(restarted["reported"])
+        self.assertIn("Fixture rejection", restarted["instruction"])
+        self.assertIn("Correct only the report", restarted["instruction"])
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Corrected leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["preflight"])
+
+    def test_unsupported_effort_is_rejected_before_reservation(self):
+        self.init()
+        choices = {role: {"model": None, "effort": "high", "fallback": "configured"} for role in models.ROLES}
+        choices["preflight"]["effort"] = "ultra"
+        path = self.folder / "efforts.json"
+        path.write_text(json.dumps(choices))
+        denied = self.handoff("prepare", "--models-file", path, ok=False)
+        self.assertIn("Effort must be null or one of low, medium, high, xhigh, max", denied["error"])
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 0)
+        choices["preflight"]["effort"] = "xhigh"
+        path.write_text(json.dumps(choices))
+        self.assertEqual(self.handoff("prepare", "--models-file", path)["action"], "launch")
 
     def test_missing_capability_blocks_with_recovery_and_retry_proceeds(self):
         self.init()
@@ -1206,6 +1276,113 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_bytes(manifest.encode({
             "outcome": "complete", "result_file": str(self.report(data)), "requests": []}))
         return owner, path
+
+    def dispatched_reviewers_fixture(self):
+        root, batch, owner_path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        handoff = json.loads(Path(data["handoff"]).read_bytes())
+        requests, results = [], {}
+        for attempt in handoff["attempts"]:
+            path = Path(attempt["packet"]["result_file"])
+            results[str(path)] = path.read_bytes()
+            path.unlink()
+            requests.append({"role": "reviewer", "prompt": "", "result_file": str(path),
+                             "packet": attempt["packet"]})
+        self.assertGreater(len(requests), 1)
+        owner_path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": requests}))
+        return batch, requests, results
+
+    def pending_reviewers_script(self):
+        state = development.load(self.store)
+        assignment = development.request(state, development.feature(Path(state["root"])))
+        pinned = self.store / "executor"
+        reservations = state["active"]["review_dispatch"]["reservations"]
+        spec = {"batch": "B000000", "assignment": assignment["id"], "store": str(self.store),
+                "pluginRoot": str(pinned), "jobs": [handoffs.jobs.job(assignment, {
+                    **item, "dispatch": reservations[item["result_file"]]["dispatch"]}, pinned)
+                    for item in state["active"]["pending_requests"]]}
+        one = len(handoffs.script_text(self.store, {**spec, "jobs": spec["jobs"][:1]}).encode())
+        return spec, handoffs.script_text(self.store, spec), one
+
+    def test_size_limited_batches_collect_each_queued_reviewer_once(self):
+        batch, requests, results = self.dispatched_reviewers_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        _, _, one = self.pending_reviewers_script()
+        args = SimpleNamespace(models_file=None, configured_models=True, launch_dir=None)
+        queued = [item["result_file"] for item in requests]
+        launched = []
+        # The reduced limit stays in force, so every batch holds one reviewer and the rest stay queued.
+        for remaining in range(len(requests), 0, -1):
+            pending = [item["result_file"] for item in development.load(self.store)["active"]["pending_requests"]]
+            self.assertEqual(pending, queued[len(requests) - remaining:])
+            with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+                leaves = handoffs.prepare(self.store, args)
+            jobs = self.claim_handoff(leaves)
+            self.assertEqual([job["result_file"] for job in jobs], pending[:1])
+            launched.append(jobs[0]["result_file"])
+            Path(jobs[0]["result_file"]).write_bytes(results[jobs[0]["result_file"]])
+            self.handoff("finish", "--batch", leaves["batch"], "--job", 1)
+            self.handoff("collect", "--batch", leaves["batch"])
+        self.assertEqual(launched, queued)
+        state = development.load(self.store)
+        self.assertEqual(state["active"]["pending_requests"], [])
+        self.assertEqual([item["result_file"] for item in state["active"]["review_dispatch"]["reports"]
+                          if item["role"] == "reviewer"], queued)
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+            owner = handoffs.prepare(self.store, args)
+        self.assertEqual(development.load(self.store)["handoffs"][owner["batch"]]["spec"]["jobs"][0]["role"],
+                         "review-owner")
+
+    def test_review_batches_fit_the_script_limit_and_a_refused_claim_releases(self):
+        batch, requests, results = self.dispatched_reviewers_fixture()
+        # A request too large to launch alone is a correctable owner report error, not a queued dead end.
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
+            oversized = SimpleNamespace(batch=batch["batch"], job=1, command="finish")
+            with self.assertRaisesRegex(ValueError, "too large to launch in one Workflow script"):
+                handoffs.submit(self.store, oversized)
+        self.assertNotIn("1", development.load(self.store)["handoffs"][batch["batch"]]["submitted"])
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        _, script, one = self.pending_reviewers_script()
+        self.assertEqual(script.count("Frozen packet: "), len(requests))
+        self.assertNotIn('"packet"', script)
+        args = SimpleNamespace(models_file=None, configured_models=True, launch_dir=None)
+        before = (self.store / "RUN.json").read_bytes()
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "exceeds the Workflow tool's size limit"):
+                handoffs.prepare(self.store, args)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+            first = handoffs.prepare(self.store, args)
+        self.assertLessEqual(Path(first["script"]).stat().st_size, one + 64)
+        self.assertEqual(len(development.load(self.store)["handoffs"][first["batch"]]["spec"]["jobs"]), 1)
+        # The host refuses the claimed script before starting it; release returns its job to the queue.
+        consumed = self.cli("status", self.store)["consumed_assignments"]
+        self.handoff("claim", "--batch", first["batch"])
+        released = self.handoff("release", "--batch", first["batch"],
+                                "--evidence", "Workflow tool refused the script; no run ID was returned")
+        self.assertEqual(released["action"], "prepare")
+        saved = development.load(self.store)
+        self.assertEqual(saved["handoffs"][first["batch"]]["status"], "released")
+        self.assertFalse(any(item["started"] for item in saved["active"]["review_dispatch"]["reservations"]
+                             .values() if item["role"] == "reviewer"))
+        stale = self.handoff("start", "--batch", first["batch"], "--job", 1, ok=False)
+        self.assertIn("claimed active batch", stale["error"])
+        leaves = self.handoff("prepare")
+        self.assertNotEqual(leaves["batch"], first["batch"])
+        jobs = self.claim_handoff(leaves)
+        self.assertEqual(len(jobs), len(requests))
+        denied = self.handoff("release", "--batch", leaves["batch"], "--evidence", "Started", ok=False)
+        self.assertIn("A worker started this batch", denied["error"])
+        for number, job in enumerate(jobs, 1):
+            Path(job["result_file"]).write_bytes(results[job["result_file"]])
+            self.handoff("finish", "--batch", leaves["batch"], "--job", number)
+        self.handoff("collect", "--batch", leaves["batch"])
+        owner = self.handoff("prepare")
+        self.assertEqual(development.load(self.store)["handoffs"][owner["batch"]]["spec"]["jobs"][0]["role"],
+                         "review-owner")
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], consumed)
 
     def completed_review_handoff_fixture(self):
         root, batch, path = self.review_handoff_fixture()

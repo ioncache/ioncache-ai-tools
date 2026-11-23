@@ -30,7 +30,9 @@ If the approved constraints require verified identity, missing evidence leaves
 that requirement incomplete.
 
 Before acting, run the supplied script-owned `start` command, then read current
-run status and any existing result file. A native
+run status and any existing result file. If `start` reports a restart, an
+earlier attempt of the same job ran; follow its instruction to reconcile.
+Roles with external effects get a refusal instead; return it without acting. A native
 replay may encounter completed effects. If the assignment already has a complete
 recorded report, return its existing path. Otherwise reconcile actual state
 before doing more work. A stale assignment cannot authorize new changes.
@@ -61,7 +63,7 @@ state as model-generated JSON. A batch workflow launches only its frozen jobs.
 
 Run your generated `finish` command after writing the report. For development
 reports, `submit --candidate` can generate assignment and artifact identity
-fields. Follow the precise validation errors to correct the report within the
+fields; write the candidate to the path your prompt names, inside the store. Follow the precise validation errors to correct the report within the
 remaining allowance, not to repeat work or manufacture evidence. A missing
 report remains outstanding even when the native workflow returns successfully.
 Do not edit shared state or interpret a native return as acceptance.

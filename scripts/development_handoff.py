@@ -22,6 +22,14 @@ import development_run as run
 import review_ledger as review
 
 
+# Claude's Workflow tool refuses scripts over 524,288 bytes; keep a margin below it.
+SCRIPT_BYTES = 480_000
+LAUNCH_FIELDS = ("role", "options", "result_file", "prompt")
+# Claude restarts a stalled workflow agent at most five times:
+# https://code.claude.com/docs/en/workflows
+MAX_RESTARTS = 5
+
+
 class HandoffError(ValueError):
     def __init__(self, kind, message):
         super().__init__(message)
@@ -99,12 +107,51 @@ def script_path(folder, batch_id):
     return review.safe_path(folder, f"handoffs/{batch_id}.js")
 
 
-def render(folder, record):
+def script_text(folder, spec):
+    """Renders the launch script with only the job fields the template reads.
+
+    Reviewer packets are already embedded in their prompts; RUN.json keeps the full
+    spec, so repeating them would only bring the script closer to the host size limit.
+    """
     template = (folder / "executor/workflows/autonomous-development.js").read_text()
     marker = "const handoff = null"
     plan.require(template.count(marker) == 1, "Pinned dispatch template is unavailable")
-    script = template.replace(marker, "const handoff = " +
-                              json.dumps(record["spec"], ensure_ascii=True, sort_keys=True))
+    launch = {**spec, "jobs": [{key: item[key] for key in LAUNCH_FIELDS} for item in spec["jobs"]]}
+    return template.replace(marker, "const handoff = " + json.dumps(launch, ensure_ascii=True, sort_keys=True))
+
+
+def launchable_jobs(folder, spec):
+    """Keeps the longest job prefix whose script fits the Workflow tool's size limit.
+
+    The remaining reviewer requests stay pending and run in later batches.
+    """
+    count = len(spec["jobs"])
+    while len(script_text(folder, {**spec, "jobs": spec["jobs"][:count]}).encode()) > SCRIPT_BYTES:
+        plan.require(count > 1, f"The launch script for {spec['jobs'][0]['result_file']} alone exceeds the "
+                     "Workflow tool's size limit, so no batch was created. Run interrupt, then "
+                     "resume-review with native shutdown evidence, then prepare, so the review owner "
+                     "can replan that request smaller.")
+        count -= 1
+    return spec["jobs"][:count]
+
+
+def require_launchable(folder, record, assignment, requests):
+    """Rejects an owner request whose own launch script would exceed the size limit.
+
+    Checking at submission returns a correctable report error to the owner,
+    rather than leaving an unlaunchable request queued for prepare.
+    """
+    executor_root = Path(record["spec"]["pluginRoot"])
+    for request in requests:
+        spec = {**record["spec"], "jobs": [jobs.job(assignment, request, executor_root)]}
+        plan.require(len(script_text(folder, spec).encode()) <= SCRIPT_BYTES,
+                     f"Request for {request['result_file']} is too large to launch in one Workflow "
+                     "script; shorten its prompt, or report the review blocked if a frozen "
+                     "reviewer packet cannot fit")
+
+
+def render(folder, record):
+    script = script_text(folder, record["spec"])
     path = script_path(folder, record["id"])
     path.parent.mkdir(mode=0o700, exist_ok=True)
     if path.exists():
@@ -248,6 +295,7 @@ def prepare(folder, args):
         spec = {"batch": batch_id, "assignment": assignment["id"], "store": str(folder),
                 "pluginRoot": str(pinned),
                 "jobs": [jobs.job(assignment, item, pinned) for item in requests]}
+        spec["jobs"] = launchable_jobs(folder, spec)
         for item in spec["jobs"]:
             Path(item["result_file"]).parent.mkdir(parents=True, exist_ok=True)
         record = {"id": batch_id, "assignment": assignment["id"], "status": "prepared", "spec": spec,
@@ -290,6 +338,36 @@ def claim(folder, args):
                 "script_sha256": plan.digest(script.read_bytes())}
 
 
+def release(folder, args):
+    """Returns a claimed batch that never started to the queue, so prepare can issue a new batch.
+
+    A host can refuse a claimed script before starting it, for example when it is too large.
+    Without a start receipt no worker ran, and a stale launch of the released script fails
+    its start check, so its work is reissued once rather than repeated.
+    """
+    with locked(folder):
+        state = run.load(folder)
+        settings = run.feature(Path(state["root"]))
+        executor.require_current(folder)
+        record = batch_record(state, args.batch)
+        assignment = assignment_for(state, record, settings)
+        plan.require(state["outcome"] == "running" and record["status"] == "claimed",
+                     "Only a claimed batch of the running assignment can be released")
+        plan.require(not record["started"] and not record["submitted"],
+                     "A worker started this batch; collect or reconcile it instead of releasing it")
+        plan.text(args.evidence)
+        if assignment["role"] == "review":
+            reservations = state["active"]["review_dispatch"]["reservations"]
+            for item in record["spec"]["jobs"]:
+                if item["role"] in jobs.LEAVES:
+                    reservations[item["result_file"]]["started"] = False
+        state["active"].pop("dispatch_claim", None)
+        record["status"] = "released"
+        record["release"] = {"evidence": args.evidence, "revision": state["revision"] + 1}
+        persist(folder, state)
+        return {"action": "prepare", "batch": record["id"], "assignment": record["assignment"]}
+
+
 def selected_job(record, number):
     plan.require(1 <= number <= len(record["spec"]["jobs"]), "Unknown job number")
     return record["spec"]["jobs"][number - 1]
@@ -306,6 +384,44 @@ def progress(state, record, job, event, settings):
         record["progress_error"] = str(error)
 
 
+def restart(folder, state, record, job, key, assignment):
+    """Lets the host's replacement for a started worker continue its job.
+
+    Claude restarts a stalled workflow agent from the same prompt, and a
+    relaunched run starts unfinished agents over; the earlier attempt no longer
+    runs. For roles whose effects stay in the private store or the reviewed
+    worktree, a second start is treated as that replacement, which must
+    reconcile partial effects rather than repeat them. Collection still checks
+    drift and report bindings, so the restart skips the fresh-start drift check.
+    """
+    # The helper cannot tell a restart from an accidental second launch, which
+    # would leave two workers running. Roles with external effects keep the
+    # strict refusal, so a commit, push, PR or publication is never repeated.
+    plan.require(job["role"] not in run.REVIEW_DEPENDENT_ROLES,
+                 f"Worker already started, and {job['role']} has external effects, so a restart cannot "
+                 "continue it. Return this limitation; the launcher inspects its report and remote "
+                 "effects, then collects it or retires it with shutdown evidence for a counted retry.")
+    entry = record["started"][key]
+    restarts = entry.get("restarts", 0)
+    plan.require(restarts < MAX_RESTARTS,
+                 "Worker restart allowance exhausted; leave the job for collection or reconciliation "
+                 "and return this limitation without repeating its effects")
+    entry["restarts"] = restarts + 1
+    persist(folder, state)
+    rejection = record.get("rejected", {}).get(key)
+    reported = key in record["submitted"] and rejection is None
+    if rejection:
+        instruction = (f"Collection rejected the earlier report: {rejection['error']}. Correct only the "
+                       "report from existing evidence and resubmit it; do not repeat work or effects.")
+    elif reported:
+        instruction = "A validated report already exists; return without repeating work."
+    else:
+        instruction = ("An earlier attempt of this job started and may have left partial effects. Inspect the "
+                       "existing report, candidate and actual state, reconcile, then do only the remaining work.")
+    return {"result_file": job["result_file"], "assignment": assignment["id"], "restart": restarts + 1,
+            "reported": reported, "instruction": instruction}
+
+
 def start(folder, args):
     with locked(folder):
         state = run.load(folder)
@@ -317,8 +433,8 @@ def start(folder, args):
                      "Worker needs a claimed active batch; inspect instead of starting stale work")
         job = selected_job(record, args.job)
         key = str(args.job)
-        plan.require(key not in record["started"],
-                     "Worker already started; inspect its report and effects instead of repeating work")
+        if key in record["started"]:
+            return restart(folder, state, record, job, key, assignment)
         if record["before"] is not None:
             run.unchanged(record["before"], run.capture(Path(assignment["root"])))
         if assignment["requires_dispatch_claim"]:
@@ -335,6 +451,8 @@ def report_for(assignment, record, number, *, expected=None, bind_reference=Fals
     path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
     report, identity = read_document(path, record, number, expected.get("sha256") if expected else None)
     jobs.validate(assignment, job, report)
+    if job["role"] == "review-owner" and report["outcome"] == "dispatch":
+        require_launchable(folder, record, assignment, report["requests"])
     receipt = {"result_file": str(path), "sha256": identity}
     development = None
     if job["role"] == "review-owner" and report["outcome"] != "dispatch":
@@ -588,7 +706,7 @@ def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     commands = cli.add_subparsers(dest="command", required=True)
     for name in ("prepare", "claim", "start", "finish", "submit", "collect", "restore-executor",
-                 "repair-script", "resume-prepared"):
+                 "repair-script", "resume-prepared", "release"):
         command = commands.add_parser(name)
         command.add_argument("store")
         if name in ("prepare", "claim"):
@@ -608,6 +726,9 @@ def parser():
             command.add_argument("--candidate", required=True)
         if name == "resume-prepared":
             command.add_argument("--reason", required=True)
+        if name == "release":
+            command.add_argument("--evidence", required=True,
+                                 help="How the host refused the claimed script before starting it")
     return cli
 
 
@@ -617,7 +738,7 @@ def main():
         operations = {"prepare": prepare, "claim": claim, "start": start,
                       "submit": submit, "finish": submit, "collect": collect,
                       "restore-executor": restore_executor, "repair-script": repair_script,
-                      "resume-prepared": resume_prepared}
+                      "resume-prepared": resume_prepared, "release": release}
         result = operations[args.command](Path(args.store).resolve(), args)
         print(json.dumps(result, indent=2))
         return 0

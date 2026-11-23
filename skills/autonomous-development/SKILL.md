@@ -110,6 +110,10 @@ when the host can read the store. Do not invoke the packaged template
 directly, paste state into workflow arguments, or ask a model to reproduce JSON.
 Each generated workflow runs just one bounded batch: independent readers or one
 exclusive fixer. It cannot reserve work, accept results, or declare the run complete.
+Python keeps each script under the Workflow tool's size limit, queueing reviewers
+that do not fit for later batches. If the tool still refuses a claimed script
+before starting it, run `release` with the refusal as evidence, then `prepare`
+again; see RECOVERY.md.
 
 After native completion, run `collect STORE --batch B000001`. Python reads and
 checks actual report files, then advances durable state. Repeat `prepare` only
@@ -169,6 +173,10 @@ Continue watching through execution, rather than ending
 the turn and relying only on the workflow-completion notification. A native
 process-monitor tool may run this same command and deliver its output; do not
 replace it with repeated model calls or an independent monitoring protocol.
+Claude's Monitor tool kills its command after `timeout_ms`, five minutes by
+default and at most 30, and stops monitors that emit too many events. Pass the
+maximum timeout and re-arm the same command when it expires. An expiry is not a
+stall or a stopped run; only the command's own exit codes report state.
 
 Report promptly when the monitor reports blocked, interrupted, waiting,
 exhausted, complete, unavailable state, or no durable advancement. The default
