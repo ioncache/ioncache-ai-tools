@@ -25,6 +25,9 @@ import review_ledger as review
 # Claude's Workflow tool refuses scripts over 524,288 bytes; keep a margin below it.
 SCRIPT_BYTES = 480_000
 LAUNCH_FIELDS = ("role", "options", "result_file", "prompt")
+# Claude restarts a stalled workflow agent at most five times:
+# https://code.claude.com/docs/en/workflows
+MAX_RESTARTS = 5
 
 
 class HandoffError(ValueError):
@@ -124,10 +127,27 @@ def launchable_jobs(folder, spec):
     """
     count = len(spec["jobs"])
     while len(script_text(folder, {**spec, "jobs": spec["jobs"][:count]}).encode()) > SCRIPT_BYTES:
-        plan.require(count > 1, "One job's launch script exceeds the Workflow tool's size limit; "
-                     "report the run blocked with this batch and job instead of launching it")
+        plan.require(count > 1, f"The launch script for {spec['jobs'][0]['result_file']} alone exceeds the "
+                     "Workflow tool's size limit, so no batch was created. Run interrupt, then "
+                     "resume-review with native shutdown evidence, then prepare, so the review owner "
+                     "can replan that request smaller.")
         count -= 1
     return spec["jobs"][:count]
+
+
+def require_launchable(folder, record, assignment, requests):
+    """Rejects an owner request whose own launch script would exceed the size limit.
+
+    Checking at submission returns a correctable report error to the owner,
+    rather than leaving an unlaunchable request queued for prepare.
+    """
+    executor_root = Path(record["spec"]["pluginRoot"])
+    for request in requests:
+        spec = {**record["spec"], "jobs": [jobs.job(assignment, request, executor_root)]}
+        plan.require(len(script_text(folder, spec).encode()) <= SCRIPT_BYTES,
+                     f"Request for {request['result_file']} is too large to launch in one Workflow "
+                     "script; shorten its prompt, or report the review blocked if a frozen "
+                     "reviewer packet cannot fit")
 
 
 def render(folder, record):
@@ -364,6 +384,38 @@ def progress(state, record, job, event, settings):
         record["progress_error"] = str(error)
 
 
+def restart(folder, state, record, job, key, assignment):
+    """Lets the host's replacement for a started worker continue its job.
+
+    Claude restarts a stalled workflow agent from the same prompt, and a
+    relaunched run starts unfinished agents over; the earlier attempt no longer
+    runs. For roles whose effects stay in the private store or the reviewed
+    worktree, a second start is treated as that replacement, which must
+    reconcile partial effects rather than repeat them. Collection still checks
+    drift and report bindings, so the restart skips the fresh-start drift check.
+    """
+    # The helper cannot tell a restart from an accidental second launch, which
+    # would leave two workers running. Roles with external effects keep the
+    # strict refusal, so a commit, push, PR or publication is never repeated.
+    plan.require(job["role"] not in run.REVIEW_DEPENDENT_ROLES,
+                 f"Worker already started, and {job['role']} has external effects, so a restart cannot "
+                 "continue it. Return this limitation; the launcher inspects its report and remote "
+                 "effects, then collects it or retires it with shutdown evidence for a counted retry.")
+    entry = record["started"][key]
+    restarts = entry.get("restarts", 0)
+    plan.require(restarts < MAX_RESTARTS,
+                 "Worker restart allowance exhausted; leave the job for collection or reconciliation "
+                 "and return this limitation without repeating its effects")
+    entry["restarts"] = restarts + 1
+    persist(folder, state)
+    reported = key in record["submitted"]
+    return {"result_file": job["result_file"], "assignment": assignment["id"], "restart": restarts + 1,
+            "reported": reported, "instruction": (
+                "A validated report already exists; return without repeating work." if reported else
+                "An earlier attempt of this job started and may have left partial effects. Inspect the "
+                "existing report, candidate and actual state, reconcile, then do only the remaining work.")}
+
+
 def start(folder, args):
     with locked(folder):
         state = run.load(folder)
@@ -375,8 +427,8 @@ def start(folder, args):
                      "Worker needs a claimed active batch; inspect instead of starting stale work")
         job = selected_job(record, args.job)
         key = str(args.job)
-        plan.require(key not in record["started"],
-                     "Worker already started; inspect its report and effects instead of repeating work")
+        if key in record["started"]:
+            return restart(folder, state, record, job, key, assignment)
         if record["before"] is not None:
             run.unchanged(record["before"], run.capture(Path(assignment["root"])))
         if assignment["requires_dispatch_claim"]:
@@ -393,6 +445,8 @@ def report_for(assignment, record, number, *, expected=None, bind_reference=Fals
     path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
     report, identity = read_document(path, record, number, expected.get("sha256") if expected else None)
     jobs.validate(assignment, job, report)
+    if job["role"] == "review-owner" and report["outcome"] == "dispatch":
+        require_launchable(folder, record, assignment, report["requests"])
     receipt = {"result_file": str(path), "sha256": identity}
     development = None
     if job["role"] == "review-owner" and report["outcome"] != "dispatch":

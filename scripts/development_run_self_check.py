@@ -193,6 +193,60 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(saved["capabilities"]["independent_review"]["status"], "deferred")
         self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
 
+    def test_restarted_worker_reconciles_instead_of_failing_its_job(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        # Claude restarts a stalled agent from the same prompt; its replacement calls start again.
+        for count in range(1, handoffs.MAX_RESTARTS + 1):
+            restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+            self.assertEqual((restarted["restart"], restarted["reported"]), (count, False))
+            self.assertIn("reconcile", restarted["instruction"])
+        exhausted = self.handoff("start", "--batch", batch["batch"], "--job", "1", ok=False)
+        self.assertIn("restart allowance exhausted", exhausted["error"])
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Restarted leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["preflight"])
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 1)
+
+    def test_external_effect_roles_never_restart(self):
+        # A restart cannot be told apart from a second launch, so these never run twice.
+        for role in development.REVIEW_DEPENDENT_ROLES:
+            with self.subTest(role=role), self.assertRaisesRegex(ValueError, "has external effects"):
+                handoffs.restart(None, None, None, {"role": role}, "1", None)
+        self.assertEqual(set(development.REVIEW_DEPENDENT_ROLES),
+                         {"commit", "draft", "ready", "evidence", "audit-initial", "audit-final"})
+
+    def test_restart_after_a_validated_report_returns_without_work(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+        self.assertTrue(restarted["reported"])
+        self.assertIn("return without repeating work", restarted["instruction"])
+
+    def test_unsupported_effort_is_rejected_before_reservation(self):
+        self.init()
+        choices = {role: {"model": None, "effort": "high", "fallback": "configured"} for role in models.ROLES}
+        choices["preflight"]["effort"] = "ultra"
+        path = self.folder / "efforts.json"
+        path.write_text(json.dumps(choices))
+        denied = self.handoff("prepare", "--models-file", path, ok=False)
+        self.assertIn("Effort must be null or one of low, medium, high, xhigh, max", denied["error"])
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 0)
+        choices["preflight"]["effort"] = "xhigh"
+        path.write_text(json.dumps(choices))
+        self.assertEqual(self.handoff("prepare", "--models-file", path)["action"], "launch")
+
     def test_missing_capability_blocks_with_recovery_and_retry_proceeds(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1222,6 +1276,12 @@ class DevelopmentRunTests(unittest.TestCase):
                              "packet": attempt["packet"]})
         self.assertGreater(len(requests), 1)
         owner_path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": requests}))
+        # A request too large to launch alone is a correctable owner report error, not a queued dead end.
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
+            oversized = SimpleNamespace(batch=batch["batch"], job=1, command="finish")
+            with self.assertRaisesRegex(ValueError, "too large to launch in one Workflow script"):
+                handoffs.submit(self.store, oversized)
+        self.assertNotIn("1", development.load(self.store)["handoffs"][batch["batch"]]["submitted"])
         self.handoff("finish", "--batch", batch["batch"], "--job", 1)
         self.handoff("collect", "--batch", batch["batch"])
         state = development.load(self.store)

@@ -46,7 +46,10 @@ names above (including `audit-initial` and `audit-final`). Each entry has exactl
 native default. Model IDs are host-specific strings. Verify native support;
 do not translate a model name into another provider's name.
 The native workflow accepts `low`, `medium`, `high`, `xhigh` and `max` effort
-strings, but each selected model may support only a subset.
+strings, but each selected model may support only a subset. Manifest
+validation rejects any other effort in `models`, and `prepare` rejects any other
+resolved effort, including review options, before reserving work, because the
+native call would otherwise fail only after its batch is claimed.
 
 The optional `configuration.execution.review_options` uses the existing
 `review_options.py` field names, for example:

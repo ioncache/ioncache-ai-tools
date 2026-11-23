@@ -154,7 +154,8 @@ worktrees. The store copy stays authoritative; a changed launch copy is retained
 and rewritten from it, never from a model response. The generated script carries
 only the fields the template reads, and `prepare` keeps each script below the
 Workflow tool's size limit by issuing only the leading reviewer requests that
-fit; the rest stay queued for later batches. Never invoke the null-handoff
+fit; the rest stay queued for later batches. Owner dispatch reports are rejected
+as correctable errors when one request could not launch alone. Never invoke the null-handoff
 packaged template as a standalone run. Only Python reserves work, processes
 review requests and evaluates development acceptance.
 
@@ -164,6 +165,12 @@ file validation, and failed validation attempts. A claimed batch is conservative
 charged before native launch; neither claim nor a supplied shutdown declaration
 independently proves native activity. A missing start/report does not prove a
 worker never launched. Unknown claimed work requires reconciliation.
+For roles whose effects stay in the private store or the reviewed worktree, a
+repeated `start` is treated as the host's replacement for a restarted worker.
+It returns `restart` and `reported` and instructs reconciliation instead of
+repetition, up to five restarts per job. The helper cannot distinguish this from
+an accidental second launch, so review-dependent roles with external effects
+still refuse a repeated `start`.
 
 Unclaimed preparation can be read again without another reservation. A collected
 batch retains an idempotent receipt, including when the original response was lost.

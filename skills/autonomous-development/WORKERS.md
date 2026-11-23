@@ -30,7 +30,9 @@ If the approved constraints require verified identity, missing evidence leaves
 that requirement incomplete.
 
 Before acting, run the supplied script-owned `start` command, then read current
-run status and any existing result file. A native
+run status and any existing result file. If `start` reports a restart, an
+earlier attempt of the same job ran; follow its instruction to reconcile.
+Roles with external effects get a refusal instead; return it without acting. A native
 replay may encounter completed effects. If the assignment already has a complete
 recorded report, return its existing path. Otherwise reconcile actual state
 before doing more work. A stale assignment cannot authorize new changes.

@@ -173,6 +173,10 @@ Continue watching through execution, rather than ending
 the turn and relying only on the workflow-completion notification. A native
 process-monitor tool may run this same command and deliver its output; do not
 replace it with repeated model calls or an independent monitoring protocol.
+Claude's Monitor tool kills its command after `timeout_ms`, five minutes by
+default and at most 30, and stops monitors that emit too many events. Pass the
+maximum timeout and re-arm the same command when it expires. An expiry is not a
+stall or a stopped run; only the command's own exit codes report state.
 
 Report promptly when the monitor reports blocked, interrupted, waiting,
 exhausted, complete, unavailable state, or no durable advancement. The default

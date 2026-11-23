@@ -35,6 +35,7 @@ async function launch(job, index) {
     const result = await agent(
       `Before any assigned work, run this argv with separately quoted arguments:
 Start arguments: ${JSON.stringify(start)}
+If start reports a restart, follow its instruction: reconcile the earlier attempt's effects, never repeat them.
 If start fails, do not repeat work or effects. Inspect the existing report and return the limitation.
 Record requested and observed model identity with this argv:
 Model report arguments: ${JSON.stringify(model)}
