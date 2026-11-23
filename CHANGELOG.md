@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.4 (2026-11-23)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* unblock autonomous development preflight, launch and delivery ([#65](https://github.com/ioncache/ioncache-ai-tools/issues/65)) ([42b54e0](https://github.com/ioncache/ioncache-ai-tools/commit/42b54e0f1906c1e88b478422104906a3ce4032fc))
+
 ## 1.13.3 (2026-11-23)
 
 ### New
