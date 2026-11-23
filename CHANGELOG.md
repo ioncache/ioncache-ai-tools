@@ -4,6 +4,21 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.5 (2026-11-23)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* keep autonomous development batches launchable and recoverable ([#67](https://github.com/ioncache/ioncache-ai-tools/issues/67)) ([e3410f1](https://github.com/ioncache/ioncache-ai-tools/commit/e3410f1cfb801ddf42235c4520d1acb80e26d55a))
+* let agents request live documentation fetches past the cache ([#66](https://github.com/ioncache/ioncache-ai-tools/issues/66)) ([b1fd106](https://github.com/ioncache/ioncache-ai-tools/commit/b1fd1063d77353e24d4165059d2b34c99c85a1e3))
+
 ## 1.13.4 (2026-11-23)
 
 ### New
