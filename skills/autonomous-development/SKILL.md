@@ -110,6 +110,10 @@ when the host can read the store. Do not invoke the packaged template
 directly, paste state into workflow arguments, or ask a model to reproduce JSON.
 Each generated workflow runs just one bounded batch: independent readers or one
 exclusive fixer. It cannot reserve work, accept results, or declare the run complete.
+Python keeps each script under the Workflow tool's size limit, queueing reviewers
+that do not fit for later batches. If the tool still refuses a claimed script
+before starting it, run `release` with the refusal as evidence, then `prepare`
+again; see RECOVERY.md.
 
 After native completion, run `collect STORE --batch B000001`. Python reads and
 checks actual report files, then advances durable state. Repeat `prepare` only

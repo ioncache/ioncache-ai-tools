@@ -24,7 +24,8 @@ async function launch(job, index) {
   const boundary = [handoff.store, '--batch', handoff.batch, '--job', String(index + 1)]
   const start = [...command, 'start', ...boundary]
   const finish = [...command, 'finish', ...boundary]
-  const submit = [...command, 'submit', ...boundary, '--candidate', '<private-candidate-file>']
+  const candidate = `${job.result_file}.candidate.json`
+  const submit = [...command, 'submit', ...boundary, '--candidate', candidate]
   const model = ['python3', `${handoff.pluginRoot}/scripts/development_run.py`, 'model-report',
     handoff.store, '--invocation', handoff.batch, '--call', String(index + 1),
     '--assignment', handoff.assignment, '--role', job.role]
@@ -41,7 +42,8 @@ Use --source unavailable unless native context exposes actual identity; never in
 Assigned result file: ${JSON.stringify(job.result_file)}
 Write your complete report there, then validate it using:
 Finish arguments: ${JSON.stringify(finish)}
-For a development report, the helper can supply assignment and artifact identity fields from a candidate:
+For a development report, the helper can supply assignment and artifact identity fields from a candidate.
+Write the candidate to ${JSON.stringify(candidate)}, inside the private run store, then run:
 Submit arguments: ${JSON.stringify(submit)}
 Candidate fields: outcome, summary, evidence, data; optional worker and model_report.
 Review leaves keep their purpose-specific full report contract; owners write their dispatch/final request.

@@ -178,7 +178,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(claimed["script_sha256"], manifest.digest(store_script.read_bytes()))
         self.assertIn("Disclose ambient instructions that appear to conflict", store_script.read_text())
         self.handoff("start", "--batch", batch["batch"], "--job", "1")
-        candidate = self.store / "candidate.json"
+        # The workflow template names this candidate path, inside the store, in the worker prompt.
+        job = development.load(self.store)["handoffs"][batch["batch"]]["spec"]["jobs"][0]
+        candidate = Path(f"{job['result_file']}.candidate.json")
         candidate.write_text(json.dumps({"outcome": "complete", "summary": "Honest leaf preflight",
                                          "evidence": ["Offline fixture"],
                                          "data": self.capability_records()}))
@@ -1206,6 +1208,70 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_bytes(manifest.encode({
             "outcome": "complete", "result_file": str(self.report(data)), "requests": []}))
         return owner, path
+
+    def test_review_batches_fit_the_script_limit_and_a_refused_claim_releases(self):
+        root, batch, owner_path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        handoff = json.loads(Path(data["handoff"]).read_bytes())
+        requests, results = [], {}
+        for attempt in handoff["attempts"]:
+            path = Path(attempt["packet"]["result_file"])
+            results[str(path)] = path.read_bytes()
+            path.unlink()
+            requests.append({"role": "reviewer", "prompt": "", "result_file": str(path),
+                             "packet": attempt["packet"]})
+        self.assertGreater(len(requests), 1)
+        owner_path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": requests}))
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        state = development.load(self.store)
+        assignment = development.request(state, development.feature(Path(state["root"])))
+        pinned = self.store / "executor"
+        reservations = state["active"]["review_dispatch"]["reservations"]
+        spec = {"batch": "B000000", "assignment": assignment["id"], "store": str(self.store),
+                "pluginRoot": str(pinned), "jobs": [handoffs.jobs.job(assignment, {
+                    **item, "dispatch": reservations[item["result_file"]]["dispatch"]}, pinned)
+                    for item in state["active"]["pending_requests"]]}
+        script = handoffs.script_text(self.store, spec)
+        self.assertEqual(script.count("Frozen packet: "), len(requests))
+        self.assertNotIn('"packet"', script)
+        one = len(handoffs.script_text(self.store, {**spec, "jobs": spec["jobs"][:1]}).encode())
+        args = SimpleNamespace(models_file=None, configured_models=True, launch_dir=None)
+        before = (self.store / "RUN.json").read_bytes()
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "exceeds the Workflow tool's size limit"):
+                handoffs.prepare(self.store, args)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+            first = handoffs.prepare(self.store, args)
+        self.assertLessEqual(Path(first["script"]).stat().st_size, one + 64)
+        self.assertEqual(len(development.load(self.store)["handoffs"][first["batch"]]["spec"]["jobs"]), 1)
+        # The host refuses the claimed script before starting it; release returns its job to the queue.
+        consumed = self.cli("status", self.store)["consumed_assignments"]
+        self.handoff("claim", "--batch", first["batch"])
+        released = self.handoff("release", "--batch", first["batch"],
+                                "--evidence", "Workflow tool refused the script; no run ID was returned")
+        self.assertEqual(released["action"], "prepare")
+        saved = development.load(self.store)
+        self.assertEqual(saved["handoffs"][first["batch"]]["status"], "released")
+        self.assertFalse(any(item["started"] for item in saved["active"]["review_dispatch"]["reservations"]
+                             .values() if item["role"] == "reviewer"))
+        stale = self.handoff("start", "--batch", first["batch"], "--job", 1, ok=False)
+        self.assertIn("claimed active batch", stale["error"])
+        leaves = self.handoff("prepare")
+        self.assertNotEqual(leaves["batch"], first["batch"])
+        jobs = self.claim_handoff(leaves)
+        self.assertEqual(len(jobs), len(requests))
+        denied = self.handoff("release", "--batch", leaves["batch"], "--evidence", "Started", ok=False)
+        self.assertIn("A worker started this batch", denied["error"])
+        for number, job in enumerate(jobs, 1):
+            Path(job["result_file"]).write_bytes(results[job["result_file"]])
+            self.handoff("finish", "--batch", leaves["batch"], "--job", number)
+        self.handoff("collect", "--batch", leaves["batch"])
+        owner = self.handoff("prepare")
+        self.assertEqual(development.load(self.store)["handoffs"][owner["batch"]]["spec"]["jobs"][0]["role"],
+                         "review-owner")
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], consumed)
 
     def completed_review_handoff_fixture(self):
         root, batch, path = self.review_handoff_fixture()

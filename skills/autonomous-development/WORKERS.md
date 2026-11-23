@@ -61,7 +61,7 @@ state as model-generated JSON. A batch workflow launches only its frozen jobs.
 
 Run your generated `finish` command after writing the report. For development
 reports, `submit --candidate` can generate assignment and artifact identity
-fields. Follow the precise validation errors to correct the report within the
+fields; write the candidate to the path your prompt names, inside the store. Follow the precise validation errors to correct the report within the
 remaining allowance, not to repeat work or manufacture evidence. A missing
 report remains outstanding even when the native workflow returns successfully.
 Do not edit shared state or interpret a native return as acceptance.

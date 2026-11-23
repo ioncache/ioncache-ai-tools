@@ -100,6 +100,8 @@ async function persistedScenario(fixture) {
     execFileSync(fixture.python, start.slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
     const assignment = status().assignment
     const resultFile = JSON.parse(prompt.match(/^Assigned result file: (.+)$/m)[1])
+    const submit = JSON.parse(prompt.match(/^Submit arguments: (.+)$/m)[1])
+    assert.equal(submit[submit.indexOf('--candidate') + 1], `${resultFile}.candidate.json`)
     const modelArgs = JSON.parse(prompt.match(/^Model report arguments: (.+)$/m)[1])
     const modelRecord = JSON.parse(execFileSync(fixture.python, [...modelArgs.slice(1),
       '--actual-model', `observed-${options.label}`, '--source', 'native-context'],

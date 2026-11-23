@@ -151,12 +151,15 @@ host cannot read the store, pass `--launch-dir DIR` to `prepare` and `claim`:
 Python writes a byte-identical, owner-only copy named for the run and batch into
 that private directory, which must be outside the launch repository and planned
 worktrees. The store copy stays authoritative; a changed launch copy is retained
-and rewritten from it, never from a model response. Never invoke the null-handoff
+and rewritten from it, never from a model response. The generated script carries
+only the fields the template reads, and `prepare` keeps each script below the
+Workflow tool's size limit by issuing only the leading reviewer requests that
+fit; the rest stay queued for later batches. Never invoke the null-handoff
 packaged template as a standalone run. Only Python reserves work, processes
 review requests and evaluates development acceptance.
 
-The durable `handoffs` map distinguishes prepared, claimed, collected and
-reconciled batches. Each job also records entry through `start`, successful
+The durable `handoffs` map distinguishes prepared, claimed, collected,
+released and reconciled batches. Each job also records entry through `start`, successful
 file validation, and failed validation attempts. A claimed batch is conservatively
 charged before native launch; neither claim nor a supplied shutdown declaration
 independently proves native activity. A missing start/report does not prove a
@@ -166,11 +169,16 @@ Unclaimed preparation can be read again without another reservation. A collected
 batch retains an idempotent receipt, including when the original response was lost.
 `resume-prepared` requires an actual never-claimed batch and keeps its counters.
 It cannot restore a retired assignment or replay a claimed dispatch.
+`release` returns a claimed batch with no start receipt to the queue after the
+host refused its script, recording the supplied refusal evidence. Its
+reviewer reservations become unstarted and a dispatch claim is cleared, so
+`prepare` reissues the same work in a new batch without another assignment.
 Review continuation uses the existing one-use `resume-review` handoff; preparation
 claims it mechanically and preserves its existing ledger and charged slots.
 
 Workers call `submit --candidate FILE` or `finish` with their generated batch/job
-IDs. Candidates stay private. The script supplies development identities,
+IDs. The generated prompt names the candidate file as the result file plus
+`.candidate.json`, inside the private store. Candidates stay private. The script supplies development identities,
 validates full reports and pins submitted bytes. The collector reads these files
 and existing controller evidence, not the workflow's reported outcome.
 Malformed candidates and controller-rejected report content share two corrections
