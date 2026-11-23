@@ -12,6 +12,10 @@ class LedgerError(ValueError):
     """An invalid request or inconsistent ledger; callers must stop and report it."""
 
 
+class EvidenceUnavailable(LedgerError):
+    """Stored review evidence cannot be read or verified."""
+
+
 def require(condition, message):
     if not condition:
         raise LedgerError(message)

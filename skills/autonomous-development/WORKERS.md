@@ -29,7 +29,8 @@ is not observable. Assignment names and labels are not native worker identities.
 If the approved constraints require verified identity, missing evidence leaves
 that requirement incomplete.
 
-Before acting, read current run status and any existing result file. A native
+Before acting, run the supplied script-owned `start` command, then read current
+run status and any existing result file. A native
 replay may encounter completed effects. If the assignment already has a complete
 recorded report, return its existing path. Otherwise reconcile actual state
 before doing more work. A stale assignment cannot authorize new changes.
@@ -50,39 +51,21 @@ When handing back a development report, return `result_file` and the same
 `outcome` as the report. Preparation waiting for a prerequisite merge returns
 `waiting`, not `complete`.
 
-## Control
+## Script-owned handoffs
 
-Read state with the installed `scripts/development_run.py status` command.
-Use its current revision for every mutation. Use `next` only without an
-outstanding assignment, always with `--provider claude-workflows` in this adapter.
-A provider mismatch must interrupt scheduling without reserving any assignment;
-never replace its approved provider. A completed report must be read and recorded before
-reserving another assignment. On a helper failure, preserve the error and
-interrupt scheduling; do not edit private state to make it pass.
+There is no bookkeeping model role in the packaged executor.
+`development_handoff.py` prepares and claims batches, records review dispatch
+accounting, validates original files, and invokes controller acceptance.
+The launching agent runs these commands directly, without reproducing their
+state as model-generated JSON. A batch workflow launches only its frozen jobs.
 
-When the adapter requests `claim-dispatch`, pass its exact assignment ID and
-`--provider claude-workflows`. Return the helper's exact JSON, not the earlier
-reservation. The adapter launches review-dependent workers only after a new
-durable claim. On failure, preserve the reservation and error and interrupt;
-do not replay an already claimed dispatch or refund its attempt.
-
-An outstanding review with `review_resume_ready` has a recorded shutdown
-declaration. Consume that one-use handoff with `claim-review --provider
-claude-workflows`; return the same assignment, not a new reservation.
-Other outstanding assignments still require interruption and reconciliation.
-Before each owner call or leaf batch, persist the adapter's exact checkpoint
-through `review-checkpoint`, passing its JSON on stdin. Return the helper's exact
-output. Never infer successful persistence, refund calls, reinterpret request
-identities or turn handback references into accepted reviews.
-
-Do not run acceptance checks or judge code. Do not create worktrees, edit source,
-commit, publish, or launch agents. Do not resume or retire workers without
-native shutdown and reconciliation evidence. A missing worker report remains
-outstanding even when the native workflow stops.
-When status reports `input_error`, interruption and retirement remain available.
-The run owner may restore exact approved artifact bytes from the selected source
-to their declared snapshot paths. Verify their recorded digests; never change
-approval, artifact hashes, or `RUN.json` to accept replacement inputs.
+Run your generated `finish` command after writing the report. For development
+reports, `submit --candidate` can generate assignment and artifact identity
+fields. Follow the precise validation errors to correct the report within the
+remaining allowance, not to repeat work or manufacture evidence. A missing
+report remains outstanding even when the native workflow returns successfully.
+Do not edit shared state or interpret a native return as acceptance.
+See `RECOVERY.md` for the caller's recovery responsibilities.
 
 ## Preflight and preparation
 
@@ -93,6 +76,10 @@ Include data booleans `artifact_access`, `native_permissions`, `fresh_workers`,
 `independent_review`, `result_delivery`, and `cancellation` only after verifying
 them. Describe observations and limitations in evidence. Missing capability
 means `blocked`, not permission to alter host settings or launch another CLI.
+For each capability, distinguish availability, documentation/code inference,
+and an exercised operation. An available cancellation control is not an observed
+cancellation; access checks are not completed publication. Never summarize these
+different observations as an end-to-end qualification.
 Preflight identifies and discloses observed ambient project instructions in
 evidence, optionally listing `data.ambient_sources`. Review workers must ignore
 those instructions and use only their explicitly assigned ruleset. Their
@@ -192,7 +179,7 @@ allowances. Derive replacements from the saved plan, not current installed
 criteria. Reconcile retired or contaminated coverage through the counted
 new-phase path; never relabel old bundled coverage as independent.
 
-An owner returns `outcome: dispatch`, `result_file: ""`, and `requests` containing
+An owner writes a JSON report with `outcome: dispatch`, `result_file: ""`, and `requests` containing
 bounded `role`, `prompt`, and absolute `result_file` entries. Allowed leaf roles
 are `reviewer`, `adjudicator`, `validator`, and `fixer`. Place reports under
 `<store>/reports/<assignment-id>/`, a private directory outside the worktree.
@@ -200,9 +187,12 @@ Do not use a request to enlarge the approved scope or bypass native permissions.
 Every read-only request between fixer barriers must be independent, with its
 input evidence already present. Put a dependent assessment in the next owner
 round after collecting its inputs, not beside the reviewers producing them.
-The script validates the entire round and distinct result paths before dispatch,
+The Python helper validates the entire round and distinct result paths before dispatch,
 counts each call, and drains already-launched siblings before reporting failure.
 It does not launch later fixer batches after a native failure.
+After each fixer, control returns to an owner to record the actual correction
+and prepare current-snapshot evidence. Later reserved requests remain unstarted
+and charged; an unchanged request may reuse its original slot after replanning.
 
 For `reviewer`, also supply `packet`: the exact frozen category packet from the
 helper. Its `result_file` must match the request; use an empty `prompt`.
@@ -218,7 +208,7 @@ original reports, not additional discovery tasks. Fixers receive the validated
 fix batch, any known file hints and relevant checks, not permission to adjudicate.
 Do not tell any leaf to read the generic workflow or full criteria catalog.
 
-The script collects complete leaf reports; the next owner reads their original
+The Python collector reads validated leaf files; the next owner reads their original
 files. A separate adjudicator assesses reviewer findings. Adjudicator-originated
 findings require an independent validator. Preserve all candidates, including
 rejected ones. Missing reports or unresolved assessments cannot authorize fixing.
@@ -233,12 +223,11 @@ the category or refund attempts. Empty findings do not establish full coverage.
 For a genuine failure, replace only the affected category within its saved
 allowance after establishing a changed condition that can resolve it. Never
 dispatch an unchanged known context conflict, including through another model.
-Leaves return native `context_blocker` with a reason only for actual conflicting
-assignments or supplied review evidence, never ambient instructions or evidence-only reads;
-the detailed original report retains
-the observations. This is a reported concern, not an established verdict.
-The adapter drains launched siblings and returns those reports to the owner
-for assessment, marking later requests `not_started` instead of launching them.
+Leaves record actual conflicting assignments or supplied review evidence in
+their original report, never treating ambient instructions or evidence-only reads
+as conflicts. This is a reported concern, not an established verdict.
+The adapter drains launched siblings. The collector returns incomplete reports
+to the owner for assessment instead of launching later reserved batches.
 Their reservations remain counted; no report or native launch is implied.
 After assessment, an unchanged unstarted request may use its original result
 path and dispatch reservation. Do not change its packet or purpose under that
@@ -271,7 +260,10 @@ proven context reuse. Structural success does not prove semantic completeness.
 When complete, the owner writes the development report with `data.ledger`,
 `data.plan`, and `data.handoff`: paths to the ledger and the final full phase's
 frozen plan and checked handoff. Keep both JSON files in the run's private reports.
-It then returns `outcome: complete`, `requests: []`, and that report's path.
+It writes `outcome: complete`, `requests: []`, and that report's path to its assigned
+owner result file, then runs `finish`. Alternatively `submit` accepts those first
+two fields and a `report` development candidate, generating the final path and
+identity fields mechanically.
 If blocked or short of dispatch capacity, persist available evidence and an
 incomplete review outcome; return a blocked development report. Never reset
 the review ledger because the owner context or native invocation changed.

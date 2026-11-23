@@ -120,6 +120,12 @@ preserving explicit model/effort choices. `review-auto-model-selection` separate
 controls unspecified review roles. None of these switches disables acceptance
 checks, refunds attempts, or changes native permissions.
 
+`autonomous-development-report-correction` enables two report corrections after
+the initial validation fails, in the same assigned worker. Disabling it keeps
+validation mandatory but removes automatic correction attempts. Failed candidates
+and counters stay in the private run store. This is not an allowance to repeat
+implementation or publication, and it never launches extra correction models.
+
 Do not mix old and new catalog writers while using the new review controls.
 An older cached plugin removes keys it does not recognize; a newer copy then
 restores their default `true`, losing an intended opt-out. Refresh all active

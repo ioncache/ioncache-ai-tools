@@ -106,7 +106,7 @@ also remain bounded under review-code `PACKETS.md`; they are not another
 dispatch allowance. Budget for the complete enabled category roster, separate
 adjudication and owner calls. Do not combine purposes to fit a smaller limit.
 
-The packaged workflow saves `review_dispatch` in the active assignment before
+The Python handoff helper saves `review_dispatch` in the active assignment before
 owner calls and leaf batches. It retains charged slots, hashed request identities,
 started reservations and handback references across interruption. The controller's
 `review-checkpoint` command reads that checkpoint JSON from stdin and rejects
@@ -130,8 +130,70 @@ Explain the proposed number before approval. Parallelism reduces latency, not
 the number of counted calls.
 
 These are logical execution limits, not hard token, time, or spending caps.
-Control workers and host-native retries also consume model usage. Establish
+Host-native retries and report corrections also consume model usage. Establish
 available native resource controls during preflight and disclose gaps.
+
+## Script-owned dispatch
+
+`development_handoff.py prepare STORE --models-file FILE` generates a complete
+native script, never a model-transcribed state object. The private role map uses
+MODELS.md. `--configured-models` explicitly selects native defaults; disabled
+automatic model selection also leaves unspecified roles configured.
+The first preparation pins executable resources, their digests, source and plugin
+version in `EXECUTOR.json` and `executor/`, separate from the approved manifest.
+All subsequent handoff commands use that pinned helper. No historical approval
+digest or schema-1 ledger is rewritten.
+
+`prepare` returns `action`, batch and assignment IDs, and absolute `script` and
+`helper` paths. Claim the prepared batch, then launch its generated script through
+the native Workflow tool without arguments. Never invoke the null-handoff
+packaged template as a standalone run. Only Python reserves work, processes
+review requests and evaluates development acceptance.
+
+The durable `handoffs` map distinguishes prepared, claimed, collected and
+reconciled batches. Each job also records entry through `start`, successful
+file validation, and failed validation attempts. A claimed batch is conservatively
+charged before native launch; neither claim nor a supplied shutdown declaration
+independently proves native activity. A missing start/report does not prove a
+worker never launched. Unknown claimed work requires reconciliation.
+
+Unclaimed preparation can be read again without another reservation. A collected
+batch retains an idempotent receipt, including when the original response was lost.
+`resume-prepared` requires an actual never-claimed batch and keeps its counters.
+It cannot restore a retired assignment or replay a claimed dispatch.
+Review continuation uses the existing one-use `resume-review` handoff; preparation
+claims it mechanically and preserves its existing ledger and charged slots.
+
+Workers call `submit --candidate FILE` or `finish` with their generated batch/job
+IDs. Candidates stay private. The script supplies development identities,
+validates full reports and pins submitted bytes. The collector reads these files
+and existing controller evidence, not the workflow's reported outcome.
+Malformed candidates and controller-rejected report content share two corrections
+after the initial failure when `autonomous-development-report-correction` is
+enabled. Missing reports and storage failures do not spend this allowance.
+Counts persist with the batch; repeating a native invocation does not reset them
+or launch repair models. A rejected submission may be corrected from existing
+evidence; collected receipts remain immutable. Retrying collection reevaluates
+current evidence without charging the same rejected receipt twice.
+Owner receipts bind both the envelope and its referenced development report,
+with matching outcomes. Older unbound owner receipts require explicit `finish`
+validation before collection, not an inferred historical binding.
+Final category acceptance for generated review batches compares active results
+with the archived reviewer bytes identified by the controller's validated receipts.
+Packet identities alone do not bind result contents. Restore altered handoff
+results from those archives without repeating completed review work.
+After shutdown reconciliation, `finish` can validate a started reviewer's original
+file in its reconciled batch. This binds the current bytes if no receipt exists;
+it cannot establish historical contents, change an existing binding, or relaunch
+the reviewer. Inactive, incomplete attempts remain in history without contributing
+to final coverage.
+Unavailable or corrupt retained evidence requires restoration, not report
+correction, and does not spend correction allowance. Legacy direct-controller
+assignments without generated batches retain their existing category checks;
+they do not acquire historical collection evidence.
+Exhaustion keeps the evidence incomplete and does not refund a role attempt.
+See RECOVERY.md for exact recovery choices, executor restoration and known
+native-qualification limits.
 
 `publish_audit: true` authorizes the selected worker to publish a reviewed export
 to the modified repository's GitHub wiki, prepend or update its PR's row in
@@ -249,8 +311,8 @@ uses the existing autonomous-development opt-outs and does not stop or verify
 native workers itself.
 
 With retained dispatch accounting, recovery also arms one continuation of the
-same assignment. Run the packaged workflow again: its control worker consumes
-`review_resume_ready` using `claim-review --provider claude-workflows`, restores
+same assignment. Run `development_handoff.py prepare`: Python consumes
+`review_resume_ready` through the same `claim-review` checks, restores
 the running outcome and returns the existing assignment instead of reserving
 another. The owner uses `resume_ledger` and the saved dispatch checkpoint.
 Completed reports are inspected, not repeated. Started calls without handbacks
@@ -320,8 +382,8 @@ condition `complete`, assignment-exhausted `failed` as `exhausted`, and an expli
 blocked and waiting results remain distinct. Legacy states without timestamps
 measure inactivity from the start of observation.
 
-Review workers receive a `progress` command for their own assignment and
-dispatch number. They record `started` and `reported`; the owner also records
+The handoff helper records advisory `started` and `reported` progress for the
+job's reserved dispatch number, when progress is enabled. The owner also records
 `checkpoint --loop N --cycle N` after ledger transitions. Records contain only
 bounded role/category/counter metadata and timestamps, never findings, prompts
 or evidence bodies. Separate dispatch files permit concurrent writers without
@@ -359,7 +421,7 @@ python3 "/absolute/plugin/scripts/development_run.py" resume-review "/private/ru
   --shutdown-evidence "Native host confirms this assignment's workers exited"
 ```
 
-Then run the packaged workflow with a fresh invocation identifier. This arms one
+Then run `development_handoff.py prepare` for that store. This arms one
 continuation, not an automatic retry of an unknown live worker. After a lost
 claim response or another interruption, reconcile native shutdown and use the
 same command again. Existing dispatch counts, reservations, report paths and
