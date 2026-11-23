@@ -6,9 +6,7 @@ import copy
 from contextlib import contextmanager
 import errno
 import json
-import os
 from pathlib import Path
-import stat
 from types import SimpleNamespace
 import sys
 import time
@@ -16,13 +14,11 @@ import time
 import development_dispatch as dispatches
 import development_executor as executor
 import development_jobs as jobs
+from development_jobs import MAX_JSON_BYTES, read_bytes
 import development_manifest as plan
 import development_models as models
 import development_run as run
 import review_ledger as review
-
-
-MAX_JSON_BYTES = 16 * 1024 * 1024
 
 
 class HandoffError(ValueError):
@@ -50,19 +46,8 @@ def locked(folder):
         guard.__exit__(None, None, None)
 
 
-def read_bytes(path):
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        plan.require(stat.S_ISREG(info.st_mode), f"Expected a regular JSON file: {path}")
-        plan.require(info.st_size <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
-        content = stream.read(MAX_JSON_BYTES + 1)
-        plan.require(len(content) <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
-        return content
-
-
 def read_json(path):
-    return json.loads(read_bytes(path))
+    return jobs.decode_json(read_bytes(path))
 
 
 def read_document(path, record, number, expected=None):
@@ -71,10 +56,11 @@ def read_document(path, record, number, expected=None):
     archive = review.safe_path(Path(record["spec"]["store"]),
                                f"handoffs/{record['id']}/{number}-{identity}.json")
     archive.parent.mkdir(parents=True, exist_ok=True)
-    review.atomic_write(archive, content)
+    if not archive.exists() or plan.digest(read_bytes(archive)) != identity:
+        review.atomic_write(archive, content)
     if expected is not None and identity != expected:
         raise HandoffError("changed_report", "Submitted report changed; restore its retained bytes before retrying")
-    return json.loads(content), identity
+    return jobs.decode_json(content), identity
 
 
 def persist(folder, state):
@@ -377,8 +363,11 @@ def submit(folder, args):
         assignment = assignment_for(state, record, settings)
         job = selected_job(record, args.job)
         key = str(args.job)
-        plan.require(record["status"] == "claimed" and key in record["started"],
-                     "Report requires an actually started job in the claimed batch")
+        recovering = (args.command == "finish" and record["status"] == "reconciled" and
+                      job["role"] == "reviewer")
+        plan.require((record["status"] == "claimed" or recovering) and key in record["started"],
+                     "Report requires an actually started job in a claimed batch, or finish "
+                     "for an original reviewer in a reconciled batch")
         previous = record["submitted"].get(key)
         rejected = key in record.get("rejected", {})
         if previous and not rejected:
@@ -488,6 +477,8 @@ def collect(folder, args):
                           else reports[0]["report"])
                 if report is not None:
                     guards.enter_context(run.complete(state, report, settings))
+            except review.EvidenceUnavailable as error:
+                raise HandoffError("state_unavailable", f"{error}. No report correction attempt consumed.") from error
             except (ValueError, KeyError, TypeError) as error:
                 previous = batch_record(original, args.batch)
                 if len(reports) != 1 or previous["spec"]["jobs"][0]["role"] in jobs.LEAVES:

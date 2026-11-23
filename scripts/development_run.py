@@ -23,6 +23,7 @@ import development_audit as audit
 import development_progress as monitoring
 import development_models as models
 import development_dispatch as dispatches
+import development_jobs as jobs
 import review_assignments as assignments
 import review_ledger as review
 
@@ -443,6 +444,7 @@ def review_coverage(state, assignment, report, data):
     plan.require(not omitted, "Category review omits changed files: " + json.dumps(sorted(omitted)))
     plan.require(checked["structurally_complete"],
                  "Category review is incomplete: " + json.dumps(checked))
+    jobs.require_collected_review(state, assignment, records["handoff"])
     return {"plan": str(Path(data["plan"]).resolve()),
             "handoff": str(Path(data["handoff"]).resolve()),
             "identity": phase["identity"], "files": request["files"], **checked}

@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from review_loop_state import (
-    LedgerError, apply_event, check_reconcile_request, fields, replay, require, text,
+    EvidenceUnavailable, LedgerError, apply_event, check_reconcile_request, fields, replay, require, text,
 )
 
 
@@ -258,9 +258,9 @@ def load_history(path):
                 (path.parent.parent == owner / ".review-loop" or
                  path.parent.parent.name == root_key(owner)), "Storage belongs to a different worktree")
     except (LedgerError, OSError, ValueError, TypeError, KeyError) as error:
-        raise LedgerError(f"Review history unavailable: {error}. Restore verified history, "
-                          "or use abandon with --reason, --evidence and --shutdown-evidence "
-                          "after stopping workers; do not reset unknown spending") from error
+        raise EvidenceUnavailable(f"Review history unavailable: {error}. Restore verified history, "
+                                  "or use abandon with --reason, --evidence and --shutdown-evidence "
+                                  "after stopping workers; do not reset unknown spending") from error
     return ledger, state
 
 

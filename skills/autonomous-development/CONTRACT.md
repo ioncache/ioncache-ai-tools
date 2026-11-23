@@ -178,6 +178,19 @@ current evidence without charging the same rejected receipt twice.
 Owner receipts bind both the envelope and its referenced development report,
 with matching outcomes. Older unbound owner receipts require explicit `finish`
 validation before collection, not an inferred historical binding.
+Final category acceptance for generated review batches compares active results
+with the archived reviewer bytes identified by the controller's validated receipts.
+Packet identities alone do not bind result contents. Restore altered handoff
+results from those archives without repeating completed review work.
+After shutdown reconciliation, `finish` can validate a started reviewer's original
+file in its reconciled batch. This binds the current bytes if no receipt exists;
+it cannot establish historical contents, change an existing binding, or relaunch
+the reviewer. Inactive, incomplete attempts remain in history without contributing
+to final coverage.
+Unavailable or corrupt retained evidence requires restoration, not report
+correction, and does not spend correction allowance. Legacy direct-controller
+assignments without generated batches retain their existing category checks;
+they do not acquire historical collection evidence.
 Exhaustion keeps the evidence incomplete and does not refund a role attempt.
 See RECOVERY.md for exact recovery choices, executor restoration and known
 native-qualification limits.

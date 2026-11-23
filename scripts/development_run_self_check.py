@@ -1054,6 +1054,194 @@ class DevelopmentRunTests(unittest.TestCase):
         job = self.claim_handoff(batch)[0]
         return root, batch, Path(job["result_file"])
 
+    def dispatch_review_fixture(self, batch, owner_path, data):
+        handoff = json.loads(Path(data["handoff"]).read_bytes())
+        requests = []
+        results = {}
+        for attempt in handoff["attempts"]:
+            packet = attempt["packet"]
+            path = Path(packet["result_file"])
+            results[str(path)] = path.read_bytes()
+            path.unlink()
+            requests.append({"role": "reviewer", "prompt": "", "result_file": str(path), "packet": packet})
+        owner_path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": requests}))
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        leaves = self.handoff("prepare")
+        for number, job in enumerate(self.claim_handoff(leaves), 1):
+            Path(job["result_file"]).write_bytes(results[job["result_file"]])
+            self.handoff("finish", "--batch", leaves["batch"], "--job", number)
+        self.handoff("collect", "--batch", leaves["batch"])
+        owner = self.handoff("prepare")
+        path = Path(self.claim_handoff(owner)[0]["result_file"])
+        path.write_bytes(manifest.encode({
+            "outcome": "complete", "result_file": str(self.report(data)), "requests": []}))
+        return owner, path
+
+    def completed_review_handoff_fixture(self):
+        root, batch, path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        batch, path = self.dispatch_review_fixture(batch, path, data)
+        return root, batch, path, data
+
+    def test_handoff_final_acceptance_binds_collected_category_contents(self):
+        _, batch, _, data = self.completed_review_handoff_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        path = Path(data["handoff"])
+        original = path.read_bytes()
+        handoff = json.loads(original)
+        attempt = handoff["attempts"][0]
+        attempt["result"]["coverage"]["isolation"] = "uncontaminated"
+        attempt["result"]["limitations"] = ["Changed after collection"]
+        report_path = Path(attempt["packet"]["result_file"])
+        changed = manifest.encode(attempt["result"])
+        report_path.write_bytes(changed)
+        path.write_bytes(manifest.encode(handoff))
+        before = development.load(self.store)
+        error = self.handoff("collect", "--batch", batch["batch"], ok=False)
+        self.assertIn("collected reviewer report", error["error"])
+        self.assertEqual(development.load(self.store)["prs"], before["prs"])
+        path.write_bytes(original)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertEqual(report_path.read_bytes(), changed)
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"], before["attempts"])
+        self.assertTrue(saved["prs"]["first"]["review"]["coverage"]["structurally_complete"])
+
+    def test_handoff_uncollected_category_requires_existing_report_collection(self):
+        root, batch, path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        path.write_bytes(manifest.encode({
+            "outcome": "complete", "result_file": str(self.report(data)), "requests": []}))
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        error = self.handoff("collect", "--batch", batch["batch"], ok=False)
+        self.assertIn("collected reviewer report", error["error"])
+        batch, _ = self.dispatch_review_fixture(batch, path, data)
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["prs"]["first"]["review"]["coverage"]["structurally_complete"])
+
+    def test_handoff_unavailable_ledger_does_not_spend_report_correction(self):
+        _, batch, _, data = self.completed_review_handoff_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        before = (self.store / "RUN.json").read_bytes()
+        path = Path(data["ledger"])
+        retained = path.with_suffix(".unavailable")
+        path.rename(retained)
+        error = self.handoff("collect", "--batch", batch["batch"], ok=False)
+        self.assertEqual(error["kind"], "state_unavailable")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        retained.rename(path)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["failures"], {})
+
+    def test_handoff_corrupt_collected_archive_requires_restoration_not_report_correction(self):
+        _, batch, _, _ = self.completed_review_handoff_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        state = development.load(self.store)
+        leaves = next(item for item in state["handoffs"].values()
+                      if item["spec"]["jobs"][0]["role"] == "reviewer")
+        archive = self.store / "handoffs" / leaves["id"] / f"1-{leaves['submitted']['1']['sha256']}.json"
+        original = archive.read_bytes()
+        archive.write_text('{"corrupt": true}')
+        before = (self.store / "RUN.json").read_bytes()
+        error = self.handoff("collect", "--batch", batch["batch"], ok=False)
+        self.assertEqual(error["kind"], "state_unavailable")
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        archive.write_bytes(original)
+        self.handoff("collect", "--batch", batch["batch"])
+
+    def test_handoff_collection_reuses_retained_archive_when_staging_is_unavailable(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        self.report(outcome="blocked")
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        write = handoffs.review.atomic_write
+        archives = self.store / "handoffs" / batch["batch"]
+        original = {path.name: path.read_bytes() for path in archives.iterdir()}
+
+        def cannot_stage_archive(path, content):
+            if path.parent == archives:
+                raise OSError("No space for another report copy")
+            return write(path, content)
+
+        with patch.object(handoffs.review, "atomic_write", side_effect=cannot_stage_archive):
+            handoffs.collect(self.store, SimpleNamespace(batch=batch["batch"]))
+        self.assertEqual({path.name: path.read_bytes() for path in archives.iterdir()}, original)
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["status"], "collected")
+
+    def test_handoff_nested_json_returns_correction_and_retains_candidate(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        content = b"[" * 2000 + b"0" + b"]" * 2000
+        candidate.write_bytes(content)
+        error = self.handoff("submit", "--batch", batch["batch"], "--job", 1,
+                             "--candidate", candidate, ok=False)
+        self.assertEqual(error["kind"], "invalid_report")
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["failures"]["1"], 1)
+        archive = self.store / "handoffs" / batch["batch"] / f"1-{manifest.digest(content)}.json"
+        self.assertEqual(archive.read_bytes(), content)
+        candidate.write_bytes(manifest.encode({
+            "outcome": "blocked", "summary": "Corrected", "evidence": ["Fixture"], "data": {}}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", 1, "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+
+    def test_handoff_decoder_recursion_uses_report_correction(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        content = b"[" * 2000 + b"0" + b"]" * 2000
+        candidate.write_bytes(content)
+        decode = json.loads
+
+        def decoder_with_recursion_error(value, *args, **kwargs):
+            if value == content:
+                raise RecursionError("Python JSON decoder recursion limit")
+            return decode(value, *args, **kwargs)
+
+        with patch.object(handoffs.json, "loads", side_effect=decoder_with_recursion_error):
+            with self.assertRaises(handoffs.HandoffError) as caught:
+                handoffs.submit(self.store, SimpleNamespace(
+                    command="submit", batch=batch["batch"], job=1, candidate=str(candidate)))
+        self.assertEqual(caught.exception.kind, "invalid_report")
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["failures"]["1"], 1)
+        candidate.write_bytes(manifest.encode({
+            "outcome": "blocked", "summary": "Corrected", "evidence": ["Fixture"], "data": {}}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", 1, "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+
+    def test_handoff_reviewer_category_is_required_before_dispatch(self):
+        root, batch, path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        packet = json.loads(Path(data["handoff"]).read_bytes())["attempts"][0]["packet"]
+        Path(packet["result_file"]).unlink()
+        request = {"role": "reviewer", "prompt": "", "result_file": packet["result_file"], "packet": packet}
+        for category in (None, " "):
+            with self.subTest(category=category):
+                changed = copy.deepcopy(packet)
+                changed.pop("identity")
+                changed["instruction_set"].pop("identity")
+                if category is None:
+                    changed.pop("review_type")
+                    changed["instruction_set"].pop("category")
+                else:
+                    changed["review_type"] = changed["instruction_set"]["category"] = category
+                changed["instruction_set"] = assignments.seal(changed["instruction_set"])
+                changed = assignments.seal(changed)
+                path.write_bytes(manifest.encode({
+                    "outcome": "dispatch", "result_file": "", "requests": [{**request, "packet": changed}]}))
+                error = self.handoff("finish", "--batch", batch["batch"], "--job", 1, ok=False)
+                self.assertEqual(error["kind"], "invalid_report")
+                self.assertEqual(development.load(self.store)["active"]["review_dispatch"]["reservations"], {})
+        path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": [request]}))
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertEqual(len(development.load(self.store)["active"]["pending_requests"]), 1)
+
     def test_handoff_owner_paths_cannot_overwrite_reserved_leaf_evidence(self):
         root, owner, owner_path = self.review_handoff_fixture()
         leaf = self.store / "reports" / self.state["assignment"]["id"] / "owner-3.json"
@@ -1103,8 +1291,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(state["active"]["review_dispatch"]["calls"], 2)
 
     def test_handoff_owner_outcomes_must_match_on_finish(self):
-        root, batch, path = self.review_handoff_fixture()
-        data = self.review(root, record=False)
+        _, batch, path, data = self.completed_review_handoff_fixture()
         for outer, inner in (("blocked", "complete"), ("complete", "blocked")):
             report = self.report(data, outcome=inner)
             path.write_bytes(manifest.encode({"outcome": outer, "result_file": str(report), "requests": []}))
@@ -1117,8 +1304,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.next()["role"], "commit")
 
     def test_handoff_owner_receipt_binds_referenced_report_and_legacy_rebind(self):
-        root, batch, path = self.review_handoff_fixture()
-        data = self.review(root, record=False)
+        _, batch, path, data = self.completed_review_handoff_fixture()
         report = self.report(data)
         original = report.read_bytes()
         path.write_bytes(manifest.encode({"outcome": "complete", "result_file": str(report), "requests": []}))
@@ -1171,6 +1357,9 @@ class DevelopmentRunTests(unittest.TestCase):
         with patch.object(handoffs.review, "atomic_write", side_effect=replace_after_archive):
             handoffs.submit(self.store, SimpleNamespace(command="submit", batch=batch["batch"],
                                                        job=1, candidate=str(candidate)))
+        self.assertEqual(candidate.read_text(), "invalid replacement")
+        archive = self.store / "handoffs" / batch["batch"] / f"1-{manifest.digest(original)}.json"
+        self.assertEqual(archive.read_bytes(), original)
         self.handoff("collect", "--batch", batch["batch"])
         self.assertEqual(development.load(self.store)["history"][-1]["report"]["summary"], "Original candidate")
 
@@ -1259,7 +1448,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("size limit", error["error"])
         self.assertFalse(list((self.store / "handoffs" / batch["batch"]).glob("1-*.json")))
         before_growth = SimpleNamespace(st_mode=candidate.stat().st_mode, st_size=0)
-        with patch.object(handoffs.os, "fstat", return_value=before_growth):
+        with patch.object(handoffs.jobs.os, "fstat", return_value=before_growth):
             with self.assertRaisesRegex(ValueError, "size limit"):
                 handoffs.read_bytes(candidate)
         candidate.write_text('{"outcome":"blocked","summary":"Recovered","evidence":["Fixture"],"data":{}}')
@@ -1267,8 +1456,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("collect", "--batch", batch["batch"])
 
     def test_handoff_collect_uses_checked_owner_snapshot_without_rereading(self):
-        root, batch, path = self.review_handoff_fixture()
-        data = self.review(root, record=False)
+        _, batch, path, data = self.completed_review_handoff_fixture()
         reference = self.report(data)
         original = json.loads(reference.read_bytes())
         path.write_bytes(manifest.encode({"outcome": "complete", "result_file": str(reference), "requests": []}))
@@ -1342,12 +1530,12 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertFalse(development.load(self.store)["preflight"])
 
     def test_handoff_invalid_legacy_owner_binding_can_be_corrected_without_relaunch(self):
-        root, batch, path = self.review_handoff_fixture()
-        data = self.review(root, record=False)
+        _, batch, path, data = self.completed_review_handoff_fixture()
         reference = self.report(data)
         envelope = {"outcome": "blocked", "result_file": str(reference), "requests": []}
         path.write_bytes(manifest.encode(envelope))
         state = development.load(self.store)
+        calls = state["active"]["review_dispatch"]["calls"]
         record = state["handoffs"][batch["batch"]]
         record["submitted"]["1"] = {"result_file": str(path), "sha256": manifest.digest(path.read_bytes())}
         development.save(self.store, state)
@@ -1357,7 +1545,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("finish", "--batch", batch["batch"], "--job", 1)
         self.handoff("collect", "--batch", batch["batch"])
         saved = development.load(self.store)
-        self.assertEqual(saved["history"][-1]["review_dispatch"]["calls"], 1)
+        self.assertEqual(saved["history"][-1]["review_dispatch"]["calls"], calls)
         self.assertEqual(saved["history"][-1]["outcome"], "complete")
 
     def test_handoff_owner_namespace_rejects_symlink_before_reserving(self):
@@ -1389,6 +1577,35 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual((root / "app.txt").read_text(), "after\n")
         implementations = [item for item in development.load(self.store)["history"] if item["role"] == "implement"]
         self.assertEqual([item["outcome"] for item in implementations], ["complete"])
+
+    def test_workflow_restart_collects_saved_submission_without_relaunch(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        (root / "app.txt").write_text("after\n")
+        self.report()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        started = development.load(self.store)["handoffs"][batch["batch"]]["started"]
+        roles = self.workflow("restart-finished")
+        self.assertNotIn("implement", roles)
+        self.assertIn("review-owner", roles)
+        saved = development.load(self.store)["handoffs"][batch["batch"]]
+        self.assertEqual(saved["status"], "collected")
+        self.assertEqual(saved["started"], started)
+        self.assertEqual((root / "app.txt").read_text(), "after\n")
+
+    def test_workflow_restart_without_submission_still_requires_recovery(self):
+        self.init()
+        self.preflight()
+        self.prepare()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        self.assertEqual(self.workflow("restart-missing"), [])
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.assertIn("missing_report", self.state["reason"])
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["status"], "claimed")
 
     def test_handoff_generates_identity_and_corrects_report_without_repeating_work(self):
         self.init()
@@ -1651,6 +1868,12 @@ class DevelopmentRunTests(unittest.TestCase):
         self.mutate("recover-review-storage", "--ledger", str(original),
                     "--reason", "Storage became a repository", "--shutdown-evidence", "Fixture workers exited")
         recovered = Path(self.state["assignment"]["recovered_ledger"])
+        self.handoff("prepare")
+        previous = before["handoffs"][before["active"]["handoff"]]
+        self.handoff("claim", "--batch", previous["id"], ok=False)
+        self.handoff("start", "--batch", previous["id"], "--job", 1, ok=False)
+        self.handoff("submit", "--batch", previous["id"], "--job", 1,
+                     "--candidate", previous["spec"]["jobs"][0]["result_file"], ok=False)
         roles = self.workflow("review-recovered")
         self.assertIn("review-owner", roles)
         self.assertNotIn("reviewer", roles)
@@ -3968,6 +4191,12 @@ def workflow_review_fixture(fixture):
     data = json.loads(saved.read_bytes())
     if fixture["action"] == "finish-recovered":
         data["ledger"] = assignment["recovered_ledger"]
+        for batch in development.load(worker.store).get("handoffs", {}).values():
+            if batch["assignment"] != assignment["id"] or batch["status"] != "reconciled":
+                continue
+            for number, job in enumerate(batch["spec"]["jobs"], 1):
+                if job["role"] == "reviewer":
+                    worker.handoff("finish", "--batch", batch["id"], "--job", number)
     handoff = json.loads(Path(data["handoff"]).read_bytes())
     for attempt in handoff["attempts"]:
         attempt["result"] = json.loads(Path(attempt["packet"]["result_file"]).read_bytes())

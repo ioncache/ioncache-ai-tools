@@ -178,6 +178,10 @@ async function persistedScenario(fixture) {
     try {
       const batch = call('development_handoff.py', ['prepare', fixture.store, '--models-file', modelFile])
       if (batch.action === 'inspect') break
+      if (batch.action === 'collect') {
+        call('development_handoff.py', ['collect', fixture.store, '--batch', batch.batch])
+        continue
+      }
       if (batch.action !== 'launch') {
         interrupt('Outstanding native batch; inspect its reports and reconcile shutdown')
         break

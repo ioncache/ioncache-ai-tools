@@ -21,6 +21,7 @@ tree under review.
 | JSON malformed or required field missing | Read the validator's exact error. Correct only the report from existing evidence within its remaining allowance, then resubmit. |
 | Required capability or evidence absent | Report incomplete/blocked with the missing evidence. Do not change an unknown into `true` to satisfy validation. |
 | Claimed job has no validated report | Inspect native activity. Collect a finished file using `finish`; let an active worker finish. No report does not mean no work occurred. |
+| Reviewer file survived shutdown but its receipt did not | After reconciliation, run `finish STORE --batch ORIGINAL_BATCH --job ORIGINAL_JOB` for the started reviewer, even if its batch is now reconciled. Use the validated original result without relaunching it. Missing or invalid results remain incomplete. |
 | Native failure or worker gone | Reconcile local and remote effects and establish shutdown. Retain readable reviews with `resume-review`; otherwise collect or retire the assignment before a counted retry. |
 | Prepared, never-claimed batch interrupted | After repairing the cause, use `resume-prepared`. The script requires a durable unclaimed batch, not a textual assertion that it never launched. |
 | Generated script changed before claim | Run `repair-script`. It preserves the changed file and regenerates from pinned data, without another assignment. Claimed scripts cannot be repaired for relaunch this way. |
@@ -71,6 +72,9 @@ the existing controller. Valid JSON is not proof that work happened.
 Owner envelopes and referenced development reports must agree on their outcome.
 Both files are bound to their submitted bytes, and collection consumes that same
 verified snapshot. Generated owner paths are separate from leaf report paths.
+Final category acceptance uses the archived reviewer bytes, not just matching
+packet identities. An altered handoff result must be restored from that archive.
+Restoring unreadable ledger or archive evidence does not spend report corrections.
 
 If collection rejects report content, correct it with `submit` or `finish` within
 the same allowance. Rejected reports remain archived; successful collection is

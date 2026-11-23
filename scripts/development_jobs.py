@@ -2,7 +2,9 @@
 
 import copy
 import json
+import os
 from pathlib import Path
+import stat
 
 import development_manifest as plan
 import development_models as models
@@ -11,6 +13,65 @@ import review_ledger as review
 
 
 LEAVES = ("reviewer", "adjudicator", "validator", "fixer")
+MAX_JSON_BYTES = 16 * 1024 * 1024
+
+
+def read_bytes(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        plan.require(stat.S_ISREG(info.st_mode), f"Expected a regular JSON file: {path}")
+        plan.require(info.st_size <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
+        content = stream.read(MAX_JSON_BYTES + 1)
+        plan.require(len(content) <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
+        return content
+
+
+def decode_json(content):
+    try:
+        return json.loads(content)
+    except RecursionError as error:
+        raise plan.ManifestError("Report JSON is too deeply nested; reduce its nesting") from error
+
+
+def retained_report(record, number):
+    receipt = record["submitted"][str(number)]
+    try:
+        archive = review.safe_path(Path(record["spec"]["store"]),
+                                   f"handoffs/{record['id']}/{number}-{receipt['sha256']}.json")
+        content = read_bytes(archive)
+        plan.require(plan.digest(content) == receipt["sha256"], f"Collected archive changed: {archive}")
+        return decode_json(content)
+    except (OSError, ValueError) as error:
+        raise review.EvidenceUnavailable(
+            f"Collected reviewer evidence unavailable: {error}. Restore the retained archive "
+            "without repeating completed workers.") from error
+
+
+def require_collected_review(state, assignment, handoff):
+    batches = [item for item in state.get("handoffs", {}).values() if item["assignment"] == assignment["id"]]
+    if not batches:
+        return
+    collected = {}
+    for batch in batches:
+        if batch["status"] not in ("collected", "reconciled"):
+            continue
+        for number, job in enumerate(batch["spec"]["jobs"], 1):
+            if job["role"] == "reviewer" and str(number) in batch["submitted"]:
+                collected[job["packet"]["identity"]] = (batch, number)
+    active = {key for keys in handoff["active"].values() for key in keys}
+    for attempt in handoff["attempts"]:
+        if attempt["id"] not in active:
+            continue
+        source = collected.get(attempt["packet"]["identity"])
+        plan.require(source is not None, f"No collected reviewer report for {attempt['id']}. "
+                     "Run finish for its original started batch/job and collect when still claimed, "
+                     "or retain the incomplete attempt as inactive "
+                     "and dispatch a counted replacement with a fresh packet.")
+        report = retained_report(*source)
+        plan.require(assignments.digest(attempt["result"]) == assignments.digest(report),
+                     f"Final result differs from the collected reviewer report for {attempt['id']}. "
+                     "Restore the handoff's original result from its retained archive; do not repeat the review.")
 
 
 def report_path(assignment, value):
@@ -37,6 +98,7 @@ def review_requests(assignment, requests):
             continue
         packet = request.get("packet")
         plan.require(isinstance(packet, dict) and packet.get("identity") and
+                     isinstance(packet.get("review_type"), str) and bool(packet["review_type"].strip()) and
                      isinstance(packet.get("instruction_set"), dict) and
                      packet["instruction_set"].get("category") == packet.get("review_type") and
                      packet["instruction_set"].get("identity") and packet.get("root") == assignment["root"] and
@@ -86,6 +148,8 @@ def instructions(assignment, request, executor):
         return (
             f"Act only as the flat review/fix owner in {references}. Do not edit project code or launch agents. "
             "Read original reports and preserve the existing ledger, attempts, snapshots and allowances. "
+            "Revalidate unsubmitted reviewer files with finish on their original batch/job before counting "
+            "them. A reconciled batch permits this validation, never another launch. "
             "Prepare and persist frozen phase plans before requesting leaves. Each reviewer needs its exact "
             "single-purpose packet and an empty prompt. Other requests contain only their role's instructions. "
             "Write outcome dispatch with requests, or complete/blocked with the final development report path. "
