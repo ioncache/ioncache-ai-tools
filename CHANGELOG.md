@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.3 (2026-11-23)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* make autonomous development handoffs script-owned ([#63](https://github.com/ioncache/ioncache-ai-tools/issues/63)) ([afba7f8](https://github.com/ioncache/ioncache-ai-tools/commit/afba7f84b50322b8c82cf85967faa6d209f246d7))
+
 ## 1.13.2 (2026-11-20)
 
 ### New
