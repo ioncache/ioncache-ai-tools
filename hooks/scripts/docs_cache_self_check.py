@@ -86,15 +86,59 @@ class DocsCacheTests(unittest.TestCase):
         self.assertFalse(docs_cache.is_volatile('https://raw.githubusercontent.com/o/r/' + 'a' * 40 + '/README.md'))
         self.assertFalse(docs_cache.is_volatile(URL))
 
-    def test_miss_hit_then_bypass_then_hit(self):
+    def test_miss_hit_then_repeats_stay_live(self):
         self.assertIsNone(docs_cache.copilot_pre(fetch()))
         docs_cache.store_fact(self.key, URL, '--fixup=<commit> makes a fixup! commit.', 'copilot', length=20000)
         denied = docs_cache.copilot_pre(fetch())
         self.assertEqual(denied['permissionDecision'], 'deny')
         self.assertIn('--fixup=<commit>', denied['permissionDecisionReason'])
         self.assertIsNone(docs_cache.copilot_pre(fetch()), 'repeat must fetch live')
-        self.assertEqual(docs_cache.copilot_pre(fetch())['permissionDecision'], 'deny')
+        self.assertIsNone(docs_cache.copilot_pre(fetch()), 'a refreshed summary must not deny the repeat again')
         self.assertEqual(docs_cache.copilot_pre(fetch(session='s2'))['permissionDecision'], 'deny')
+
+    def test_live_marker_skips_the_cache_on_every_harness(self):
+        docs_cache.store_fact(self.key, URL, 'cached answer', 'claude',
+                              source={'reference_only': True, 'question': 'What does --dry-run do?'})
+        claude = docs_cache.claude_pre(claude_fetch())['hookSpecificOutput']['permissionDecisionReason']
+        self.assertIn('start the prompt with [live]', claude)
+        self.assertIn('100,000 characters', claude)
+        self.assertIn('add #live to the URL', docs_cache.codex_pre(codex_fetch())['hookSpecificOutput']
+                      ['permissionDecisionReason'])
+        self.assertIn('add #live to the URL', docs_cache.copilot_pre(fetch())['permissionDecisionReason'])
+        for prompt in ('[live] What does --dry-run do?', '  [LIVE]What does --dry-run do?'):
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(docs_cache.claude_pre(claude_fetch(
+                    tool_input={'url': URL, 'prompt': prompt})))
+        for url in (f'{URL}#live', f'{URL}#LIVE'):
+            with self.subTest(url=url):
+                self.assertIsNone(docs_cache.claude_pre(claude_fetch(
+                    tool_input={'url': url, 'prompt': 'What does --dry-run do?'})))
+                self.assertIsNone(docs_cache.codex_pre(codex_fetch(url, session_id='s9')))
+                self.assertIsNone(docs_cache.copilot_pre(fetch(url, session='s9')))
+        events = [json.loads(line)['event'] for line in
+                  (docs_cache.cache_dir() / 'events.jsonl').read_text().splitlines()]
+        self.assertEqual(events.count('live'), 8)
+        self.assertIsNotNone(docs_cache.claude_pre(claude_fetch(
+            tool_input={'url': f'{URL}#lively', 'prompt': 'What does --dry-run do?'}, session_id='s8')))
+        self.assertFalse(docs_cache.live_requested(URL, 'What does the [live] flag do?'),
+                         'only a leading marker asks for a live fetch')
+
+    def test_live_fetch_refreshes_the_cache_for_the_same_question(self):
+        url = f'{URL}?case=live'
+        done = subprocess.CompletedProcess([], 0, stdout='--dry-run previews without committing.', stderr='')
+        marked = {'url': url, 'prompt': '[live] What does --dry-run do?'}
+        self.assertIsNone(docs_cache.claude_pre(claude_fetch(tool_input=marked)))
+        with mock.patch.object(docs_cache, 'start_distiller', side_effect=docs_cache.distill), \
+                mock.patch.object(docs_cache.shutil, 'which', return_value='claude'), \
+                mock.patch.object(subprocess, 'run', return_value=done):
+            docs_cache.claude_post(claude_fetch(tool_input=marked, tool_response={
+                'code': 200, 'url': url, 'result': 'source answer'}))
+        fact = docs_cache.fresh_facts(docs_cache.cache_key(url, None))[0]
+        self.assertEqual(fact['question'], 'What does --dry-run do?', 'the marker is not part of the question')
+        for prompt in ('What does --dry-run do?', 'what  does --DRY-RUN do?'):
+            with self.subTest(prompt=prompt):
+                self.assertIsNotNone(docs_cache.claude_pre(claude_fetch(
+                    tool_input={'url': url, 'prompt': prompt}, session_id=f's-{len(prompt)}')))
 
     def test_chunk_is_part_of_key(self):
         docs_cache.store_fact(self.key, URL, 'fact', 'copilot')
@@ -147,7 +191,8 @@ class DocsCacheTests(unittest.TestCase):
                     release.set()
                 self.assertEqual(first.result()['permissionDecision'], 'deny')
         self.assertIsNone(docs_cache.copilot_pre(fetch()), 'the first denied call must retain its live retry')
-        self.assertEqual(docs_cache.copilot_pre(fetch())['permissionDecision'], 'deny')
+        self.assertEqual(docs_cache.copilot_pre(fetch(max_length=12000))['permissionDecision'], 'deny',
+                         'other arguments keep their own retry state')
 
     def test_volatile_pages_ignore_existing_entries(self):
         url = 'https://example.com/latest'
@@ -164,15 +209,20 @@ class DocsCacheTests(unittest.TestCase):
     def test_other_tools_ignored(self):
         self.assertIsNone(docs_cache.copilot_pre({'toolName': 'bash', 'toolArgs': {'command': 'ls'}}))
 
-    def test_claude_reads_copilot_facts_and_bypasses_identical_calls(self):
+    def test_claude_is_served_only_answers_to_its_own_question(self):
         self.assertIsNone(docs_cache.claude_pre(claude_fetch()))
-        docs_cache.store_fact(self.key, URL, '--dry-run previews without committing.', 'copilot', length=20000)
+        docs_cache.store_fact(self.key, URL, 'chunk summary', 'copilot', length=20000)
+        docs_cache.store_fact(self.key, URL, '--amend replaces the tip commit.', 'claude',
+                              source={'reference_only': True, 'question': 'Explain --amend.'})
+        self.assertIsNone(docs_cache.claude_pre(claude_fetch()),
+                          'a chunk summary or another question\'s answer cannot answer this question')
+        docs_cache.store_fact(self.key, URL, '--dry-run previews without committing.', 'claude',
+                              source={'reference_only': True, 'question': 'What does --dry-run do?'})
         denied = docs_cache.claude_pre(claude_fetch())['hookSpecificOutput']
         self.assertEqual(denied['permissionDecision'], 'deny')
         self.assertIn('--dry-run previews', denied['permissionDecisionReason'])
-        self.assertIn('WebFetch', denied['permissionDecisionReason'])
-        other = claude_fetch(tool_input={'url': URL, 'prompt': 'Explain --amend.'})
-        self.assertIsNotNone(docs_cache.claude_pre(other))
+        self.assertNotIn('--amend replaces', denied['permissionDecisionReason'])
+        self.assertNotIn('chunk summary', denied['permissionDecisionReason'])
         self.assertIsNone(docs_cache.claude_pre(claude_fetch()))
         self.assertIsNotNone(docs_cache.copilot_pre(fetch()), 'another host must not consume the bypass')
 
@@ -200,7 +250,8 @@ class DocsCacheTests(unittest.TestCase):
         docs_cache.store_fact(self.key, URL, fact, 'claude',
                               source={'reference_only': True, 'question': question})
         outputs = (
-            ('WebFetch', docs_cache.claude_pre(claude_fetch())['hookSpecificOutput']),
+            ('WebFetch', docs_cache.claude_pre(claude_fetch(
+                tool_input={'url': URL, 'prompt': question}))['hookSpecificOutput']),
             ('web.run', docs_cache.codex_pre(codex_fetch())['hookSpecificOutput']),
             ('web_fetch', docs_cache.copilot_pre(fetch())),
         )
@@ -215,7 +266,7 @@ class DocsCacheTests(unittest.TestCase):
                 self.assertLess(reason.index(warning), reason.index(question))
                 self.assertLess(reason.index(question), reason.index(fact))
                 self.assertLess(reason.index(fact), reason.index("If this doesn't answer"))
-                self.assertTrue(reason.endswith(f'{tool} call and it will fetch live.'))
+                self.assertTrue(reason.endswith(f'or repeat the exact same {tool} call.'))
 
     def test_claude_skips_failed_redirected_empty_and_volatile_results(self):
         with mock.patch.object(docs_cache, 'start_distiller') as start:
@@ -235,7 +286,8 @@ class DocsCacheTests(unittest.TestCase):
         hooks = [hook for group in manifest['hooks']['PreToolUse'] for hook in group['hooks']
                  if 'docs_cache.py' in hook['command']]
         self.assertEqual(len(hooks), 1, 'Claude must actually register the cache, not just export functions')
-        docs_cache.store_fact(self.key, URL, 'shared fact', 'copilot', length=20000)
+        docs_cache.store_fact(self.key, URL, 'shared fact', 'claude',
+                              source={'reference_only': True, 'question': 'What does --dry-run do?'})
         command = hooks[0]['command'].replace('${CLAUDE_PLUGIN_ROOT}', str(root))
         output = subprocess.run(shlex.split(command), input=json.dumps(claude_fetch()),
                                 capture_output=True, text=True, check=True)
@@ -266,8 +318,12 @@ class DocsCacheTests(unittest.TestCase):
                     else:
                         docs_cache.codex_post(codex_fetch(url, tool_response=codex_result(url)))
                 self.assertEqual(run.call_args.args[0][0], harness)
-                self.assertIsNotNone(docs_cache.claude_pre(claude_fetch(
-                    tool_input={'url': url, 'prompt': 'Explain --dry-run.'})))
+                claude = docs_cache.claude_pre(claude_fetch(
+                    tool_input={'url': url, 'prompt': 'Explain --dry-run.'}))
+                if harness == 'claude':
+                    self.assertIsNotNone(claude)
+                else:
+                    self.assertIsNone(claude, 'a page summary does not answer a WebFetch question')
                 self.assertIsNotNone(docs_cache.codex_pre(codex_fetch(url)))
                 self.assertIsNotNone(docs_cache.copilot_pre(fetch(url)))
                 self.assertIsNone(docs_cache.codex_pre(codex_fetch(url)), 'identical Codex call must bypass')

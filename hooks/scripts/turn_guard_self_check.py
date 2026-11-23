@@ -1000,7 +1000,7 @@ class TurnGuardTests(unittest.TestCase):
         fetched = time.time() - 86400
         url = 'https://example.com/api/v2'
         docs_cache.store_fact(docs_cache.cache_key(url, None), url, 'Only this detail.', 'claude',
-                              now=fetched, source={'reference_only': True})
+                              now=fetched, source={'reference_only': True, 'question': 'Specific detail'})
         output = docs_cache.claude_pre({**self.data, 'tool_name': 'WebFetch',
                                        'tool_input': {'url': url, 'prompt': 'Specific detail'}})
         self.assertIn('Only this detail.', str(output))

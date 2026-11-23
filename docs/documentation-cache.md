@@ -10,16 +10,30 @@ documentation fetches. Supported tools are Claude `WebFetch`, Codex single-URL
 `web.run` opens, and Copilot `web_fetch`.
 
 A cache hit supplies facts, source URL, and fetch date instead of downloading
-the page again. Repeating the identical call bypasses the hit once and fetches
-live. Verified conversation facts or fresh cached facts can be reused only
-when they cover the required detail and version. Summaries are not full pages.
+the page again. Verified conversation facts or fresh cached facts can be reused
+only when they cover the required detail and version. Summaries are not full pages.
+
+To skip the cache, start a Claude `WebFetch` prompt with `[live]`, or add
+`#live` to the URL for Codex `web.run` and Copilot `web_fetch`, which take no
+prompt. The marker is case-insensitive and is never stored as part of a
+question. Fragments stay on the client under RFC 3986, so `#live` should not
+change the fetched page, but host acceptance of fragment URLs is unverified.
+Every cache hit names the marker for its tool. Repeating the identical denied
+call also fetches live, and later repeats in that session keep fetching live.
+A live `WebFetch` is still an answer drawn from at most the page's first
+100,000 characters; use `curl` for the raw page
+(https://code.claude.com/docs/en/tools-reference).
 Retry-state updates are serialized. A concurrent call that cannot acquire the
 cache lock proceeds to the live fetch without changing another call's allowance.
 
 Copilot requests need an explicit positive `max_length`. Cached chunks must
 start at the same offset and cover at least the requested length. Claude
 answers and Codex excerpts are reference-only summaries; URL-level requests
-can reuse their stated facts, not infer page coverage.
+can reuse their stated facts, not infer page coverage. A Claude `WebFetch`
+asks a question, so it is served only facts distilled for that same question,
+ignoring case and spacing. Answers to other questions and page or chunk
+summaries never stand in for it. Codex and Copilot requests ask no question
+and keep URL-level reuse.
 
 Codex caches a single literal HTTP(S) URL opened from the beginning. Searches,
 batched operations, session-local references, line continuations, and hosted
@@ -59,8 +73,8 @@ state expires. Diagnostics use host display output, not extra model context or
 mandatory answer text.
 
 Silent or noninteractive interfaces can suppress warnings. Inspect
-`events.jsonl` in the cache directory for misses, hits, bypasses, stores, and
-distiller outcomes. `distill-status.json` holds the latest problem.
+`events.jsonl` in the cache directory for misses, hits, bypasses, marked live
+fetches (`live`), stores, and distiller outcomes. `distill-status.json` holds the latest problem.
 
 Removing the cache's contents resets it, including previously stored URL
 metadata. Cache limits and cleanup do not govern the CLI's own session history.
