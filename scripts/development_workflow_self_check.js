@@ -169,6 +169,9 @@ async function persistedScenario(fixture) {
     } catch (error) {
       throw new Error(String(error.stdout || error.stderr || error))
     }
+    if (options.label === 'implement' && fixture.scenario === 'lost-finished-reply') {
+      throw new Error('Fixture lost native reply after successful finish')
+    }
     return { outcome: 'completed', revision: 0, assignment: null }
   }
   for (let step = 0; step < 100; step += 1) {
@@ -183,9 +186,13 @@ async function persistedScenario(fixture) {
       call('development_handoff.py', ['claim', fixture.store, '--batch', batch.batch])
       const observed = await execute(fs.readFileSync(batch.script, 'utf8'), agent)
       if (fixture.scenario === 'close-after-dispatch' && status().assignment.role === 'commit') closeAcceptedReview()
-      const failed = observed.observations.find(item => item.error || !item.returned)
-      if (failed) throw new Error(failed.error || 'Missing native result')
-      call('development_handoff.py', ['collect', fixture.store, '--batch', batch.batch])
+      try {
+        call('development_handoff.py', ['collect', fixture.store, '--batch', batch.batch])
+      } catch (error) {
+        const failures = observed.observations.filter(item => item.error || !item.returned)
+        throw new Error([String(error.stdout || error.stderr || error),
+          ...failures.map(item => item.error || 'Missing native result')].join('\n'))
+      }
     } catch (error) {
       interrupt(String(error.stdout || error.stderr || error))
       break

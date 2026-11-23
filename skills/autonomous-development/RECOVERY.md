@@ -32,10 +32,10 @@ tree under review.
 For a never-claimed batch:
 
 ```sh
-python3 "/private/run/executor/scripts/development_handoff.py" resume-prepared "/private/run" \
-  --batch B000001 --reason "Exact inputs and executor restored"
 python3 "/private/run/executor/scripts/development_handoff.py" repair-script "/private/run" \
   --batch B000001
+python3 "/private/run/executor/scripts/development_handoff.py" resume-prepared "/private/run" \
+  --batch B000001 --reason "Exact inputs and executor restored"
 ```
 
 Restore a damaged pin only after native shutdown. The source must match every
@@ -68,6 +68,18 @@ Dispatch requests must carry the real frozen packets and distinct private paths.
 Validation checks structure, identities, available referenced files and reserved
 roles. Acceptance still checks real worktree/ledger/publication evidence through
 the existing controller. Valid JSON is not proof that work happened.
+Owner envelopes and referenced development reports must agree on their outcome.
+Both files are bound to their submitted bytes, and collection consumes that same
+verified snapshot. Generated owner paths are separate from leaf report paths.
+
+If collection rejects report content, correct it with `submit` or `finish` within
+the same allowance. Rejected reports remain archived; successful collection is
+immutable. Retrying collection of the same rejected receipt does not spend another
+correction, and restored underlying evidence can be checked again without changing
+the report. Missing files and storage failures do not spend report corrections.
+An older owner receipt without a referenced-report digest requires `finish` to
+validate and bind the current reference before collection. This does not establish
+what that reference contained before binding.
 
 The default permits an initial validation and two corrections in the same worker.
 `autonomous-development-report-correction: false` permits the initial validation

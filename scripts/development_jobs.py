@@ -37,7 +37,8 @@ def review_requests(assignment, requests):
             continue
         packet = request.get("packet")
         plan.require(isinstance(packet, dict) and packet.get("identity") and
-                     packet.get("instruction_set", {}).get("category") == packet.get("review_type") and
+                     isinstance(packet.get("instruction_set"), dict) and
+                     packet["instruction_set"].get("category") == packet.get("review_type") and
                      packet["instruction_set"].get("identity") and packet.get("root") == assignment["root"] and
                      packet.get("base") == assignment["comparison_base"] and packet.get("result_file") == path,
                      "Reviewer request must carry its frozen single-purpose packet")

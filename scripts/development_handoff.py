@@ -6,7 +6,9 @@ import copy
 from contextlib import contextmanager
 import errno
 import json
+import os
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 import sys
 import time
@@ -18,6 +20,9 @@ import development_manifest as plan
 import development_models as models
 import development_run as run
 import review_ledger as review
+
+
+MAX_JSON_BYTES = 16 * 1024 * 1024
 
 
 class HandoffError(ValueError):
@@ -45,10 +50,31 @@ def locked(folder):
         guard.__exit__(None, None, None)
 
 
+def read_bytes(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        plan.require(stat.S_ISREG(info.st_mode), f"Expected a regular JSON file: {path}")
+        plan.require(info.st_size <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
+        content = stream.read(MAX_JSON_BYTES + 1)
+        plan.require(len(content) <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
+        return content
+
+
 def read_json(path):
-    plan.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 16 * 1024 * 1024,
-                 f"Expected a regular bounded JSON file: {path}")
-    return json.loads(path.read_bytes())
+    return json.loads(read_bytes(path))
+
+
+def read_document(path, record, number, expected=None):
+    content = read_bytes(path)
+    identity = plan.digest(content)
+    archive = review.safe_path(Path(record["spec"]["store"]),
+                               f"handoffs/{record['id']}/{number}-{identity}.json")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    review.atomic_write(archive, content)
+    if expected is not None and identity != expected:
+        raise HandoffError("changed_report", "Submitted report changed; restore its retained bytes before retrying")
+    return json.loads(content), identity
 
 
 def persist(folder, state):
@@ -148,13 +174,18 @@ def review_jobs(state, assignment):
     plan.require(saved["calls"] < assignment["limits"]["review_dispatches"],
                  "Review dispatch allowance exhausted; preserve the ledger and incomplete outcome")
     saved["calls"] += 1
+    directory = review.safe_path(Path(assignment["store"]), f"reports/owners/{assignment['id']}")
+    path = directory / f"owner-{saved['calls']}.json"
+    suffix = 0
+    while path.exists() or path.is_symlink() or str(path) in saved["reservations"]:
+        suffix += 1
+        path = directory / f"owner-{saved['calls']}-{suffix}.json"
     return [{"role": "review-owner", "dispatch": saved["calls"],
-             "result_file": str(Path(assignment["store"]) / "reports" / assignment["id"] /
-                                f"owner-{saved['calls']}.json")}]
+             "result_file": str(path)}]
 
 
 def prepare(folder, args):
-    with locked(folder):
+    with locked(folder), run.ExitStack() as guards:
         state = run.load(folder)
         settings = run.feature(Path(state["root"]))
         active = state["active"]
@@ -166,14 +197,13 @@ def prepare(folder, args):
         executor.require_current(folder)
         if active and active.get("review_resume_ready"):
             from review_ownership import locked as review_locked
-            with review_locked(Path(active["root"])):
-                dispatches.claim(state)
-                previous = state.get("handoffs", {}).get(active.get("handoff"))
-                if previous and previous["status"] != "collected":
-                    previous["status"] = "reconciled"
-                active.pop("handoff", None)
-                active.pop("pending_requests", None)
-                persist(folder, state)
+            guards.enter_context(review_locked(Path(active["root"])))
+            dispatches.claim(state)
+            previous = state.get("handoffs", {}).get(active.get("handoff"))
+            if previous and previous["status"] != "collected":
+                previous["status"] = "reconciled"
+            active.pop("handoff", None)
+            active.pop("pending_requests", None)
         elif active and active.get("handoff"):
             record = batch_record(state, active["handoff"])
             if record["status"] in ("prepared", "claimed"):
@@ -274,12 +304,68 @@ def start(folder, args):
         return {"result_file": job["result_file"], "assignment": assignment["id"]}
 
 
-def report_for(assignment, job, path):
-    report = read_json(path)
+def report_for(assignment, record, number, *, expected=None, bind_reference=False):
+    job = selected_job(record, number)
+    folder = Path(assignment["store"])
+    path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
+    report, identity = read_document(path, record, number, expected.get("sha256") if expected else None)
     jobs.validate(assignment, job, report)
+    receipt = {"result_file": str(path), "sha256": identity}
+    development = None
     if job["role"] == "review-owner" and report["outcome"] != "dispatch":
-        jobs.development_report(assignment, read_json(Path(assignment["result_file"])))
-    return report
+        if expected and "development_sha256" not in expected and not bind_reference:
+            raise HandoffError("unbound_report", "Legacy owner receipt has no referenced-report binding. "
+                               "Run finish to validate and bind the current evidence before collection.")
+        reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))
+        development, identity = read_document(
+            reference, record, number, expected.get("development_sha256") if expected else None)
+        jobs.development_report(assignment, development)
+        plan.require(report["outcome"] == development["outcome"], "Owner report outcomes differ")
+        receipt["development_sha256"] = identity
+    return {"report": report, "development": development, "receipt": receipt}
+
+
+def correction_limit(settings):
+    return 1 if "autonomous-development-report-correction" in settings.disabled else 3
+
+
+def report_failure(record, number, error, settings, *, receipt=None):
+    key = str(number)
+    previous = record.get("rejected", {}).get(key)
+    if receipt is None or previous is None or previous["receipt"] != receipt:
+        record["failures"][key] = record["failures"].get(key, 0) + 1
+    kind = "controller_rejected" if receipt else "invalid_report"
+    if receipt:
+        record.setdefault("rejected", {})[key] = {"receipt": receipt, "error": str(error)}
+    record["last_error"] = {"kind": kind, "job": number, "error": str(error)}
+    remaining = max(0, correction_limit(settings) - record["failures"][key])
+    return HandoffError(kind, f"{error}. Correction attempts remaining: {remaining}. "
+                        "Correct only the report from existing evidence; do not repeat external effects.")
+
+
+def write_candidate(assignment, record, args):
+    folder = Path(assignment["store"])
+    job = selected_job(record, args.job)
+    candidate_path = Path(args.candidate)
+    plan.require(candidate_path.is_absolute() and candidate_path.is_relative_to(folder),
+                 "Candidate must be an absolute path inside the private run store")
+    candidate_path = review.safe_path(folder, str(candidate_path.relative_to(folder)))
+    candidate, _ = read_document(candidate_path, record, args.job)
+    if job["role"] == "review-owner" and isinstance(candidate, dict) and "report" in candidate:
+        plan.fields(candidate, "outcome requests report")
+        plan.require(candidate["requests"] == [] and candidate["outcome"] in ("complete", "blocked"),
+                     "An owner development report must complete or block, without dispatch requests")
+        development = jobs.candidate_report(assignment, {"role": "review"}, candidate["report"])
+        jobs.development_report(assignment, development)
+        plan.require(development["outcome"] == candidate["outcome"], "Owner report outcomes differ")
+        reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))
+        review.atomic_write(reference, plan.encode(development))
+        candidate = {"outcome": candidate["outcome"], "requests": [],
+                     "result_file": assignment["result_file"]}
+    report = jobs.candidate_report(assignment, job, candidate)
+    jobs.validate(assignment, job, report)
+    path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
+    review.atomic_write(path, plan.encode(report))
 
 
 def submit(folder, args):
@@ -293,52 +379,47 @@ def submit(folder, args):
         key = str(args.job)
         plan.require(record["status"] == "claimed" and key in record["started"],
                      "Report requires an actually started job in the claimed batch")
-        if key in record["submitted"]:
-            path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
-            plan.require(record["submitted"][key]["sha256"] == plan.digest(path.read_bytes()),
-                         "Submitted report changed; restore its retained bytes or reconcile, do not overwrite acceptance")
-            return {"valid": True, **record["submitted"][key]}
-        correction = "autonomous-development-report-correction" not in settings.disabled
-        maximum = 3 if correction else 1
-        plan.require(record["failures"].get(key, 0) < maximum,
+        previous = record["submitted"].get(key)
+        rejected = key in record.get("rejected", {})
+        if previous and not rejected:
+            try:
+                snapshot = report_for(assignment, record, args.job, expected=previous, bind_reference=True)
+            except HandoffError:
+                raise
+            except (ValueError, KeyError, TypeError) as error:
+                if job["role"] != "review-owner" or "development_sha256" in previous:
+                    raise
+                failure = report_failure(record, args.job, error, settings, receipt=previous)
+                persist(folder, state)
+                raise failure from error
+            if snapshot["receipt"] == previous:
+                return {"valid": True, **previous}
+            record.setdefault("submission_history", {}).setdefault(key, []).append(previous)
+            record["submitted"][key] = snapshot["receipt"]
+            persist(folder, state)
+            return {"valid": True, **snapshot["receipt"]}
+        plan.require(record["failures"].get(key, 0) < correction_limit(settings),
                      "Report correction allowance exhausted; preserve candidates and reconcile the assignment")
         path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if args.command == "submit":
-                candidate_path = Path(args.candidate)
-                plan.require(candidate_path.is_absolute() and candidate_path.is_relative_to(folder),
-                             "Candidate must be an absolute path inside the private run store")
-                candidate_path = review.safe_path(folder, str(candidate_path.relative_to(folder)))
-                candidate_bytes = candidate_path.read_bytes()
-                plan.require(len(candidate_bytes) <= 16 * 1024 * 1024, "Candidate JSON exceeds the size limit")
-                archive = review.safe_path(folder, f"handoffs/{record['id']}/{args.job}-"
-                                           f"{plan.digest(candidate_bytes)}.json")
-                archive.parent.mkdir(parents=True, exist_ok=True)
-                review.atomic_write(archive, candidate_bytes)
-                candidate = read_json(candidate_path)
-                if job["role"] == "review-owner" and isinstance(candidate, dict) and "report" in candidate:
-                    plan.fields(candidate, "outcome requests report")
-                    plan.require(candidate["requests"] == [] and candidate["outcome"] in ("complete", "blocked"),
-                                 "An owner development report must complete or block, without dispatch requests")
-                    development = jobs.candidate_report(assignment, {"role": "review"}, candidate["report"])
-                    jobs.development_report(assignment, development)
-                    plan.require(development["outcome"] == candidate["outcome"], "Owner report outcomes differ")
-                    review.atomic_write(Path(assignment["result_file"]), plan.encode(development))
-                    candidate = {"outcome": candidate["outcome"], "requests": [],
-                                 "result_file": assignment["result_file"]}
-                report = jobs.candidate_report(assignment, job, candidate)
-                jobs.validate(assignment, job, report)
-                review.atomic_write(path, plan.encode(report))
-            report_for(assignment, job, path)
+                write_candidate(assignment, record, args)
+            snapshot = report_for(assignment, record, args.job)
+        except FileNotFoundError as error:
+            raise HandoffError("missing_report", "Report or candidate is absent; inspect native activity and "
+                               "retry finish/submit when the original file is available. No attempt consumed.") from error
         except (ValueError, KeyError, TypeError) as error:
-            attempt = record["failures"].get(key, 0) + 1
-            record["failures"][key] = attempt
-            record["last_error"] = {"kind": "invalid_report", "job": args.job, "error": str(error)}
+            failure = report_failure(record, args.job, error, settings)
             persist(folder, state)
-            raise HandoffError("invalid_report", f"{error}. Correction attempts remaining: {maximum - attempt}. "
-                               "Correct only the report from existing evidence; do not repeat external effects.") from error
-        record["submitted"][key] = {"result_file": str(path), "sha256": plan.digest(path.read_bytes())}
+            raise failure from error
+        if rejected and snapshot["receipt"] == previous:
+            raise HandoffError("controller_rejected", record["rejected"][key]["error"] +
+                               ". Correct the report, or retry collect after restoring the underlying evidence.")
+        if previous:
+            record.setdefault("submission_history", {}).setdefault(key, []).append(previous)
+        record["submitted"][key] = snapshot["receipt"]
+        record.get("rejected", {}).pop(key, None)
         progress(state, record, job, "reported", settings)
         persist(folder, state)
         return {"valid": True, **record["submitted"][key]}
@@ -352,29 +433,26 @@ def collect_reports(folder, state, record, settings):
         if not receipt:
             raise HandoffError("missing_report", f"Job {number} has no validated report. Inspect native activity "
                                "and its original file; run finish for existing evidence, never repeat the worker.")
-        path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
-        plan.require(receipt["sha256"] == plan.digest(path.read_bytes()),
-                     "Submitted report changed; preserve it and reconcile, never accept a changed receipt")
-        reports.append(report_for(assignment, job, path))
+        reports.append(report_for(assignment, record, number, expected=receipt))
     return assignment, reports
 
 
 def collect_review(state, record, assignment, reports):
     first = record["spec"]["jobs"][0]
     if first["role"] == "review-owner":
-        owner = reports[0]
+        owner = reports[0]["report"]
         if owner["outcome"] == "dispatch":
             reserve_requests(state, assignment, owner["requests"])
             return None
-        return read_json(Path(assignment["result_file"]))
+        return reports[0]["development"]
     checkpoint = copy.deepcopy(state["active"]["review_dispatch"])
     for job, report in zip(record["spec"]["jobs"], reports):
         checkpoint["reports"].append({
             "role": job["role"], "result_file": job["result_file"],
-            "outcome": "complete" if report["outcome"] == "complete" else "blocked"})
+            "outcome": "complete" if report["report"]["outcome"] == "complete" else "blocked"})
     pending = state["active"].get("pending_requests", [])
     remaining = pending[len(reports):]
-    if first["role"] == "fixer" or any(report["outcome"] != "complete" for report in reports):
+    if first["role"] == "fixer" or any(report["report"]["outcome"] != "complete" for report in reports):
         checkpoint["reports"].extend({"role": item["role"], "result_file": item["result_file"],
                                       "outcome": "not_started"} for item in remaining)
         remaining = []
@@ -400,13 +478,24 @@ def collect(folder, args):
                 run.preserve_checkout({"before": record["before"]}, after)
             else:
                 run.unchanged(record["before"], after)
-        if assignment["role"] == "review":
-            report = collect_review(state, record, assignment, reports)
-        else:
-            report = reports[0]
+        original = state
+        state = copy.deepcopy(state)
+        record = batch_record(state, args.batch)
+        assignment = assignment_for(state, record, settings)
         with run.ExitStack() as guards:
-            if report is not None:
-                guards.enter_context(run.complete(state, report, settings))
+            try:
+                report = (collect_review(state, record, assignment, reports) if assignment["role"] == "review"
+                          else reports[0]["report"])
+                if report is not None:
+                    guards.enter_context(run.complete(state, report, settings))
+            except (ValueError, KeyError, TypeError) as error:
+                previous = batch_record(original, args.batch)
+                if len(reports) != 1 or previous["spec"]["jobs"][0]["role"] in jobs.LEAVES:
+                    raise
+                failure = report_failure(previous, 1, error, settings, receipt=reports[0]["receipt"])
+                persist(folder, original)
+                raise failure from error
+            record.pop("rejected", None)
             record["status"] = "collected"
             record["receipt"] = {"action": "prepare", "batch": record["id"], "assignment": record["assignment"]}
             persist(folder, state)
@@ -458,10 +547,11 @@ def resume_prepared(folder, args):
                      "reconcile native shutdown and effects for a claimed batch")
         plan.validate(state["manifest"], folder / "inputs")
         plan.text(args.reason)
+        result = descriptor(folder, record)
         state["outcome"], state["reason"] = "running", args.reason
         state.pop("stop_kind", None)
         persist(folder, state)
-        return descriptor(folder, record)
+        return result
 
 
 def parser():

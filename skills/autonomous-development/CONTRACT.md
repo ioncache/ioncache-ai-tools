@@ -168,9 +168,16 @@ Workers call `submit --candidate FILE` or `finish` with their generated batch/jo
 IDs. Candidates stay private. The script supplies development identities,
 validates full reports and pins submitted bytes. The collector reads these files
 and existing controller evidence, not the workflow's reported outcome.
-Malformed candidates can receive two corrections after the initial failure when
-`autonomous-development-report-correction` is enabled. Counts persist with the
-batch; repeating a native invocation does not reset them or launch repair models.
+Malformed candidates and controller-rejected report content share two corrections
+after the initial failure when `autonomous-development-report-correction` is
+enabled. Missing reports and storage failures do not spend this allowance.
+Counts persist with the batch; repeating a native invocation does not reset them
+or launch repair models. A rejected submission may be corrected from existing
+evidence; collected receipts remain immutable. Retrying collection reevaluates
+current evidence without charging the same rejected receipt twice.
+Owner receipts bind both the envelope and its referenced development report,
+with matching outcomes. Older unbound owner receipts require explicit `finish`
+validation before collection, not an inferred historical binding.
 Exhaustion keeps the evidence incomplete and does not refund a role attempt.
 See RECOVERY.md for exact recovery choices, executor restoration and known
 native-qualification limits.
