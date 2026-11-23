@@ -69,19 +69,36 @@ See `RECOVERY.md` for the caller's recovery responsibilities.
 
 ## Preflight and preparation
 
-`preflight` verifies all artifact access, required commands/services, native
-permissions, fresh contexts, result-file delivery,
-independent flat review, cancellation controls, and evidence durability.
-Include data booleans `artifact_access`, `native_permissions`, `fresh_workers`,
-`independent_review`, `result_delivery`, and `cancellation` only after verifying
-them. Describe observations and limitations in evidence. Missing capability
-means `blocked`, not permission to alter host settings or launch another CLI.
-For each capability, distinguish availability, documentation/code inference,
-and an exercised operation. An available cancellation control is not an observed
-cancellation; access checks are not completed publication. Never summarize these
-different observations as an end-to-end qualification.
+`preflight` checks what a single worker can observe before implementation:
+artifact access, required commands and services, repository access and
+authentication, and evidence durability. Record each of `artifact_access`,
+`native_permissions`, `fresh_workers`, `independent_review`, `result_delivery`
+and `cancellation` in `data` as `{"status": ..., "evidence": ...}`:
+
+| Status | Meaning |
+| --- | --- |
+| `verified` | You exercised the operation and observed it succeed. |
+| `available` | Read-only evidence shows it is available, such as authentication or repository permissions. |
+| `deferred` | Only a later step can establish it; the evidence names that step. |
+| `missing` | You observed a denial or absence. Report `blocked` with this evidence. |
+
+`artifact_access` must be `verified`. `native_permissions` needs at least
+read-only evidence (`available`). A leaf cannot launch agents or observe its own
+launch, so defer `fresh_workers` and `result_delivery`: the handoff helper
+records both from this batch's start receipt and validated report. Defer
+`independent_review` to review acceptance, where category coverage is checked.
+`cancellation` is the launcher's control; record its availability or defer it.
+Commit, push and PR permissions are established when those steps run; a denial
+there blocks that step with its evidence. Never invent a probe, alter host
+settings or launch another CLI to upgrade a status, and never report an
+unexercised capability as `verified` or summarize these observations as an
+end-to-end qualification.
 Preflight identifies and discloses observed ambient project instructions in
-evidence, optionally listing `data.ambient_sources`. Review workers must ignore
+evidence, optionally listing `data.ambient_sources`. Also disclose any that
+appear to conflict with an approved permission, such as a rule against pushing
+without explicit approval. This is an early warning, not a block: the approved
+manifest permission is the human's explicit authorization for that operation in
+this run, and delivery prompts say so. Review workers must ignore
 those instructions and use only their explicitly assigned ruleset. Their
 presence never blocks preflight, requires suppression, makes coverage partial,
 or spends a review replacement. Do not attest that hidden context was inspected.
@@ -90,12 +107,13 @@ managed policy may still load:
 https://code.claude.com/docs/en/sub-agents#frontmatter-reference.
 The workflow does not promise an instruction-free host or change its settings;
 it defines which explicit ruleset the review is allowed to use.
-When audit publication is approved and enabled, also verify Git and authenticated
-`gh` access to the same GitHub repository, its initialized and writable wiki,
-and PR-body editing. Read the wiki's advertised default branch and existing
-`Automated-Pull-Request-Audits` table, if present. Check signing requirements
-and native permissions without publishing a probe. Record
-`audit_publication: true` only when these capabilities are established.
+When audit publication is approved and enabled, also record
+`audit_publication` with at least read-only evidence: authenticated Git and `gh`
+access to the same GitHub repository, its initialized wiki, and write access
+shown by repository permissions or a dry-run push. Read the wiki's advertised
+default branch and existing `Automated-Pull-Request-Audits` table, if present.
+Check signing requirements without publishing a probe. No PR exists yet, so
+PR-body editing is established by `audit-initial`; say so in the evidence.
 Do not infer wiki access from repository access or from the wiki setting alone.
 The helper does not provision access or initialize GitHub wikis.
 

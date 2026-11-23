@@ -254,12 +254,7 @@ def check_worktree(state, pr_id):
 
 
 def permission(manifest, role):
-    required = {"preflight": ["commit", "push", "create_pr", "mark_ready"],
-                "commit": ["commit"], "draft": ["push", "create_pr"],
-                "ready": ["push", "mark_ready"], "evidence": ["screenshots"],
-                "audit-initial": ["publish_audit", "push", "create_pr"],
-                "audit-final": ["publish_audit", "push", "create_pr"]}
-    for key in required.get(role, []):
+    for key in plan.ROLE_PERMISSIONS.get(role, ()):
         plan.require(manifest["permissions"][key], f"{key} was not approved for this run")
 
 
@@ -613,6 +608,24 @@ def complete(state, report, settings):
         yield
 
 
+def observed_launch(state, assignment):
+    """Returns capabilities the handoff helper itself observed for this assignment's batch.
+
+    A worker cannot attest to its own launch or to delivery of the report it is
+    still writing; the start receipt and validated submission establish both.
+    Direct-controller assignments without a generated batch add nothing.
+    """
+    batch = state.get("handoffs", {}).get(assignment.get("handoff"))
+    if not batch or not batch.get("started") or not batch.get("submitted"):
+        return {}
+    return {
+        "fresh_workers": {"status": "verified", "evidence": (
+            f"Handoff batch {batch['id']} recorded a start receipt from a newly launched native worker")},
+        "result_delivery": {"status": "verified", "evidence": (
+            f"Handoff batch {batch['id']} validated the worker's report file before collection")},
+    }
+
+
 def complete_role(state, assignment, data, settings):
     role = assignment["role"]
     if assignment["pr"] and role != "prepare":
@@ -620,13 +633,12 @@ def complete_role(state, assignment, data, settings):
     if role in REVIEW_DEPENDENT_ROLES:
         require_cached_review_usable(state, assignment["pr"], Path(assignment["root"]))
     if role == "preflight":
-        required = ("artifact_access", "native_permissions", "fresh_workers",
-                    "independent_review", "result_delivery", "cancellation")
-        plan.require(all(data.get(key) is True for key in required), "Required execution capability is unverified")
-        if audit_enabled(state, settings):
+        publishing = audit_enabled(state, settings)
+        if publishing:
             audit.repository(state["manifest"]["repository"]["url"])
-            plan.require(data.get("audit_publication") is True,
-                         "Verify the initialized GitHub wiki, wiki write access and PR-body editing before execution")
+        capabilities = jobs.preflight_capabilities(data, audit=publishing)
+        capabilities.update(observed_launch(state, assignment))
+        state["capabilities"] = capabilities
     elif role == "prepare":
         prepare_result(state, assignment, data)
     elif role == "implement":

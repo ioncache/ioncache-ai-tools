@@ -6,6 +6,7 @@ import copy
 from contextlib import contextmanager
 import errno
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -114,10 +115,45 @@ def render(folder, record):
     return path
 
 
-def descriptor(folder, record):
+def launch_copy(folder, state, record, launch_dir):
+    """Returns a launchable path for the batch script, copying it where the host can read it.
+
+    Some hosts only load workflow scripts from their working directories, while the
+    private store must stay outside every repository. The store copy remains
+    authoritative: a differing launch copy is retained and rewritten from it.
+    """
+    source = render(folder, record)
+    if launch_dir is None:
+        return source
+    directory = Path(launch_dir)
+    plan.require(directory.is_absolute(), "Launch directory must be an absolute path")
+    directory = directory.resolve()
+    plan.require(directory.is_dir(), "Launch directory must be an existing directory")
+    info = directory.stat()
+    plan.require(info.st_uid == os.getuid() and not info.st_mode & 0o022,
+                 "Launch directory must be owned by this user and not group- or world-writable; "
+                 "use a private session directory such as the host's scratchpad")
+    protected = [run.roots(state, None)] + [run.roots(state, item["id"]) for item in state["manifest"]["prs"]]
+    plan.require(not any(directory.is_relative_to(path) for path in protected),
+                 "Launch directory must be outside the launch repository and planned worktrees")
+    content = source.read_bytes()
+    path = review.safe_path(directory, f"ioncache-{state['id']}-{record['id']}.js")
+    if path.exists() or path.is_symlink():
+        plan.require(path.is_file() and not path.is_symlink(), "Launch copy must be a regular file")
+        current = path.read_bytes()
+        if current == content:
+            return path
+        path.rename(path.with_name(f"{path.stem}-changed-{plan.digest(current)}.js"))
+    review.atomic_write(path, content)
+    plan.require(path.read_bytes() == content, "Launch copy differs from the generated script")
+    return path
+
+
+def descriptor(folder, state, record, launch_dir=None):
     action = "launch" if record["status"] == "prepared" else "collect"
+    script = launch_copy(folder, state, record, launch_dir)
     return {"action": action, "batch": record["id"], "assignment": record["assignment"],
-            "script": str(render(folder, record)),
+            "script": str(script), "script_sha256": plan.digest(script.read_bytes()),
             "helper": str(folder / "executor/scripts/development_handoff.py")}
 
 
@@ -193,7 +229,7 @@ def prepare(folder, args):
         elif active and active.get("handoff"):
             record = batch_record(state, active["handoff"])
             if record["status"] in ("prepared", "claimed"):
-                return descriptor(folder, record)
+                return descriptor(folder, state, record, args.launch_dir)
         elif active:
             raise HandoffError("outstanding_assignment",
                                "An assignment is outstanding without a generated batch. Collect its report or "
@@ -219,7 +255,7 @@ def prepare(folder, args):
         state.setdefault("handoffs", {})[batch_id] = record
         state["active"]["handoff"] = batch_id
         persist(folder, state)
-        return descriptor(folder, record)
+        return descriptor(folder, state, record, args.launch_dir)
 
 
 def claim(folder, args):
@@ -248,7 +284,9 @@ def claim(folder, args):
                     if item["role"] in jobs.LEAVES:
                         state["active"]["review_dispatch"]["reservations"][item["result_file"]]["started"] = True
             persist(folder, state)
-        return {"action": "launch_once", "batch": record["id"], "script": str(render(folder, record))}
+        script = launch_copy(folder, state, record, args.launch_dir)
+        return {"action": "launch_once", "batch": record["id"], "script": str(script),
+                "script_sha256": plan.digest(script.read_bytes())}
 
 
 def selected_job(record, number):
@@ -522,7 +560,7 @@ def repair_script(folder, args):
                 path.unlink()
             else:
                 path.rename(retained)
-        return descriptor(folder, record)
+        return descriptor(folder, state, record)
 
 
 def resume_prepared(folder, args):
@@ -538,7 +576,7 @@ def resume_prepared(folder, args):
                      "reconcile native shutdown and effects for a claimed batch")
         plan.validate(state["manifest"], folder / "inputs")
         plan.text(args.reason)
-        result = descriptor(folder, record)
+        result = descriptor(folder, state, record)
         state["outcome"], state["reason"] = "running", args.reason
         state.pop("stop_kind", None)
         persist(folder, state)
@@ -552,6 +590,9 @@ def parser():
                  "repair-script", "resume-prepared"):
         command = commands.add_parser(name)
         command.add_argument("store")
+        if name in ("prepare", "claim"):
+            command.add_argument("--launch-dir", help="Host-readable private directory for a verified "
+                                 "launch copy of the generated script")
         if name == "prepare":
             command.add_argument("--models-file")
             command.add_argument("--configured-models", action="store_true")

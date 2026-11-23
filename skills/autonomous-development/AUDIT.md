@@ -41,8 +41,9 @@ conversation comments or require manual uploads.
 
 An initialized, writable wiki is a deployment prerequisite. GitHub documents
 creating its initial page before cloning; enabling the repository's wiki setting
-alone does not establish this capability. Verify the wiki and publication access
-during preflight, before implementation. The helper does not initialize GitHub
+alone does not establish this capability. Preflight checks wiki initialization,
+reachability and write access with read-only evidence before implementation.
+PR-body editing needs a PR, so `audit-initial` establishes it. The helper does not initialize GitHub
 wikis, change repository settings, or silently choose another destination when
 the wiki is unavailable.
 

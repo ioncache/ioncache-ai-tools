@@ -152,6 +152,129 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual([item["role"] for item in development.load(self.store)["history"]], ["preflight"])
         self.assertEqual(self.next()["role"], "prepare")
 
+    @staticmethod
+    def capability_records(**overrides):
+        """Returns an honest leaf preflight: read-only checks plus capabilities later steps establish."""
+        records = {
+            "artifact_access": ("verified", "Every pinned snapshot matched its approved digest"),
+            "native_permissions": ("available", "Authenticated; repository API reports push permission"),
+            "fresh_workers": ("deferred", "A leaf cannot launch agents; the handoff helper observes launch"),
+            "independent_review": ("deferred", "Category-coverage checks at review acceptance establish it"),
+            "result_delivery": ("deferred", "The handoff helper validates this report on submission"),
+            "cancellation": ("available", "The launcher holds native workflow and agent stop controls"),
+        }
+        records.update(overrides)
+        return {name: {"status": status, "evidence": evidence} for name, (status, evidence) in records.items()}
+
+    def test_honest_preflight_completes_and_helper_records_launch_evidence(self):
+        self.init()
+        launch = self.folder / "launch"
+        launch.mkdir(mode=0o700)
+        batch = self.handoff("prepare", "--launch-dir", launch)
+        claimed = self.handoff("claim", "--batch", batch["batch"], "--launch-dir", launch)
+        self.assertEqual(Path(claimed["script"]).parent, launch.resolve())
+        store_script = self.store / "handoffs" / f"{batch['batch']}.js"
+        self.assertEqual(Path(claimed["script"]).read_bytes(), store_script.read_bytes())
+        self.assertEqual(claimed["script_sha256"], manifest.digest(store_script.read_bytes()))
+        self.assertIn("Disclose ambient instructions that appear to conflict", store_script.read_text())
+        self.handoff("start", "--batch", batch["batch"], "--job", "1")
+        candidate = self.store / "candidate.json"
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Honest leaf preflight",
+                                         "evidence": ["Offline fixture"],
+                                         "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        saved = development.load(self.store)
+        self.assertTrue(saved["preflight"])
+        self.assertEqual(saved["capabilities"]["fresh_workers"]["status"], "verified")
+        self.assertEqual(saved["capabilities"]["result_delivery"]["status"], "verified")
+        self.assertEqual(saved["capabilities"]["independent_review"]["status"], "deferred")
+        self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
+
+    def test_missing_capability_blocks_with_recovery_and_retry_proceeds(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        denied = self.capability_records(native_permissions=("missing", "gh is not authenticated"))
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Claims success",
+                                         "evidence": ["Offline fixture"], "data": denied}))
+        failure = self.handoff("submit", "--batch", batch["batch"], "--job", "1",
+                               "--candidate", candidate, ok=False)
+        self.assertIn("Report outcome blocked", failure["error"])
+        deferred = self.capability_records(native_permissions=("deferred", "Not checked"))
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Defers a checkable capability",
+                                         "evidence": ["Offline fixture"], "data": deferred}))
+        failure = self.handoff("submit", "--batch", batch["batch"], "--job", "1",
+                               "--candidate", candidate, ok=False)
+        self.assertIn("read-only evidence", failure["error"])
+        candidate.write_text(json.dumps({"outcome": "blocked", "summary": "Authentication missing",
+                                         "evidence": ["gh auth status failed"], "data": denied}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.state = self.cli("status", self.store)
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.mutate("resume", "--reason", "Authentication restored")
+        retry = self.handoff("prepare")
+        self.assertEqual(development.load(self.store)["active"]["attempt"], 2)
+        self.claim_handoff(retry)
+        self.finish(self.capability_records())
+        self.assertTrue(development.load(self.store)["preflight"])
+
+    def test_audit_preflight_defers_pr_body_editing_until_a_pr_exists(self):
+        self.plan["repository"]["url"] = "https://github.com/fixture/project.git"
+        self.plan["permissions"]["publish_audit"] = True
+        self.git("remote", "set-url", "origin", self.plan["repository"]["url"])
+        self.init()
+        self.assertEqual(self.next()["role"], "preflight")
+        records = self.capability_records()
+        self.finish(records, ok=False)
+        records.update(self.capability_records(audit_publication=(
+            "missing", "Wiki is not initialized")))
+        self.finish(records, ok=False)
+        records.update(self.capability_records(audit_publication=(
+            "available", "Wiki reachable, dry-run push authenticated; PR-body editing deferred to audit-initial")))
+        self.finish(records)
+        self.assertEqual(self.state["outcome"], "running")
+        self.assertEqual(self.next()["role"], "prepare")
+
+    def test_launch_copy_is_verified_private_and_outside_planned_worktrees(self):
+        self.init()
+        launch = self.folder / "launch"
+        launch.mkdir(mode=0o700)
+        batch = self.handoff("prepare", "--launch-dir", launch)
+        copy_path = Path(batch["script"])
+        expected = copy_path.read_bytes()
+        self.assertEqual(copy_path.stat().st_mode & 0o077, 0)
+        copy_path.write_text("throw new Error('tampered launch copy')\n")
+        claimed = self.handoff("claim", "--batch", batch["batch"], "--launch-dir", launch)
+        self.assertEqual(Path(claimed["script"]).read_bytes(), expected)
+        self.assertEqual(len(list(launch.glob("*-changed-*.js"))), 1)
+        # A refused launch of a claimed batch recovers the same verified copy without another reservation.
+        again = self.handoff("prepare", "--launch-dir", launch)
+        self.assertEqual((again["action"], again["script"]), ("collect", claimed["script"]))
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 1)
+        shared = self.folder / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        inside = self.root / ".worktrees"
+        inside.mkdir()
+        for directory, message in ((shared, "not group- or world-writable"),
+                                   (inside, "outside the launch repository"),
+                                   ("relative", "absolute path")):
+            self.assertIn(message, self.handoff("prepare", "--launch-dir", directory, ok=False)["error"])
+
+    def test_delivery_prompts_state_approved_authorization_only_for_granted_operations(self):
+        granted = {"permissions": {"commit": True, "push": True, "create_pr": True,
+                                   "mark_ready": False, "screenshots": False}}
+        draft = handoffs.jobs.authorization(granted, "draft")
+        self.assertIn("approved push, create_pr", draft)
+        self.assertIn("explicit authorization for this draft operation", draft)
+        self.assertIn("host permission denial still means blocked", draft)
+        self.assertEqual(handoffs.jobs.authorization(granted, "ready"), "")
+        self.assertEqual(handoffs.jobs.authorization(granted, "implement"), "")
+        self.assertIn("Disclose ambient instructions", handoffs.jobs.authorization(granted, "preflight"))
+
     def prepare(self):
         assignment = self.next()
         self.assertEqual(assignment["role"], "prepare")

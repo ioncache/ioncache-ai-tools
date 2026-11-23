@@ -144,9 +144,14 @@ version in `EXECUTOR.json` and `executor/`, separate from the approved manifest.
 All subsequent handoff commands use that pinned helper. No historical approval
 digest or schema-1 ledger is rewritten.
 
-`prepare` returns `action`, batch and assignment IDs, and absolute `script` and
-`helper` paths. Claim the prepared batch, then launch its generated script through
-the native Workflow tool without arguments. Never invoke the null-handoff
+`prepare` returns `action`, batch and assignment IDs, absolute `script` and
+`helper` paths, and `script_sha256`. Claim the prepared batch, then launch its
+generated script through the native Workflow tool without arguments. When the
+host cannot read the store, pass `--launch-dir DIR` to `prepare` and `claim`:
+Python writes a byte-identical, owner-only copy named for the run and batch into
+that private directory, which must be outside the launch repository and planned
+worktrees. The store copy stays authoritative; a changed launch copy is retained
+and rewritten from it, never from a model response. Never invoke the null-handoff
 packaged template as a standalone run. Only Python reserves work, processes
 review requests and evaluates development acceptance.
 
@@ -252,6 +257,17 @@ host ID or treat an unobservable identity as verified. Preserve visibility
 limitations; an explicit verified-identity requirement still needs evidence.
 Keep the full report;
 returning its path is not itself evidence of successful work.
+
+Preflight records each required capability as `{"status", "evidence"}` with
+status `verified`, `available`, `deferred` or `missing`, as defined in WORKERS.md.
+Only unverified artifact access, a `missing` capability, or a deferred
+capability that read-only evidence could establish (`native_permissions`, and
+`audit_publication` when enabled) rejects a completed preflight. The handoff
+helper adds verified `fresh_workers` and `result_delivery` from the collected
+batch, and the controller keeps the normalized records in `capabilities`.
+Legacy `true` values remain valid as `verified`. Prompts for commit, draft,
+ready, evidence and audit assignments state that their approved permissions are
+the human's explicit authorization for that operation.
 
 Preflight discloses observed ambient repository instructions in evidence,
 optionally listing `data.ambient_sources`. Their presence is not a capability

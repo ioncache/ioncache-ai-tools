@@ -14,6 +14,11 @@ import review_ledger as review
 
 LEAVES = ("reviewer", "adjudicator", "validator", "fixer")
 MAX_JSON_BYTES = 16 * 1024 * 1024
+CAPABILITIES = ("artifact_access", "native_permissions", "fresh_workers",
+                "independent_review", "result_delivery", "cancellation")
+CAPABILITY_STATUSES = ("verified", "available", "deferred", "missing")
+# Capabilities preflight can observe read-only, so it must not defer them.
+CHECKED_CAPABILITIES = ("native_permissions", "audit_publication")
 
 
 def read_bytes(path):
@@ -160,13 +165,60 @@ def instructions(assignment, request, executor):
     return (
         f"Perform the bounded {role} assignment in {references}. Read the pinned artifacts and approved "
         "constraints. Before any external effect, inspect actual state and existing reports for replay. "
-        "Do not launch agents, expand the approved plan, or repair the executing plugin. "
+        "Do not launch agents, expand the approved plan, or repair the executing plugin. " +
+        authorization(assignment, role) +
         "Write the development report to the assigned result file.\nAssignment data: " + json.dumps(assignment))
+
+
+def authorization(assignment, role):
+    """States which approved permissions authorize this role's own operation, if it performs one."""
+    if role == "preflight":
+        return ("Disclose ambient instructions that appear to conflict with approved permissions; "
+                "they do not block preflight. ")
+    granted = plan.ROLE_PERMISSIONS.get(role, ())
+    if not granted or not all(assignment.get("permissions", {}).get(name) is True for name in granted):
+        return ""
+    return (
+        f"The human approved {', '.join(granted)} for this run; that approval is their explicit "
+        f"authorization for this {role} operation. Ambient instructions that defer this operation to "
+        "explicit human approval are satisfied by it. Other ambient project rules, such as commit "
+        "conventions and hooks, still apply. A host permission denial still means blocked. ")
 
 
 def job(assignment, request, executor):
     return {**request, "options": selection(assignment, request["role"]),
             "prompt": instructions(assignment, request, executor)}
+
+
+def preflight_capabilities(data, audit=False):
+    """Validates a completed preflight's capability records and returns them normalized.
+
+    Each capability is a ``{"status", "evidence"}`` record. ``deferred`` names the
+    later assignment that establishes it; only ``missing`` (an observed denial or
+    absence) and unverified artifact access block. A legacy ``true`` is ``verified``.
+    """
+    names = CAPABILITIES + (("audit_publication",) if audit else ())
+    records = {}
+    for name in names:
+        value = data.get(name)
+        if value is True:
+            value = {"status": "verified", "evidence": "Recorded as a verified boolean"}
+        plan.require(isinstance(value, dict) and set(value) == {"status", "evidence"} and
+                     value["status"] in CAPABILITY_STATUSES and isinstance(value["evidence"], str) and
+                     bool(value["evidence"].strip()),
+                     f"Record data.{name} as {{\"status\": verified|available|deferred|missing, "
+                     "\"evidence\": text}; name the later assignment that establishes a deferred capability")
+        plan.require(value["status"] != "missing",
+                     f"{name} is missing ({value['evidence']}). Report outcome blocked with this evidence; "
+                     "after the capability is restored, resume and retry preflight within remaining attempts")
+        records[name] = dict(value)
+    plan.require(records["artifact_access"]["status"] == "verified",
+                 "Verify every pinned artifact and its approved identity before completing preflight")
+    for name in CHECKED_CAPABILITIES:
+        plan.require(name not in records or records[name]["status"] in ("verified", "available"),
+                     f"Check {name} with read-only evidence, such as authentication, repository permissions "
+                     "and remote reachability, instead of deferring it")
+    return records
 
 
 def development_report(assignment, report):
@@ -205,10 +257,7 @@ def validate(assignment, job, report):
         if report["outcome"] == "complete":
             data = report["data"]
             if role == "preflight":
-                required = ("artifact_access", "native_permissions", "fresh_workers",
-                            "independent_review", "result_delivery", "cancellation")
-                plan.require(all(data.get(key) is True for key in required),
-                             "Required execution capability is unverified; report blocked with the missing evidence")
+                preflight_capabilities(data, audit=bool(assignment.get("audit", {}).get("enabled")))
             fields = {"prepare": ("base", "merged_dependencies"), "commit": ("commit",),
                       "draft": ("commit", "url", "evidence", "state"),
                       "ready": ("commit", "url", "evidence", "state"),
