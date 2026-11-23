@@ -221,7 +221,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(set(development.REVIEW_DEPENDENT_ROLES),
                          {"commit", "draft", "ready", "evidence", "audit-initial", "audit-final"})
 
-    def test_restart_after_a_validated_report_returns_without_work(self):
+    def test_restart_after_a_report_returns_or_corrects_it(self):
         self.init()
         batch = self.handoff("prepare")
         self.claim_handoff(batch)
@@ -233,6 +233,20 @@ class DevelopmentRunTests(unittest.TestCase):
         restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
         self.assertTrue(restarted["reported"])
         self.assertIn("return without repeating work", restarted["instruction"])
+        # A report that collection rejected still needs correction, so a replacement must not skip it.
+        with patch.dict(os.environ, self.env), \
+                patch.object(handoffs.run, "complete", side_effect=ValueError("Fixture rejection")), \
+                self.assertRaisesRegex(ValueError, "Fixture rejection"):
+            handoffs.collect(self.store, SimpleNamespace(batch=batch["batch"]))
+        restarted = self.handoff("start", "--batch", batch["batch"], "--job", "1")
+        self.assertFalse(restarted["reported"])
+        self.assertIn("Fixture rejection", restarted["instruction"])
+        self.assertIn("Correct only the report", restarted["instruction"])
+        candidate.write_text(json.dumps({"outcome": "complete", "summary": "Corrected leaf preflight",
+                                         "evidence": ["Offline fixture"], "data": self.capability_records()}))
+        self.handoff("submit", "--batch", batch["batch"], "--job", "1", "--candidate", candidate)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["preflight"])
 
     def test_unsupported_effort_is_rejected_before_reservation(self):
         self.init()
@@ -1263,7 +1277,7 @@ class DevelopmentRunTests(unittest.TestCase):
             "outcome": "complete", "result_file": str(self.report(data)), "requests": []}))
         return owner, path
 
-    def test_review_batches_fit_the_script_limit_and_a_refused_claim_releases(self):
+    def dispatched_reviewers_fixture(self):
         root, batch, owner_path = self.review_handoff_fixture()
         data = self.review(root, record=False)
         handoff = json.loads(Path(data["handoff"]).read_bytes())
@@ -1276,14 +1290,9 @@ class DevelopmentRunTests(unittest.TestCase):
                              "packet": attempt["packet"]})
         self.assertGreater(len(requests), 1)
         owner_path.write_bytes(manifest.encode({"outcome": "dispatch", "result_file": "", "requests": requests}))
-        # A request too large to launch alone is a correctable owner report error, not a queued dead end.
-        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
-            oversized = SimpleNamespace(batch=batch["batch"], job=1, command="finish")
-            with self.assertRaisesRegex(ValueError, "too large to launch in one Workflow script"):
-                handoffs.submit(self.store, oversized)
-        self.assertNotIn("1", development.load(self.store)["handoffs"][batch["batch"]]["submitted"])
-        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
-        self.handoff("collect", "--batch", batch["batch"])
+        return batch, requests, results
+
+    def pending_reviewers_script(self):
         state = development.load(self.store)
         assignment = development.request(state, development.feature(Path(state["root"])))
         pinned = self.store / "executor"
@@ -1292,10 +1301,52 @@ class DevelopmentRunTests(unittest.TestCase):
                 "pluginRoot": str(pinned), "jobs": [handoffs.jobs.job(assignment, {
                     **item, "dispatch": reservations[item["result_file"]]["dispatch"]}, pinned)
                     for item in state["active"]["pending_requests"]]}
-        script = handoffs.script_text(self.store, spec)
+        one = len(handoffs.script_text(self.store, {**spec, "jobs": spec["jobs"][:1]}).encode())
+        return spec, handoffs.script_text(self.store, spec), one
+
+    def test_size_limited_batches_collect_each_queued_reviewer_once(self):
+        batch, requests, results = self.dispatched_reviewers_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        _, _, one = self.pending_reviewers_script()
+        args = SimpleNamespace(models_file=None, configured_models=True, launch_dir=None)
+        queued = [item["result_file"] for item in requests]
+        launched = []
+        # The reduced limit stays in force, so every batch holds one reviewer and the rest stay queued.
+        for remaining in range(len(requests), 0, -1):
+            pending = [item["result_file"] for item in development.load(self.store)["active"]["pending_requests"]]
+            self.assertEqual(pending, queued[len(requests) - remaining:])
+            with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+                leaves = handoffs.prepare(self.store, args)
+            jobs = self.claim_handoff(leaves)
+            self.assertEqual([job["result_file"] for job in jobs], pending[:1])
+            launched.append(jobs[0]["result_file"])
+            Path(jobs[0]["result_file"]).write_bytes(results[jobs[0]["result_file"]])
+            self.handoff("finish", "--batch", leaves["batch"], "--job", 1)
+            self.handoff("collect", "--batch", leaves["batch"])
+        self.assertEqual(launched, queued)
+        state = development.load(self.store)
+        self.assertEqual(state["active"]["pending_requests"], [])
+        self.assertEqual([item["result_file"] for item in state["active"]["review_dispatch"]["reports"]
+                          if item["role"] == "reviewer"], queued)
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", one + 64):
+            owner = handoffs.prepare(self.store, args)
+        self.assertEqual(development.load(self.store)["handoffs"][owner["batch"]]["spec"]["jobs"][0]["role"],
+                         "review-owner")
+
+    def test_review_batches_fit_the_script_limit_and_a_refused_claim_releases(self):
+        batch, requests, results = self.dispatched_reviewers_fixture()
+        # A request too large to launch alone is a correctable owner report error, not a queued dead end.
+        with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):
+            oversized = SimpleNamespace(batch=batch["batch"], job=1, command="finish")
+            with self.assertRaisesRegex(ValueError, "too large to launch in one Workflow script"):
+                handoffs.submit(self.store, oversized)
+        self.assertNotIn("1", development.load(self.store)["handoffs"][batch["batch"]]["submitted"])
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        _, script, one = self.pending_reviewers_script()
         self.assertEqual(script.count("Frozen packet: "), len(requests))
         self.assertNotIn('"packet"', script)
-        one = len(handoffs.script_text(self.store, {**spec, "jobs": spec["jobs"][:1]}).encode())
         args = SimpleNamespace(models_file=None, configured_models=True, launch_dir=None)
         before = (self.store / "RUN.json").read_bytes()
         with patch.dict(os.environ, self.env), patch.object(handoffs, "SCRIPT_BYTES", 1):

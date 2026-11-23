@@ -408,12 +408,18 @@ def restart(folder, state, record, job, key, assignment):
                  "and return this limitation without repeating its effects")
     entry["restarts"] = restarts + 1
     persist(folder, state)
-    reported = key in record["submitted"]
+    rejection = record.get("rejected", {}).get(key)
+    reported = key in record["submitted"] and rejection is None
+    if rejection:
+        instruction = (f"Collection rejected the earlier report: {rejection['error']}. Correct only the "
+                       "report from existing evidence and resubmit it; do not repeat work or effects.")
+    elif reported:
+        instruction = "A validated report already exists; return without repeating work."
+    else:
+        instruction = ("An earlier attempt of this job started and may have left partial effects. Inspect the "
+                       "existing report, candidate and actual state, reconcile, then do only the remaining work.")
     return {"result_file": job["result_file"], "assignment": assignment["id"], "restart": restarts + 1,
-            "reported": reported, "instruction": (
-                "A validated report already exists; return without repeating work." if reported else
-                "An earlier attempt of this job started and may have left partial effects. Inspect the "
-                "existing report, candidate and actual state, reconcile, then do only the remaining work.")}
+            "reported": reported, "instruction": instruction}
 
 
 def start(folder, args):
