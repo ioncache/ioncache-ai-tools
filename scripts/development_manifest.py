@@ -8,6 +8,12 @@ from graphlib import CycleError, TopologicalSorter
 
 
 EXECUTION_ADAPTERS = {"claude-workflows": "ioncache-ai-tools:autonomous-development-run"}
+# Approved permissions each assignment role requires before it is reserved.
+ROLE_PERMISSIONS = {"preflight": ("commit", "push", "create_pr", "mark_ready"),
+                    "commit": ("commit",), "draft": ("push", "create_pr"),
+                    "ready": ("push", "mark_ready"), "evidence": ("screenshots",),
+                    "audit-initial": ("publish_audit", "push", "create_pr"),
+                    "audit-final": ("publish_audit", "push", "create_pr")}
 
 
 class ManifestError(ValueError):

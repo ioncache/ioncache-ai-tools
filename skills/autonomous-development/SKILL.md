@@ -97,9 +97,16 @@ Use the returned pinned `helper` path for every later handoff command. Never
 switch the executing scripts to the implementation worktree or edit resources
 used by a running review.
 
-For `action: launch`, run `claim STORE --batch B000001` with the returned batch ID.
-After that command succeeds, launch the returned `script` through Claude's native
-Workflow tool as `scriptPath`, without `args`. Do not invoke the packaged template
+For `action: launch`, run `claim STORE --batch B000001 --launch-dir DIR` with the
+returned batch ID. Claude's Workflow tool loads a `scriptPath` only from the
+session's working or added directories, while the store stays outside every
+repository, so pass a private directory the host can read, such as the session
+scratchpad. It must be owned by you, not group- or world-writable, and outside
+the launch repository and planned worktrees. Python writes a byte-identical copy
+there, returns its path and `script_sha256`, and rewrites a changed copy from the
+store. After that command succeeds, launch the returned `script` through Claude's
+native Workflow tool as `scriptPath`, without `args`. Omit `--launch-dir` only
+when the host can read the store. Do not invoke the packaged template
 directly, paste state into workflow arguments, or ask a model to reproduce JSON.
 Each generated workflow runs just one bounded batch: independent readers or one
 exclusive fixer. It cannot reserve work, accept results, or declare the run complete.
@@ -118,8 +125,14 @@ another provider or launch an external CLI. An explicitly selected headless Clau
 session can use the native Workflow tool under its normal host permissions;
 that is different from replacing native orchestration with ad hoc CLI workers.
 
-Preflight must establish actual artifact access, native permissions, fresh
-workers, independent review, result delivery, and cancellation. The adapter
+Preflight verifies artifact access and records read-only evidence for native
+permissions. Capabilities a single worker cannot exercise are recorded as
+deferred to the step that establishes them: the handoff helper observes fresh
+launch and result delivery, review acceptance checks independent coverage, and
+the launcher holds cancellation. Only an observed absence blocks preflight.
+Approved manifest permissions are the human's explicit authorization for their
+operations; delivery prompts say so, so ambient instructions that defer an
+operation to explicit approval do not block it. The adapter
 dispatches independent read-only review leaves concurrently, with each fixer
 running alone between reader batches. All dispatch remains flat. No leaf
 launches another agent. Reviewers receive frozen single-purpose packets, with
