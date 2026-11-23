@@ -142,6 +142,7 @@ def launch_copy(folder, state, record, launch_dir):
         plan.require(path.is_file() and not path.is_symlink(), "Launch copy must be a regular file")
         current = path.read_bytes()
         if current == content:
+            path.chmod(0o600)
             return path
         path.rename(path.with_name(f"{path.stem}-changed-{plan.digest(current)}.js"))
     review.atomic_write(path, content)
@@ -268,13 +269,14 @@ def claim(folder, args):
         plan.require(state["outcome"] == "running", "Run is stopped; inspect and reconcile it before dispatch")
         plan.require(record["status"] == "prepared",
                      "Batch already claimed; inspect native activity and collect reports, never launch it twice")
-        render(folder, record)
         if record["before"] is not None:
             run.unchanged(record["before"], run.capture(Path(assignment["root"])))
             snapshot = review.digest(review.encode(record["before"]))
             plan.require(all(item["role"] != "reviewer" or item["packet"]["snapshot"] == snapshot
                              for item in record["spec"]["jobs"]),
                          "Reviewer packet is stale; preserve it and replan against the current snapshot")
+        # A rejected launch directory must leave the batch claimable, so copy before claiming.
+        script = launch_copy(folder, state, record, args.launch_dir)
         context = (run.claim_dispatch(state, SimpleNamespace(assignment=assignment["id"]), settings)
                    if assignment["requires_dispatch_claim"] else run.ExitStack())
         with context:
@@ -284,7 +286,6 @@ def claim(folder, args):
                     if item["role"] in jobs.LEAVES:
                         state["active"]["review_dispatch"]["reservations"][item["result_file"]]["started"] = True
             persist(folder, state)
-        script = launch_copy(folder, state, record, args.launch_dir)
         return {"action": "launch_once", "batch": record["id"], "script": str(script),
                 "script_sha256": plan.digest(script.read_bytes())}
 

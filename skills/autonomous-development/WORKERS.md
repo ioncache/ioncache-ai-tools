@@ -109,8 +109,9 @@ The workflow does not promise an instruction-free host or change its settings;
 it defines which explicit ruleset the review is allowed to use.
 When audit publication is approved and enabled, also record
 `audit_publication` with at least read-only evidence: authenticated Git and `gh`
-access to the same GitHub repository, its initialized wiki, and write access
-shown by repository permissions or a dry-run push. Read the wiki's advertised
+access to the same GitHub repository and its initialized wiki. Show write access
+to the wiki remote with a dry-run push using the Git credentials for that remote,
+not with repository permissions. Read the wiki's advertised
 default branch and existing `Automated-Pull-Request-Audits` table, if present.
 Check signing requirements without publishing a probe. No PR exists yet, so
 PR-body editing is established by `audit-initial`; say so in the evidence.

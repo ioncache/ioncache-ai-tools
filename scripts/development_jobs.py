@@ -215,9 +215,10 @@ def preflight_capabilities(data, audit=False):
     plan.require(records["artifact_access"]["status"] == "verified",
                  "Verify every pinned artifact and its approved identity before completing preflight")
     for name in CHECKED_CAPABILITIES:
+        evidence = ("a dry-run push with the wiki remote's Git credentials" if name == "audit_publication" else
+                    "authentication, repository permissions and remote reachability")
         plan.require(name not in records or records[name]["status"] in ("verified", "available"),
-                     f"Check {name} with read-only evidence, such as authentication, repository permissions "
-                     "and remote reachability, instead of deferring it")
+                     f"Check {name} with read-only evidence, such as {evidence}, instead of deferring it")
     return records
 
 

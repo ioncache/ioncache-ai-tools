@@ -246,7 +246,13 @@ class DevelopmentRunTests(unittest.TestCase):
         copy_path = Path(batch["script"])
         expected = copy_path.read_bytes()
         self.assertEqual(copy_path.stat().st_mode & 0o077, 0)
+        copy_path.chmod(0o644)
+        self.assertEqual(self.handoff("prepare", "--launch-dir", launch)["script"], str(copy_path))
+        self.assertEqual(copy_path.stat().st_mode & 0o077, 0)
         copy_path.write_text("throw new Error('tampered launch copy')\n")
+        # A rejected launch directory leaves the batch claimable.
+        self.assertIn("absolute path", self.handoff("claim", "--batch", batch["batch"],
+                                                    "--launch-dir", "relative", ok=False)["error"])
         claimed = self.handoff("claim", "--batch", batch["batch"], "--launch-dir", launch)
         self.assertEqual(Path(claimed["script"]).read_bytes(), expected)
         self.assertEqual(len(list(launch.glob("*-changed-*.js"))), 1)
