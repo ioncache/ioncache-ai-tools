@@ -236,15 +236,6 @@ def build(state, assignment, public, *, model_snapshot=None, publication_snapsho
                 finding["pass"] = f"Review {number}: {finding['pass']}"
     public = public_narrative(public, records)
     projection.add_public_findings(records, public)
-    requested_models = {role: [{"model": choice["model"], "effort": choice["effort"]}]
-                        for role, choice in state["manifest"]["configuration"]["execution"].get("models", {}).items()}
-    for item in state["history"]:
-        if item["pr"] in (None, assignment["pr"]):
-            for role, choice in item.get("launch_models", {}).items():
-                selection = {"model": choice["model"], "effort": choice["effort"]}
-                values = requested_models.setdefault(role, [])
-                if selection not in values:
-                    values.append(selection)
     publication = publication_snapshot or default_publication(state, assignment)
     return {"schema": 2, "run": state["id"], "pr": assignment["pr"], "assignment": assignment["id"],
             "stage": assignment["role"], "approval": state["approval"],
@@ -253,7 +244,7 @@ def build(state, assignment, public, *, model_snapshot=None, publication_snapsho
             "code_commit": assignment["before"]["head"], "snapshot": identity(assignment["before"]),
             "limits": state["manifest"]["limits"], "consumed_assignments": len(state["history"]),
             "history": history, "reviews": records, "public": public,
-            "publication": publication, "requested_models": requested_models,
+            "publication": publication, "requested_models": projection.requested_models(state, assignment["pr"]),
             "models": model_records, "models_unavailable": models_unavailable,
             "metrics": {"tokens": None, "cost": None, "worker_durations": None},
             "limitations": [
@@ -738,13 +729,14 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
             plan.require(approved_files_present(root, publication, files) or
                          publication["date"] == datetime.now(timezone.utc).date().isoformat(),
                          "Publication day changed; regenerate and review an export for today's UTC date")
-            for filename, data in expected.items():
-                path = review.safe_path(root, filename)
-                if data is None:
-                    path.unlink()
-                else:
-                    review.atomic_write(path, data)
-            command(["git", "add", "--", *expected], cwd=root)
+            deletions = [name for name, data in expected.items() if data is None]
+            writes = {name: data for name, data in expected.items() if data is not None}
+            # Stage removals before writes so old spellings cannot alias replacements.
+            if deletions:
+                command(["git", "--literal-pathspecs", "rm", "-q", "--", *deletions], cwd=root)
+            for filename, data in writes.items():
+                review.atomic_write(review.safe_path(root, filename), data)
+            command(["git", "--literal-pathspecs", "add", "--", *writes], cwd=root)
             if not command(["git", "diff", "--cached", "--name-only"], cwd=root).strip():
                 return verify_wiki_commit(root, parent, expected)
             command(["git", "commit", "-qm", "docs: publish development process audit"], cwd=root)

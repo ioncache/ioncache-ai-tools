@@ -15,7 +15,7 @@ import development_manifest as plan
 import review_loop_state
 
 
-def reviewed_fixture(*, extra_review_fixes=False):
+def reviewed_fixture(*, extra_review_fixes=False, category_format="token"):
     ledger = {"schema": 1, "run_id": "a" * 32, "root": "/private/fixture",
               "objective": "Fixture", "scope": "Fixture", "base": "b" * 40,
               "limits": {"outer": 3 if extra_review_fixes else 2, "inner": 2}, "initial": "before",
@@ -30,13 +30,22 @@ def reviewed_fixture(*, extra_review_fixes=False):
     def finding(number, category="documentation", severity="Low"):
         event("finding", key=f"PRIVATE-KEY-{number}", summary="PRIVATE-SUMMARY",
               severity=severity, locations=["/private/fixture/source.py:9"],
-              evidence=[f"review_type={category} PRIVATE-EVIDENCE"])
+              evidence=[category_evidence(category)])
+
+    def category_evidence(category):
+        if category_format == "json":
+            return json.dumps({"review_type": category, "details": "PRIVATE-EVIDENCE"})
+        if category_format == "missing":
+            return "PRIVATE-EVIDENCE"
+        return f"review_type={category} PRIVATE-EVIDENCE"
 
     def decision(number, disposition, validation="valid", severity="Low"):
         event("decision", id=f"F{number:03}", validation=validation, disposition=disposition,
               severity=severity, evidence=["PRIVATE-DECISION"])
 
-    passes = [{"name": name, "worker": "unobserved", "result": "complete", "evidence": "PRIVATE-PASS"}
+    passes = [{"name": name if category_format == "token" else f"Full {name} assessment",
+               "worker": "unobserved", "result": "complete",
+               "evidence": "PRIVATE-PASS" if category_format == "token" else category_evidence(name)}
               for name in ("correctness", "documentation")]
     checks = [{"name": "PRIVATE-CHECK", "result": "passed", "evidence": "PRIVATE-CHECK-EVIDENCE"}]
     event("start_review")
@@ -192,13 +201,73 @@ class AuditFormatTests(unittest.TestCase):
             with self.subTest(finding=item["id"]):
                 self.assertTrue(item["reason"])
                 self.assertEqual(len(item["locations"]), 5)
-                self.assertTrue(item["category"])
+                expected = {"F002": "correctness", "F007": "project:autonomous-continuation"}
+                self.assertEqual(item["category"], [expected.get(item["id"], "documentation")])
                 self.assertTrue(item["pass"])
                 self.assertTrue(item["details_available"])
                 self.assertEqual(len(item["decisions"]), len(item["observations"]) + (item["id"] in {"F001", "F005"}))
         items = self.bundle["reviews"][0]["findings"]
         self.assertEqual(items[6]["pass"], "Check of the fixes")
         self.assertEqual(items[7]["pass"], "Second review")
+
+    def test_json_category_evidence_survives_ledger_projection_and_missing_evidence_stays_unknown(self):
+        for encoding in ("json", "missing"):
+            with self.subTest(encoding=encoding):
+                bundle = reviewed_fixture(category_format=encoding)
+                record = bundle["reviews"][0]
+                for item in record["findings"]:
+                    category = {"F002": "correctness", "F007": "project:autonomous-continuation"}.get(
+                        item["id"], "documentation")
+                    self.assertEqual(item["category"], [category] if encoding == "json" else [])
+                for phase in record["passes"]:
+                    expected = ["correctness", "documentation"] if phase["kind"] == "review" else []
+                    self.assertEqual(phase["categories"], expected if encoding == "json" else [])
+                report = audit.contents(bundle)
+                exported = json.loads(report["audit.json"])
+                self.assertEqual(exported["reviews"][0]["findings"], record["findings"])
+                if encoding == "json":
+                    self.assertIn("2 recorded category passes", report["AUDIT.md"].decode())
+                    self.assertNotIn("Category unavailable", report["AUDIT.md"].decode())
+                else:
+                    self.assertIn("0 recorded category passes", report["AUDIT.md"].decode())
+                    self.assertIn("Category unavailable", report["AUDIT.md"].decode())
+                self.assertNotIn("PRIVATE-EVIDENCE", report["audit.json"].decode())
+
+    def test_category_metadata_ignores_unrecognized_and_nested_values(self):
+        categories = {"correctness", "integration"}
+        for evidence in ('{"review_type":', '{"review_type":[]}', '{"review_type":null}',
+                         '{"review_type":"unknown"}', '["integration"]',
+                         '{"details":{"review_type":"integration"}}'):
+            with self.subTest(evidence=evidence):
+                self.assertEqual(projection.evidence_categories(evidence, categories), set())
+        self.assertEqual(projection.evidence_categories(
+            'review_type=correctness review_type=integration review_type=correctness', categories),
+            {"correctness", "integration"})
+
+    def test_requested_models_use_scoped_saved_jobs_not_configuration_or_private_fields(self):
+        state = {
+            "history": [{"id": "A1", "pr": None}, {"id": "A2", "pr": "first"},
+                        {"id": "A3", "pr": "other"}],
+            "handoffs": {
+                "B1": {"assignment": "A1", "spec": {"jobs": [
+                    {"role": "preflight", "options": {}, "prompt": "PRIVATE-PROMPT"}]}},
+                "B2": {"assignment": "A2", "spec": {"jobs": [
+                    {"role": "reviewer", "options": {"model": "requested", "effort": "high"}},
+                    {"role": "reviewer", "options": {"model": "requested", "effort": "high"}},
+                    {"role": "validator", "options": {"effort": "medium"}},
+                    {"role": "fixer"}]}},
+                "B3": {"assignment": "A2", "spec": {"jobs": [
+                    {"role": "reviewer", "options": {}}]}},
+                "B4": {"assignment": "A3", "spec": {"jobs": [
+                    {"role": "reviewer", "options": {"model": "PRIVATE-OTHER-PR"}}]}},
+            },
+        }
+        expected = {"preflight": [{"model": None, "effort": None}],
+                    "reviewer": [{"model": "requested", "effort": "high"}, {"model": None, "effort": None}],
+                    "validator": [{"model": None, "effort": "medium"}]}
+        self.assertEqual(projection.requested_models(state, "first"), expected)
+        state.pop("handoffs")
+        self.assertEqual(projection.requested_models(state, "first"), {})
 
     def test_impact_category_and_number_break_sorting_ties(self):
         items = rendering.findings(self.bundle)
@@ -313,6 +382,13 @@ class AuditFormatTests(unittest.TestCase):
                 self.assertIn(f"**{expected}**", report)
                 if validation != "valid":
                     self.assertIn("## Unresolved findings (1)", report)
+                else:
+                    self.assertIn("| Real but not fixed here | 1 |", report)
+                    self.assertIn("| Accurate with no change needed | 0 |", report)
+                    self.assertIn("## Real problems not fixed in this PR (1)", report)
+                    unfixed = report.split("## Real problems not fixed in this PR (1)")[1].split(
+                        "## Accurate observations, no change needed")[0]
+                    self.assertIn("#### Finding 1:", unfixed)
         bundle = copy.deepcopy(self.bundle)
         bundle["reviews"] = [{"id": "e" * 32, "available": False}]
         bundle["models_unavailable"] = True

@@ -120,6 +120,8 @@ The helper mechanically projects:
   fix results, check outcomes, event ordering, timestamps and evidence hashes.
   Pass names and known category identifiers come from recorded review structure;
   missing category evidence stays unavailable, not inferred from all reviewers.
+  Read `review_type` from JSON evidence or `review_type=<category>` tokens.
+  A recognized pass name is the fallback when its evidence has no known category.
 - Execution limits, consumed assignments and explicit unavailable metrics.
 - Requested native models/efforts and separately observed actual identities,
   their observation source and an evidence digest, tied to assignment/role.
@@ -136,6 +138,10 @@ in the separately reviewed public narrative. Categories and pass membership are
 mechanical; their identifiers still require publication review.
 Review progress checkpoints remain private and are not exported as evidence.
 Model observations project only the fields above, not their raw private files.
+Without a role's model observations, requested models and efforts come from saved
+dispatch job options, including explicit overrides and configured fallbacks.
+Raw manifest and launch defaults are not evidence of an effective request.
+When neither record exists, the requested selection remains unknown.
 Their export-time snapshot stays fixed during acknowledgment; later observations
 do not revoke approval of unchanged published bytes.
 Model IDs, including private deployment identifiers, still need publication

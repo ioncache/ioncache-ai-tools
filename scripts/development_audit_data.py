@@ -1,5 +1,6 @@
-"""Project review structure and explicitly publication-reviewed finding details."""
+"""Project publication-safe process metadata and reviewed finding details."""
 
+import json
 import re
 
 import development_manifest as plan
@@ -14,13 +15,19 @@ def category(value, categories):
 
 
 def finding_categories(item, categories):
-    values = set()
-    for observation in item["observations"]:
-        for evidence in observation["evidence"]:
-            for match in re.findall(r"(?:^|\s)review_type=([a-z][a-z0-9:-]*)", evidence):
-                if category(match, categories):
-                    values.add(match)
-    return sorted(values)
+    return sorted({value for observation in item["observations"]
+                   for evidence in observation["evidence"]
+                   for value in evidence_categories(evidence, categories)})
+
+
+def evidence_categories(evidence, categories):
+    try:
+        metadata = json.loads(evidence)
+    except (ValueError, RecursionError):
+        values = re.findall(r"(?:^|\s)review_type=([a-z][a-z0-9:-]*)", evidence)
+    else:
+        values = [metadata.get("review_type")] if isinstance(metadata, dict) else []
+    return {value for value in values if isinstance(value, str) and category(value, categories)}
 
 
 def review_passes(ledger, state):
@@ -56,8 +63,11 @@ def review_passes(ledger, state):
         if kind in ("review_done", "fixes_reviewed"):
             current["complete"] = True
             current["checks"] = [item["result"] for item in event.get("checks", [])]
-            current["categories"] = sorted({value for item in event["passes"]
-                                             if (value := category(item["name"], categories))})
+            current["categories"] = sorted({
+                value for item in event["passes"]
+                for value in (evidence_categories(item["evidence"], categories) or
+                              [category(item["name"], categories)])
+                if value is not None})
         if kind == "decision":
             current["decisions"][event["id"]] = event
         if kind == "advance":
@@ -80,6 +90,23 @@ def review_findings(state, event_pass):
         "decisions": [{key: event[key] for key in ("sequence", "validation", "disposition", "severity")}
                       for event in item["decisions"]],
     } for item in state["findings"].values()]
+
+
+def requested_models(state, pr):
+    allowed = {item["id"] for item in state["history"] if item["pr"] in (None, pr)}
+    selections = {}
+    for batch in state.get("handoffs", {}).values():
+        if batch["assignment"] not in allowed:
+            continue
+        for job in batch["spec"]["jobs"]:
+            options = job.get("options")
+            if not isinstance(options, dict):
+                continue
+            choice = {key: options.get(key) for key in ("model", "effort")}
+            values = selections.setdefault(job["role"], [])
+            if choice not in values:
+                values.append(choice)
+    return selections
 
 
 def issue_urls(values):

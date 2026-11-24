@@ -1052,6 +1052,48 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish(final)
 
     @pytest.mark.stable_storage
+    def test_audit_case_only_title_change_preserves_the_exact_new_pair_and_history(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            initial = audit.publish(state, active, exported["identity"])
+        self.audit_title = "Fixture Pull request"
+        state, active, replacement = self.audit_export()
+        safe_path = audit.review.safe_path
+
+        def case_insensitive_path(root, relative):
+            path = safe_path(root, relative)
+            # Exercise filesystem aliases on case-sensitive CI hosts too.
+            if root.name.startswith("audit-publish-") and not path.exists():
+                for entry in path.parent.iterdir():
+                    if entry.name.casefold() == path.name.casefold():
+                        return safe_path(root, str(entry.relative_to(root)))
+            return path
+
+        with patch.dict(os.environ, self.env, clear=True), \
+             patch.object(audit.review, "safe_path", side_effect=case_insensitive_path), \
+             patch.object(audit, "api", self.audit_api):
+            final = audit.publish(state, active, replacement["identity"])
+            self.assertEqual(audit.publish(state, active, replacement["identity"]), final)
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        pages = self.git("ls-tree", "--name-only", "FETCH_HEAD", root=self.wiki).splitlines()
+        old_page = unquote(initial["url"].rsplit("/", 1)[1])
+        new_page = unquote(final["url"].rsplit("/", 1)[1])
+        self.assertNotEqual(old_page, new_page)
+        self.assertEqual(old_page.casefold(), new_page.casefold())
+        self.assertEqual(sorted(name for name in pages if name.startswith("Audit:")),
+                         sorted([new_page + ".md", new_page + ".json"]))
+        for extension, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
+            expected = (Path(replacement["directory"]) / source).read_text().strip()
+            self.assertEqual(self.git("show", f"FETCH_HEAD:{new_page}{extension}", root=self.wiki), expected)
+            self.assertTrue(self.git("show", f"{initial['wiki_commit']}:{old_page}{extension}", root=self.wiki))
+        self.assertEqual(self.git("show", "FETCH_HEAD:Home.md", root=self.wiki), "Existing wiki content")
+        self.assertNotIn(initial["url"], self.audit_body)
+        self.assertIn(final["url"], self.audit_body)
+        self.assertEqual(len(self.audit_body_updates), 2)
+        self.finish(final)
+
+    @pytest.mark.stable_storage
     def test_publication_replaces_legacy_pages_without_deleting_other_pr_audits(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -5728,6 +5770,32 @@ class DevelopmentRunTests(unittest.TestCase):
             manifest.validate({**self.plan, "configuration": {
                 **self.plan["configuration"], "execution": {**execution, "models": {"unknown": {}}}
             }}, self.bundle)
+
+    @pytest.mark.stable_storage
+    def test_audit_models_use_effective_review_dispatch_without_advisory_records(self):
+        execution = self.plan["configuration"]["execution"]
+        execution["models"] = {
+            "reviewer": {"model": "manifest-reviewer", "effort": "high", "fallback": "fail"}}
+        execution["review_options"] = {"reviewer_model": "effective-reviewer", "reviewer_effort": "medium"}
+        batch, _, _ = self.dispatched_reviewers_fixture()
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        leaves = self.handoff("prepare")
+        jobs = self.claim_handoff(leaves)
+        self.assertTrue(jobs)
+        self.assertTrue(all(job["options"] == {"model": "effective-reviewer", "effort": "medium"}
+                            for job in jobs))
+        state = development.load(self.store)
+        public = {"summary": "Offline audit fixture", "method": "Prepared category dispatch",
+                  "verification": "No native models launched", "findings": [], "regressions": [], "limitations": []}
+        bundle = audit.build(state, state["active"], public)
+        self.assertEqual(bundle["models"], [])
+        self.assertEqual(bundle["requested_models"]["reviewer"],
+                         [{"model": "effective-reviewer", "effort": "medium"}])
+        report = audit.render({**bundle, "stage": "archive"}).decode()
+        self.assertIn("| Category reviewers | effective-reviewer | medium |", report)
+        self.assertNotIn("manifest-reviewer", report)
+        self.assertNotIn("PRIVATE-", json.dumps(bundle))
 
     def test_native_model_observation_requires_a_source_and_stays_separate_from_selection(self):
         self.init()
