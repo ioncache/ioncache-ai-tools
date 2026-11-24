@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.7 (2026-11-24)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* publish archived audits independently of run state ([#75](https://github.com/ioncache/ioncache-ai-tools/issues/75)) ([df6312f](https://github.com/ioncache/ioncache-ai-tools/commit/df6312f2d577983f7dbea009bf0ea292f7770efd))
+
 ## 1.13.6 (2026-11-24)
 
 ### New
