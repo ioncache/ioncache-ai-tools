@@ -188,6 +188,12 @@ IDs. The generated prompt names the candidate file as the result file plus
 `.candidate.json`, inside the private store. Candidates stay private. The script supplies development identities,
 validates full reports and pins submitted bytes. The collector reads these files
 and existing controller evidence, not the workflow's reported outcome.
+Relative candidate paths resolve from the private store; paths outside it and
+symlinks are still refused. `check-report STORE --batch B --job N --candidate FILE`
+checks the same candidate shape and role contract read-only, without accepting
+work or spending corrections. Generated development prompts name exact outcomes
+and required role data from the validator's definitions. The independent
+`autonomous-development-report-contract` opt-out removes that added text only.
 Malformed candidates and controller-rejected report content share two corrections
 after the initial failure when `autonomous-development-report-correction` is
 enabled. Missing reports and storage failures do not spend this allowance.
@@ -212,6 +218,14 @@ correction, and does not spend correction allowance. Legacy direct-controller
 assignments without generated batches retain their existing category checks;
 they do not acquire historical collection evidence.
 Exhaustion keeps the evidence incomplete and does not refund a role attempt.
+With `autonomous-development-report-recovery` enabled, the launcher can use
+`recover-report STORE --batch B --job N --candidate FILE --evidence TEXT
+--shutdown-evidence TEXT` once for an exhausted, started job in its claimed batch.
+Precheck the preserved candidate and establish native shutdown first. Recovery
+records the attempt before validation, keeps its evidence and candidate digest,
+uses unchanged validators and requires normal collection. It never repeats work,
+changes a limit or resets a counter. Failed recovery remains consumed; a validated
+receipt is idempotent, not another grant to alter accepted reports.
 See RECOVERY.md for exact recovery choices, executor restoration and known
 native-qualification limits.
 
@@ -267,6 +281,9 @@ Every report contains `assignment`, observed `worker` identity or JSON `null`, `
 (approved ID-to-digest map), and role-specific `data`. New workers also include
 `model_report`, the helper-written private observation path from MODELS.md.
 Older reports without it remain valid and their model identity stays unknown.
+Top-level `evidence` is a nonempty list of nonempty strings. For draft and ready
+reports, `data.evidence` is a single nonempty string about the observed PR state,
+alongside text `commit`, text `url`, and `state` exactly `draft` or `ready`.
 A worker cannot invent a
 host ID or treat an unobservable identity as verified. Preserve visibility
 limitations; an explicit verified-identity requirement still needs evidence.
@@ -472,6 +489,25 @@ If accepted code drifts, use `reconcile` with `--pr`,
 It schedules another review without reverting files, changing the original
 comparison base, or refunding attempts. Review the actual changed-file inventory,
 not a predicted path list. This does not authorize unrelated changes or rollback.
+It checks available review and assignment capacity before clearing acceptance.
+Exhaustion leaves the state unchanged, not a run that fails on the next reservation.
+
+For an already accepted, unchanged patch rebased onto its target, use
+`rebase-review STORE --revision N --pr ID --new-base COMMIT --reason TEXT`
+at an assignment boundary instead. The enabled-by-default
+`autonomous-development-rebase-review` feature requires a full new-base commit ID,
+approved-base ancestry, target-ref reachability, branch ancestry and valid
+retained review history. It replays the reviewed snapshot onto the new base with
+`git merge-tree --write-tree` and requires exact tree equality, including binary
+content, untracked files and modes, without writing the real Git index or objects.
+It appends durable `review_rebases` evidence, updates the accepted checkout and
+effective comparison base, and leaves the original review record and allowances
+unchanged. Future coverage checks use that effective base for this exact accepted
+review. An altered patch still requires counted review. Stale completed UI
+evidence and final audits are scheduled again within existing allowances before
+readiness; insufficient delivery capacity leaves acceptance unchanged.
+Publication, audit and UI evidence checks remain bound to the actual current commit.
+See RECOVERY.md for the command and verification limits.
 
 Accepted reviews without category-coverage records or a bound file inventory
 cannot authorize further commits or readiness. Use the same `reconcile` command

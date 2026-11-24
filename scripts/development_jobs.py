@@ -10,6 +10,7 @@ import development_manifest as plan
 import development_models as models
 import review_assignments as assignments
 import review_ledger as review
+import writing_guidance
 
 
 LEAVES = ("reviewer", "adjudicator", "validator", "fixer")
@@ -19,6 +20,90 @@ CAPABILITIES = ("artifact_access", "native_permissions", "fresh_workers",
 CAPABILITY_STATUSES = ("verified", "available", "deferred", "missing")
 # Capabilities preflight can observe read-only, so it must not defer them.
 CHECKED_CAPABILITIES = ("native_permissions", "audit_publication")
+REPORT_OUTCOMES = ("complete", "blocked", "waiting")
+DATA_CONTRACTS = {
+    "prepare": {"base": ("text", "Actual prepared base commit"),
+                "merged_dependencies": ("text-list", "Observed merged prerequisite PR IDs; may be empty")},
+    "implement": {},
+    "review": {"ledger": ("text", "Absolute retained review ledger path"),
+               "plan": ("text", "Absolute final full-phase plan path"),
+               "handoff": ("text", "Absolute checked final handoff path")},
+    "commit": {"commit": ("text", "Actual accepted commit at HEAD")},
+    "draft": {"commit": ("text", "Observed local and remote PR head commit"),
+              "url": ("text", "Existing owned PR URL"),
+              "evidence": ("text", "Observed publication evidence as one nonempty string, not a list"),
+              "state": ("draft", "Observed PR state, exactly draft")},
+    "ready": {"commit": ("text", "Observed local and remote PR head commit"),
+              "url": ("text", "Existing owned PR URL"),
+              "evidence": ("text", "Observed publication evidence as one nonempty string, not a list"),
+              "state": ("ready", "Observed PR state, exactly ready")},
+    "evidence": {"commit": ("text", "Commit depicted by the captured UI evidence"),
+                 "artifacts": ("nonempty-text-list", "Paths or URLs of the captured evidence")},
+}
+
+
+def data_contract(assignment, role):
+    if role == "preflight":
+        names = CAPABILITIES + (("audit_publication",) if assignment.get("audit", {}).get("enabled") else ())
+        return {name: ("capability", "Object with status (verified|available|deferred|missing) and "
+                       "nonempty text evidence; legacy true means verified. Record observations, not guesses.")
+                for name in names}
+    if role in ("audit-initial", "audit-final"):
+        if not assignment.get("audit", {}).get("enabled"):
+            return {"disabled": ("true", "Audit publication is disabled")}
+        return {name: ("text", "Copy unchanged from the audit helper's validated receipt")
+                for name in ("stage", "code_commit", "bundle", "wiki_commit", "url", "data_url", "index_url", "pr_url")}
+    return DATA_CONTRACTS.get(role, {})
+
+
+def report_contract(assignment, role):
+    if not assignment.get("report_contract_enabled", True):
+        return ""
+    schema = {key: {"type": kind, "meaning": meaning}
+              for key, (kind, meaning) in data_contract(assignment, role).items()}
+    return (
+        "\nDevelopment report contract:\n"
+        f"outcome must be exactly one of: {', '.join(REPORT_OUTCOMES)} (not completed).\n"
+        "Candidate fields: outcome, summary (nonempty text), evidence (nonempty list of nonempty text), "
+        "data (object); worker (text or null) and model_report (helper-written path) are optional. "
+        "submit generates assignment and approved artifact identities; finish requires the full report. "
+        "Required data fields for outcome complete: " + json.dumps(schema) + ". "
+        "text means a nonempty string; text-list permits an empty list, nonempty-text-list does not. "
+        "For blocked/waiting, report existing evidence and the limitation; data may be {}. "
+        "waiting is for preparation prerequisites, not a completed assignment. "
+        "Passing this schema is not acceptance; collection still checks effects and retained evidence.\n")
+
+
+def validate_data(assignment, role, data):
+    fields = data_contract(assignment, role)
+    missing = [name for name in fields if name not in data]
+    plan.require(not missing, f"Missing {role} data fields: {', '.join(missing)}")
+    errors = []
+    for name, (kind, _) in fields.items():
+        value = data[name]
+        if kind == "capability":
+            valid = value is True or (isinstance(value, dict) and set(value) == {"status", "evidence"} and
+                    value["status"] in CAPABILITY_STATUSES and isinstance(value["evidence"], str) and
+                    bool(value["evidence"].strip()))
+        elif kind.endswith("text-list"):
+            valid = (isinstance(value, list) and (bool(value) or kind == "text-list") and
+                     all(isinstance(item, str) and bool(item.strip()) for item in value))
+        elif kind == "text":
+            valid = isinstance(value, str) and bool(value.strip())
+        else:
+            valid = value is True if kind == "true" else value == kind
+        if not valid:
+            errors.append(f"data.{name} must be {kind}; got {value!r}")
+    plan.require(not errors, "; ".join(errors))
+
+
+def report_fields(value, required, optional, label):
+    plan.require(isinstance(value, dict), f"{label} must be an object")
+    missing, unexpected = required - value.keys(), value.keys() - required - optional
+    errors = ([f"missing fields: {', '.join(sorted(missing))}"] if missing else [])
+    if unexpected:
+        errors.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
+    plan.require(not errors, f"{label}: " + "; ".join(errors))
 
 
 def read_bytes(path):
@@ -93,8 +178,10 @@ def review_requests(assignment, requests):
     seen = set()
     for request in requests:
         plan.require(isinstance(request, dict) and {"role", "prompt", "result_file"} <= request.keys() <=
-                     {"role", "prompt", "result_file", "packet"}, "Invalid review request fields")
+                     {"role", "prompt", "result_file", "packet", "writing_plan"}, "Invalid review request fields")
         plan.require(request["role"] in LEAVES, "Unsupported review role")
+        plan.require("writing_plan" not in request or request["role"] == "fixer",
+                     "Only fixer requests may carry a writing_plan; keep read-only roles isolated")
         path = str(report_path(assignment, request["result_file"]))
         plan.require(path not in seen, "Review reports must have distinct paths")
         seen.add(path)
@@ -147,7 +234,8 @@ def instructions(assignment, request, executor):
             json.dumps(request["packet"]))
     if role in LEAVES:
         return ("Perform only this purpose-specific assignment. Do not launch agents or write the review ledger. "
-                "Only fixer may edit approved project files; never commit or publish.\n" + request["prompt"])
+                "Only fixer may edit approved project files; never commit or publish.\n" +
+                writing_guidance.job_guidance(assignment, request, executor) + request["prompt"])
     references = f"{executor}/skills/autonomous-development/WORKERS.md"
     if role == "review-owner":
         return (
@@ -157,16 +245,22 @@ def instructions(assignment, request, executor):
             "them. A reconciled batch permits this validation, never another launch. "
             "Prepare and persist frozen phase plans before requesting leaves. Each reviewer needs its exact "
             "single-purpose packet and an empty prompt. Other requests contain only their role's instructions. "
+            "Each fixer request also names writing_plan with the saved phase's absolute path and identity; "
+            "the generator supplies its writing standards, not additional finding authority. "
             "Write outcome dispatch with requests, or complete/blocked with the final development report path. "
             "Never repeat completed passes or started reservations. Assess isolation claims through the "
             "adjudicator; ambient instructions and evidence-only reads are not contamination. "
             "A not_started reference is not a report. Reuse an unchanged unstarted reservation, not its budget. "
-            "Missing native observations remain unknown.\nAssignment data: " + json.dumps(assignment))
+            "Missing native observations remain unknown. The following development contract applies only "
+            "to the final nested report, not dispatch requests.\n" + report_contract(assignment, "review") +
+            "\nAssignment data: " + json.dumps(assignment))
     return (
         f"Perform the bounded {role} assignment in {references}. Read the pinned artifacts and approved "
         "constraints. Before any external effect, inspect actual state and existing reports for replay. "
         "Do not launch agents, expand the approved plan, or repair the executing plugin. " +
         authorization(assignment, role) +
+        writing_guidance.job_guidance(assignment, request, executor) +
+        report_contract(assignment, role) +
         "Write the development report to the assigned result file.\nAssignment data: " + json.dumps(assignment))
 
 
@@ -224,13 +318,18 @@ def preflight_capabilities(data, audit=False):
 
 def development_report(assignment, report):
     required = {"assignment", "worker", "outcome", "summary", "evidence", "artifacts", "data"}
-    plan.require(isinstance(report, dict) and required <= report.keys() <= required | {"model_report"},
-                 "Development report requires assignment, worker, outcome, summary, evidence, artifacts, data")
+    report_fields(report, required, {"model_report"}, "Development report")
     plan.require(report["assignment"] == assignment["id"], "assignment does not match the active assignment")
-    plan.require(report["outcome"] in ("complete", "blocked", "waiting"), "Invalid report outcome")
-    plan.require(isinstance(report["summary"], str) and bool(report["summary"].strip()), "summary is required")
-    plan.strings(report["evidence"])
-    plan.require(report["worker"] is None or isinstance(report["worker"], str), "worker must be text or null")
+    plan.require(report["outcome"] in REPORT_OUTCOMES,
+                 f"Invalid report outcome {report['outcome']!r}; allowed: {', '.join(REPORT_OUTCOMES)}")
+    plan.require(isinstance(report["summary"], str) and bool(report["summary"].strip()),
+                 "summary must be nonempty text")
+    plan.require(isinstance(report["evidence"], list) and bool(report["evidence"]) and
+                 all(isinstance(item, str) and bool(item.strip()) for item in report["evidence"]),
+                 "evidence must be a nonempty list of nonempty text")
+    plan.require(report["worker"] is None or
+                 (isinstance(report["worker"], str) and bool(report["worker"].strip())),
+                 "worker must be nonempty text or null")
     plan.require(report["artifacts"] == {item["id"]: item["sha256"] for item in assignment["artifacts"]},
                  "artifacts do not match approved input identities")
     plan.require(isinstance(report["data"], dict), "data must be an object")
@@ -240,7 +339,8 @@ def validate(assignment, job, report):
     role = job["role"]
     if role == "review-owner":
         plan.fields(report, "outcome requests result_file")
-        plan.require(report["outcome"] in ("dispatch", "complete", "blocked"), "Invalid owner outcome")
+        plan.require(report["outcome"] in ("dispatch", "complete", "blocked"),
+                     f"Invalid owner outcome {report['outcome']!r}; allowed: dispatch, complete, blocked")
         if report["outcome"] == "dispatch":
             plan.require(report["result_file"] == "", "Dispatch owner result_file must be empty")
             review_requests(assignment, report["requests"])
@@ -257,14 +357,9 @@ def validate(assignment, job, report):
         development_report(assignment, report)
         if report["outcome"] == "complete":
             data = report["data"]
+            validate_data(assignment, role, data)
             if role == "preflight":
                 preflight_capabilities(data, audit=bool(assignment.get("audit", {}).get("enabled")))
-            fields = {"prepare": ("base", "merged_dependencies"), "commit": ("commit",),
-                      "draft": ("commit", "url", "evidence", "state"),
-                      "ready": ("commit", "url", "evidence", "state"),
-                      "evidence": ("commit", "artifacts")}
-            plan.require(all(key in data for key in fields.get(role, ())),
-                         f"Missing {role} data fields: {', '.join(fields.get(role, ()))}")
         return
     plan.require(isinstance(report, dict) and report.get("outcome") in ("complete", "partial", "failed", "blocked"),
                  "Leaf report requires a complete, partial, failed or blocked outcome")
@@ -279,9 +374,6 @@ def validate(assignment, job, report):
 def candidate_report(assignment, job, candidate):
     if job["role"] in LEAVES or job["role"] == "review-owner":
         return candidate
-    plan.require(isinstance(candidate, dict) and
-                 {"outcome", "summary", "evidence", "data"} <= candidate.keys() <=
-                 {"worker", "outcome", "summary", "evidence", "data", "model_report"},
-                 "Candidate requires outcome, summary, evidence, data; worker/model_report are optional")
+    report_fields(candidate, {"outcome", "summary", "evidence", "data"}, {"worker", "model_report"}, "Candidate")
     return {"assignment": assignment["id"], "worker": None,
             "artifacts": {item["id"]: item["sha256"] for item in assignment["artifacts"]}, **candidate}

@@ -119,6 +119,12 @@ async function persistedScenario(fixture) {
    */
   async function agent(prompt, options) {
     roles.push(options.label)
+    assert.equal(prompt.includes('# Writing quality'), options.label === 'implement')
+    if (options.label === 'implement') {
+      assert(prompt.includes('Before reporting, self-check your actual diff'))
+      assert(prompt.includes('read and reconcile the surrounding context'))
+      assert(prompt.includes('Writing standards: '))
+    }
     const expected = fixture.expected_models?.[options.label]
     if (expected) {
       assert.equal(options.model, expected.model)
@@ -241,6 +247,30 @@ async function persistedScenario(fixture) {
  * await main()
  */
 async function main() {
+  if (process.argv[2] === '--writer-prompts') {
+    const jobs = JSON.parse(fs.readFileSync(0, 'utf8'))
+    for (const job of jobs) {
+      const spec = { batch: 'B000001', assignment: 'A0001', store: '/private/run',
+        pluginRoot: '/plugin', jobs: [job] }
+      let calls = 0
+      const result = await execute(source.replace('const handoff = null', `const handoff = ${JSON.stringify(spec)}`),
+        async (prompt, options) => {
+          calls += 1
+          const writer = ['implement', 'fixer'].includes(options.label)
+          assert.equal(prompt.includes('# Writing quality'), writer)
+          assert.equal(prompt.includes('Before reporting, self-check your actual diff'), writer)
+          if (writer) {
+            assert(prompt.includes('read and reconcile the surrounding context'))
+            assert(prompt.includes('Writing standards: '))
+          }
+          return null
+        })
+      assert.equal(calls, 1)
+      assert.equal(result.observations.length, 1)
+      assert(!result.observations[0].error, result.observations[0].error)
+    }
+    return
+  }
   if (process.argv[2] === '--inprocess-controller') {
     const fixture = readMessage()
     const result = await persistedScenario({ ...fixture, bridge: true })

@@ -70,16 +70,18 @@ def verify_plan(plan):
                 "Packet differs from frozen instruction resources")
 
 
-def resource(name):
-    path = (RESOURCES / name).resolve()
-    require(path.is_relative_to(RESOURCES.resolve()), "Resource escapes the shipped directory")
+def resource(name, resources=None):
+    resources = resources or RESOURCES
+    path = (resources / name).resolve()
+    require(path.is_relative_to(resources.resolve()), "Resource escapes the shipped directory")
     content = path.read_text()
     text(content, "Resource content")
     return {"source": str(path), "content": content, "identity": digest(content)}
 
 
-def catalog():
-    value = json.loads((RESOURCES / "categories.json").read_text())
+def catalog(resources=None):
+    resources = resources or RESOURCES
+    value = json.loads((resources / "categories.json").read_text())
     require(value["schema"] == 1, "Unsupported category catalog")
     ids = [item["id"] for item in value["categories"]]
     strings(ids, "Category IDs")
@@ -94,16 +96,16 @@ def project_source(value):
     return {**value, "content_identity": digest(value["content"])}
 
 
-def effective_registry(request):
+def effective_registry(request, resources=None):
     features = request["review_options"]["configuration"]["review_features"]
     require(isinstance(features, dict), "Normalize current review configuration first")
     registry = {}
-    for item in catalog()["categories"]:
+    for item in catalog(resources)["categories"]:
         require(type(features.get(item["feature"])) is bool,
                 f"Missing current configuration for {item['feature']}")
         registry[item["id"]] = {
             **item, "enabled": features[item["feature"]],
-            "sources": [resource(item["source"])], "project_sources": [],
+            "sources": [resource(item["source"], resources)], "project_sources": [],
         }
     for descriptor in request.get("project_categories", []):
         require(isinstance(descriptor, dict), "Project category needs a descriptor")

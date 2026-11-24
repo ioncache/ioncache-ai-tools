@@ -19,6 +19,7 @@ from development_jobs import MAX_JSON_BYTES, read_bytes
 import development_manifest as plan
 import development_models as models
 import development_run as run
+import plugin_config
 import review_ledger as review
 
 
@@ -486,29 +487,77 @@ def report_failure(record, number, error, settings, *, receipt=None):
                         "Correct only the report from existing evidence; do not repeat external effects.")
 
 
-def write_candidate(assignment, record, args):
-    folder = Path(assignment["store"])
-    job = selected_job(record, args.job)
-    candidate_path = Path(args.candidate)
-    plan.require(candidate_path.is_absolute() and candidate_path.is_relative_to(folder),
-                 "Candidate must be an absolute path inside the private run store")
-    candidate_path = review.safe_path(folder, str(candidate_path.relative_to(folder)))
-    candidate, _ = read_document(candidate_path, record, args.job)
+def candidate_path(folder, value):
+    path = Path(value)
+    if not path.is_absolute():
+        path = folder / path
+    plan.require(path.is_relative_to(folder), "Candidate must be inside the private run store; "
+                 "relative paths are resolved from that store")
+    return review.safe_path(folder, str(path.relative_to(folder)))
+
+
+def candidate_reports(assignment, job, candidate):
+    development = None
     if job["role"] == "review-owner" and isinstance(candidate, dict) and "report" in candidate:
         plan.fields(candidate, "outcome requests report")
         plan.require(candidate["requests"] == [] and candidate["outcome"] in ("complete", "blocked"),
                      "An owner development report must complete or block, without dispatch requests")
         development = jobs.candidate_report(assignment, {"role": "review"}, candidate["report"])
         jobs.development_report(assignment, development)
+        if development["outcome"] == "complete":
+            jobs.validate_data(assignment, "review", development["data"])
         plan.require(development["outcome"] == candidate["outcome"], "Owner report outcomes differ")
-        reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))
-        review.atomic_write(reference, plan.encode(development))
         candidate = {"outcome": candidate["outcome"], "requests": [],
                      "result_file": assignment["result_file"]}
     report = jobs.candidate_report(assignment, job, candidate)
     jobs.validate(assignment, job, report)
+    return report, development
+
+
+def check_report(folder, args):
+    state = run.load(folder)
+    catalog = plugin_config.defaults()
+    disabled = plugin_config.synchronize(state["root"], catalog=catalog, persist=False, strict=True)
+    settings = run.feature(Path(state["root"]),
+                           plugin_config.FeatureSettings(frozenset(catalog), frozenset(disabled)))
+    executor.require_current(folder)
+    record = batch_record(state, args.batch)
+    assignment = assignment_for(state, record, settings)
+    job = selected_job(record, args.job)
+    candidate = read_json(candidate_path(folder, args.candidate))
+    report, _ = candidate_reports(assignment, job, candidate)
+    if job["role"] == "review-owner" and report["outcome"] == "dispatch":
+        require_launchable(folder, record, assignment, report["requests"])
+    return {"valid": True, "accepted": False,
+            "next": "Submit or recover-report, then collect for the unchanged acceptance checks"}
+
+
+def write_candidate(assignment, record, args):
+    folder = Path(assignment["store"])
+    job = selected_job(record, args.job)
+    candidate, identity = read_document(candidate_path(folder, args.candidate), record, args.job)
+    report, development = candidate_reports(assignment, job, candidate)
+    if development is not None:
+        reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))
+        review.atomic_write(reference, plan.encode(development))
     path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
     review.atomic_write(path, plan.encode(report))
+    return identity
+
+
+def begin_report_recovery(record, args, settings):
+    feature = "autonomous-development-report-recovery"
+    plan.require(feature in settings.catalog and feature not in settings.disabled,
+                 "Report recovery is disabled; precheck and existing evidence remain available")
+    key = str(args.job)
+    plan.require(record["failures"].get(key, 0) >= correction_limit(settings),
+                 "Report allowance remains; use submit or finish for this job")
+    plan.require(key not in record.get("report_recoveries", {}),
+                 "This job's report recovery was already used; preserve its result and remaining evidence")
+    plan.text(args.evidence)
+    plan.text(args.shutdown_evidence)
+    record.setdefault("report_recoveries", {})[key] = {
+        "evidence": args.evidence, "shutdown_evidence": args.shutdown_evidence, "outcome": "attempted"}
 
 
 def submit(folder, args):
@@ -544,18 +593,36 @@ def submit(folder, args):
             record["submitted"][key] = snapshot["receipt"]
             persist(folder, state)
             return {"valid": True, **snapshot["receipt"]}
-        plan.require(record["failures"].get(key, 0) < correction_limit(settings),
-                     "Report correction allowance exhausted; preserve candidates and reconcile the assignment")
+        recovery = args.command == "recover-report"
+        if recovery:
+            begin_report_recovery(record, args, settings)
+            persist(folder, state)
+        else:
+            plan.require(record["failures"].get(key, 0) < correction_limit(settings),
+                         "Report correction allowance exhausted; use check-report on the preserved candidate, "
+                         "then recover-report with evidence and shutdown-evidence. Do not repeat worker effects.")
         path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            if args.command == "submit":
-                write_candidate(assignment, record, args)
+            if args.command in ("submit", "recover-report"):
+                identity = write_candidate(assignment, record, args)
+                if recovery:
+                    record["report_recoveries"][key]["candidate_sha256"] = identity
             snapshot = report_for(assignment, record, args.job)
         except FileNotFoundError as error:
+            if recovery:
+                record["report_recoveries"][key].update(outcome="failed", error=str(error))
+                persist(folder, state)
+                raise HandoffError("missing_report", "Recovery candidate or report is absent; the recorded "
+                                   "recovery remains consumed. Preserve the existing evidence.") from error
             raise HandoffError("missing_report", "Report or candidate is absent; inspect native activity and "
                                "retry finish/submit when the original file is available. No attempt consumed.") from error
         except (ValueError, KeyError, TypeError) as error:
+            if recovery:
+                record["report_recoveries"][key].update(outcome="failed", error=str(error))
+                persist(folder, state)
+                raise HandoffError("invalid_report", f"{error}. The one report recovery was consumed; "
+                                   "preserve evidence without repeating external effects.") from error
             failure = report_failure(record, args.job, error, settings)
             persist(folder, state)
             raise failure from error
@@ -565,6 +632,8 @@ def submit(folder, args):
         if previous:
             record.setdefault("submission_history", {}).setdefault(key, []).append(previous)
         record["submitted"][key] = snapshot["receipt"]
+        if recovery:
+            record["report_recoveries"][key].update(outcome="validated", receipt=snapshot["receipt"])
         record.get("rejected", {}).pop(key, None)
         progress(state, record, job, "reported", settings)
         persist(folder, state)
@@ -705,7 +774,8 @@ def resume_prepared(folder, args):
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     commands = cli.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "claim", "start", "finish", "submit", "collect", "restore-executor",
+    for name in ("prepare", "claim", "start", "finish", "submit", "check-report", "recover-report",
+                 "collect", "restore-executor",
                  "repair-script", "resume-prepared", "release"):
         command = commands.add_parser(name)
         command.add_argument("store")
@@ -720,10 +790,13 @@ def parser():
             command.add_argument("--shutdown-evidence", required=True)
         else:
             command.add_argument("--batch", required=True)
-        if name in ("start", "finish", "submit"):
+        if name in ("start", "finish", "submit", "check-report", "recover-report"):
             command.add_argument("--job", type=int, required=True)
-        if name == "submit":
+        if name in ("submit", "check-report", "recover-report"):
             command.add_argument("--candidate", required=True)
+        if name == "recover-report":
+            command.add_argument("--evidence", required=True)
+            command.add_argument("--shutdown-evidence", required=True)
         if name == "resume-prepared":
             command.add_argument("--reason", required=True)
         if name == "release":
@@ -737,6 +810,7 @@ def main():
     try:
         operations = {"prepare": prepare, "claim": claim, "start": start,
                       "submit": submit, "finish": submit, "collect": collect,
+                      "check-report": check_report, "recover-report": submit,
                       "restore-executor": restore_executor, "repair-script": repair_script,
                       "resume-prepared": resume_prepared, "release": release}
         result = operations[args.command](Path(args.store).resolve(), args)

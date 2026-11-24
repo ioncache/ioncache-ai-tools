@@ -72,10 +72,12 @@ def executor_source(tmp_path_factory):
         "scripts/development_run.py", "scripts/development_handoff.py", "scripts/review_ledger.py",
         "workflows/autonomous-development.js", ".claude-plugin/plugin.json",
         "skills/autonomous-development/WORKERS.md",
+        "skills/review-code/WRITING.md", "skills/review-code/categories.json",
     ):
         destination = source / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / name, destination)
+    shutil.copytree(root / "skills/review-code/categories", source / "skills/review-code/categories")
     return source
 
 

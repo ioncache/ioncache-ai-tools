@@ -196,6 +196,14 @@ resolved native role models/efforts, with explicit overrides and separate
 requested/observed model records. Independent review leaves run concurrently;
 fixers remain sequential. Recovery preserves work and consumed allowances;
 stopping a run does not roll back its implementation.
+
+Implementers and fixers receive the same applicable standards as reviewers,
+plus surrounding-context and diff self-check guidance. Reports include explicit
+role contracts and a read-only precheck; exhausted report corrections have one
+evidence-based recovery without repeating work. An unchanged reviewed patch can
+recover after a target-branch rebase without spending another review.
+See [skills/autonomous-development/RECOVERY.md](skills/autonomous-development/RECOVERY.md).
+
 The adapter is **not yet live-host qualified**; offline checks do not establish
 unattended permissions, cloud operation, or shared team controls.
 

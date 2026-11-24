@@ -26,6 +26,7 @@ async function launch(job, index) {
   const finish = [...command, 'finish', ...boundary]
   const candidate = `${job.result_file}.candidate.json`
   const submit = [...command, 'submit', ...boundary, '--candidate', candidate]
+  const check = [...command, 'check-report', ...boundary, '--candidate', candidate]
   const model = ['python3', `${handoff.pluginRoot}/scripts/development_run.py`, 'model-report',
     handoff.store, '--invocation', handoff.batch, '--call', String(index + 1),
     '--assignment', handoff.assignment, '--role', job.role]
@@ -47,12 +48,17 @@ For a development report, the helper can supply assignment and artifact identity
 Write the candidate to ${JSON.stringify(candidate)}, inside the private run store, then run:
 Submit arguments: ${JSON.stringify(submit)}
 Candidate fields: outcome, summary, evidence, data; optional worker and model_report.
+Use the exact Development report contract below for allowed outcomes and this role's data fields.
+Before submission, check the candidate without spending corrections:
+Check arguments: ${JSON.stringify(check)}
 Review leaves keep their purpose-specific full report contract; owners write their dispatch/final request.
 For owner completion, submit outcome, empty requests, and report containing the development candidate;
 the helper supplies the final report path and identities.
 If validation fails, use its exact errors to correct only the report from existing evidence, within
 the reported correction allowance. Never rerun implementation, commits or publication to repair JSON.
 Do not fabricate observations to satisfy validation. Preserve earlier evidence and failed candidates.
+If corrections are exhausted, leave the candidate and return the error. After confirming native shutdown,
+the launcher can precheck it and use the one recover-report submission; never relaunch work to fix JSON.
 Return only an advisory notification after the helper validates the file. Native success is not acceptance.
 ${job.prompt}`,
       { label: job.role, ...job.options, schema: {
