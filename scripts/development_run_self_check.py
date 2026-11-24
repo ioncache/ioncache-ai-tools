@@ -555,6 +555,91 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
+    @pytest.mark.stable_storage
+    def test_preexisting_no_action_finding_reaches_pr_draft_and_final_report(self):
+        self.plan["permissions"]["create_follow_up_issues"] = True
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.execute_fixture(self.next())
+        self.assertEqual(self.next()["role"], "review")
+        data = self.review(root, record=False, advance=False)
+        state = self.review_cli(root, ["status", data["ledger"]])
+        for index, (key, validation, material) in enumerate(
+                (("preexisting", "valid", True), ("invalid", "invalid", True), ("style", "valid", False)), 1):
+            details = {"key": key, "title": f"{key} issue", "summary": f"{key} evidence summary",
+                       "validation": validation, "material": material, "sensitive": False,
+                       "introduced": False, "report_action": "None", "locations": ["app.txt:1"],
+                       "reason": "Not introduced by this change", "evidence": ["Verified fixture premise"]}
+            events = [
+                {"type": "finding", "key": key, "summary": details["title"], "severity": "Low",
+                 "locations": ["app.txt:1"], "evidence": ["Fixture observation"]},
+                {"type": "decision", "id": f"F{index:03}", "validation": validation,
+                 "disposition": "ignored", "severity": "Low",
+                 "evidence": [json.dumps({"assessment": details})]},
+            ]
+            for event in events:
+                event.update(actor="fixture-owner", reason="Not introduced by this change")
+                state = self.review_cli(root, ["apply", data["ledger"], "--revision", str(state["revision"])], event)
+        self.review_cli(root, ["apply", data["ledger"], "--revision", str(state["revision"])],
+                        {"type": "advance", "actor": "fixture-owner", "reason": "No in-scope corrections"})
+        status = self.review_cli(root, ["status", data["ledger"]])
+        self.assertEqual([item["key"] for item in status["known_issues"]], ["preexisting"])
+        self.finish(data)
+        self.execute_fixture(self.next())
+        draft = self.next()
+        self.assertEqual(draft["role"], "draft")
+        self.assertTrue(draft["follow_ups"]["enabled"])
+        self.assertIn("preexisting issue", draft["progress"]["known_issues_report"])
+        self.assertIn("preexisting issue", draft["progress"]["known_issues_pr_draft"])
+        self.assertIn("Not introduced by this change", draft["progress"]["known_issues_pr_draft"])
+        prompt = handoffs.jobs.instructions(draft, {"role": "draft"}, "/pinned")
+        self.assertIn("Known issues not fixed here", prompt)
+        self.assertIn("Create or reuse follow-up issues automatically", prompt)
+        self.execute_fixture(draft)
+        while self.next():
+            self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.state["outcome"], "completed")
+        result = self.cli("status", self.store)["prs"]["first"]
+        self.assertIn("preexisting issue", result["known_issues_report"])
+        self.assertNotIn("invalid issue", result["known_issues_report"])
+        self.assertNotIn("style issue", result["known_issues_report"])
+        self.assertEqual(result["counted_only"], 2)
+        self.assertEqual(result["follow_up_issues"]["preexisting"]["status"], "not_filed")
+        self.assertIn("not_filed", result["known_issues_report"])
+
+    def test_follow_up_approval_remains_optional_and_strictly_boolean(self):
+        self.init()
+        self.assertFalse(self.next()["follow_ups"]["enabled"])
+        self.assertNotIn("create_follow_up_issues", development.load(self.store)["manifest"]["permissions"])
+        self.plan["permissions"]["create_follow_up_issues"] = "true"
+        self.path.write_bytes(manifest.encode(self.plan))
+        self.assertIn("explicit booleans", self.cli("validate", self.path, ok=False))
+
+    @pytest.mark.stable_storage
+    def test_blocked_review_still_retains_named_findings_for_the_final_report(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.execute_fixture(self.next())
+        self.assertEqual(self.next()["role"], "review")
+        data = self.review(root, record=False, finding=True, advance=False)
+        state = self.review_cli(root, ["status", data["ledger"]])
+        events = [
+            {"type": "decision", "id": "F001", "validation": "valid", "disposition": "out_of_scope",
+             "severity": "Low", "evidence": ["Established a real pre-existing problem"]},
+            {"type": "stop", "outcome": "blocked"},
+        ]
+        for event in events:
+            event.update(actor="fixture-owner", reason="Remaining investigation unavailable")
+            state = self.review_cli(root, ["apply", data["ledger"], "--revision", str(state["revision"])], event)
+        self.finish(data, outcome="blocked")
+        self.assertEqual(self.state["outcome"], "blocked")
+        report = self.state["prs"]["first"]["known_issues_report"]
+        self.assertIn("PRIVATE-AUDIT-SENTINEL", report)
+        self.assertIn("Remaining investigation unavailable", report)
+        self.assertIsNone(development.load(self.store)["prs"]["first"]["accepted"])
+
     def execute_fixture(self, assignment):
         root = Path(assignment["root"])
         role = assignment["role"]

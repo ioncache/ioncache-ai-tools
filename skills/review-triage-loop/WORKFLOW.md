@@ -133,9 +133,9 @@ earlier reportable claim. Record the old and new assessments and why.
 
 ## Filter the report, not the investigation
 
-A finding is reportable when it warrants `Act`, `Decide`, or `Investigate`
+A finding belongs in the main action list when it warrants `Act`, `Decide`, or `Investigate`
 under the shared actionability policy. Map opportunistic and no-action
-dispositions to non-reportable `None`; preserve their reasons in the ledger.
+dispositions to `None` for that list; preserve their reasons in the ledger.
 Do not use a finding quota, inflate severity, or suppress consequential
 uncertainty to improve an apparent success ratio.
 
@@ -145,6 +145,10 @@ them into a second reading assignment or an unsolicited cleanup backlog.
 Never silently accept a material risk solely to shorten the report.
 Out-of-scope material risks should be clearly separated from in-scope actions;
 their discovery does not authorize expanding the reviewed target.
+Name valid or credibly uncertain unresolved material findings under
+**Known issues not fixed here**, following
+[../review-code/KNOWN_ISSUES.md](../review-code/KNOWN_ISSUES.md), even with action
+`None`. Track `material` independently from action and disposition.
 
 Keep uncertain findings visibly uncertain. Do not describe a proposed
 investigation or product decision as a verified defect or an authorized fix.
@@ -161,7 +165,7 @@ A completed triage can retain consequential product decisions or evidence
 questions as reportable uncertainties without pretending they are resolved.
 
 Count a canonical ID as newly reportable only the first time it enters Act,
-Decide, or Investigate. A previously suppressed issue can become newly
+Decide, Investigate, or Known issues not fixed here. A previously suppressed issue can become newly
 reportable. Promoting an already reported uncertainty to an action, reopening
 an earlier reported issue, or withdrawing a mistaken report is a material
 update, not another unique issue.
@@ -208,6 +212,8 @@ Do not repeat suppressed items unless explicitly requested.
 
 At termination, return the same table and the full current prioritized list
 of worthwhile actions and consequential uncertainties, with originating rounds.
+Include the current Known issues not fixed here section even when the main
+action list is empty. An unchanged known issue does not reset the quiet streak.
 Group shared corrections without double counting issues. Include coverage
 limitations, required checks not performed, unresolved material assumptions,
 the stop reason, and the absolute ledger path. Rejected and low-value entries

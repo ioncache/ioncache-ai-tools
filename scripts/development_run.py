@@ -26,6 +26,7 @@ import development_models as models
 import development_dispatch as dispatches
 import development_jobs as jobs
 import development_rebase as rebases
+import development_followups as followups
 import review_assignments as assignments
 import review_ledger as review
 
@@ -491,6 +492,7 @@ def review_result(state, assignment, data):
     preserve_checkout(assignment, after)
     unchanged(after, capture(root))
     progress["accepted"] = after
+    followups.retain(progress, report)
     progress["review"] = report
 
 
@@ -587,6 +589,7 @@ def delivery_result(state, assignment, data, settings):
     if progress["url"]:
         plan.require(progress["url"] == data["url"], "Publication cannot replace the owned PR")
     progress["url"] = data["url"]
+    followups.record(progress, data, state["manifest"], settings)
 
 
 @contextmanager
@@ -623,6 +626,14 @@ def complete(state, report, settings):
         else:
             state["outcome"] = "blocked"
             state.pop("stop_kind", None)
+            if active["role"] == "review" and report["data"].get("ledger"):
+                try:
+                    retained = review.status(SimpleNamespace(ledger=report["data"]["ledger"]),
+                                             Path(active["root"]))
+                    followups.retain(state["prs"][active["pr"]], retained)
+                except (ValueError, OSError):
+                    state["prs"][active["pr"]]["finding_reporting_error"] = (
+                        "Incomplete review findings unavailable; inspect the retained worker report.")
         active.update(worker=report["worker"], outcome=report["outcome"], report=report)
         state["history"][-1] = active
         state["active"] = None
@@ -715,11 +726,12 @@ def request(state, settings):
             "pr_plan": plan.indexed(manifest["prs"]).get(assignment["pr"]),
             "task_plan": task_details(manifest, assignment["task"]),
             "dependencies": {
-                key: progress_summary(state["prs"][key])
+                key: progress_summary(state["prs"][key], settings)
                 for key in (plan.indexed(manifest["prs"])[assignment["pr"]]["dependencies"]
                             if assignment["pr"] else [])
             },
-            "progress": progress_summary(state["prs"][assignment["pr"]]) if assignment["pr"] else None,
+            "progress": progress_summary(state["prs"][assignment["pr"]], settings) if assignment["pr"] else None,
+            "follow_ups": followups.policy(manifest, settings),
             "audit": {"enabled": audit_enabled(state, settings),
                       "index_url": audit.wiki_index(state) if audit_enabled(state, settings) else None},
             "monitoring": {"enabled": monitoring.enabled(settings)},
@@ -729,8 +741,10 @@ def request(state, settings):
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
 
-def progress_summary(progress):
-    result = {key: value for key, value in progress.items() if key not in ("accepted", "review", "changed")}
+def progress_summary(progress, settings):
+    result = {key: value for key, value in progress.items()
+              if key not in ("accepted", "review", "changed", "finding_inventory")}
+    result.update(followups.presentation(progress, settings))
     reviewed = progress.get("review")
     if reviewed:
         result["review"] = {"ledger": reviewed["ledger"], "outcome": reviewed["outcome"],
@@ -765,7 +779,7 @@ def summary(state, settings=None):
             "model_selection": model_policy(state, settings),
             "input_error": input_error(state),
             "consumed_assignments": len(state["history"]), "limits": state["manifest"]["limits"],
-            "prs": {key: progress_summary(value) for key, value in state["prs"].items()},
+            "prs": {key: progress_summary(value, settings) for key, value in state["prs"].items()},
             "assignment": request(state, settings),
             "usage": "Model tokens, cost, and native retries are not measured by this ledger"}
 

@@ -20,7 +20,7 @@ REVIEW_FIELDS = ("model_selection", "fallback", "strategy") + tuple(
 POSTING_FIELDS = ("post_comments", "post_sensitive")
 SENSITIVE_POLICIES = ("none", "private", "all")
 POSTING_FEATURE = "review-post-comments"
-NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE)
+NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE, "review-known-issues")
 
 
 class PostingConflict(ValueError):
@@ -224,6 +224,7 @@ def read_configuration(skill):
             "review-auto-model-selection" in catalog and "review-auto-model-selection" not in disabled
         ),
         "post_comments_enabled": POSTING_FEATURE in catalog and POSTING_FEATURE not in disabled,
+        "known_issues_enabled": "review-known-issues" in catalog and "review-known-issues" not in disabled,
         "review_features": {name: name not in disabled for name in catalog
                             if name.startswith("review-") and name not in NON_CATEGORY_FEATURES},
     }

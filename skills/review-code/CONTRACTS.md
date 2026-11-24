@@ -160,7 +160,13 @@ documentation accuracy, test gaps, and extreme-edge-case exclusions. A valid
 style deviation can have `report_action: None`; a consequential uncertainty
 can have `report_action: Investigate` without a known fix.
 
-Each reportable assessment (`Act`, `Decide`, or `Investigate`) also has:
+Every assessment records `material: true` for an evidenced defect or credible
+consequential uncertainty, or `false` for a style-only or genuinely immaterial
+observation, with its reason. Record `duplicate_of` only for a true duplicate,
+using its canonical key. Disposition and publication do not change materiality.
+
+Each reportable assessment (`Act`, `Decide`, or `Investigate`), and each valid
+or uncertain material assessment even with `report_action: None`, also has:
 
 - `title`: a one-line headline.
 - `summary`: the trigger, behaviour and consequence, and the requirement it
@@ -174,6 +180,12 @@ Each reportable assessment (`Act`, `Decide`, or `Investigate`) also has:
 - `done_when`: the test or check that shows the correction worked, or `null`
   when none is identified.
 - `locations`: every affected `path:line`, plus affected callers or documentation.
+- `sensitive`: whether public disclosure could expose an exploitable weakness
+  or personal data. Missing disclosure assessment is not clearance to publish.
+
+Use [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for unresolved reporting independently
+of fix scope. Retain these fields for pre-existing, ignored and out-of-scope
+issues too, not just findings selected for correction.
 
 When the request's `posting` is not `null`, each reportable assessment also has:
 

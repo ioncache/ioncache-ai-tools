@@ -42,6 +42,7 @@ remain after synchronization finishes.
 | --- | --- |
 | `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts; native origin detection is currently unavailable |
 | `autonomous-development-explicit-only` | Reject assistant skill-tool calls to autonomous development; direct human invocation and ordinary work remain available |
+| `autonomous-development-follow-ups` | Automatic follow-up issue creation by authorized development PR publishers; separate from run approval, audit publication and reporting |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -52,6 +53,7 @@ remain after synchronization finishes.
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
+| `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |
 | `review-<category>` | Independent coverage for a shipped review category; all enabled by default |
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |

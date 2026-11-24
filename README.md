@@ -135,6 +135,13 @@ provide standards for the requested work, not standalone test or audit tools.
 
 Full skill instructions are in [skills/](skills/).
 
+Reviews name unresolved material findings under **Known issues not fixed here**,
+including pre-existing and out-of-scope defects. Autonomous development carries
+that list into its final report and PR, and can create or reuse follow-up issues
+when separately approved. Ticket failures do not stop development.
+See [skills/autonomous-development/FOLLOW_UPS.md](skills/autonomous-development/FOLLOW_UPS.md)
+for publication and disclosure rules.
+
 ## Review options
 
 ```text

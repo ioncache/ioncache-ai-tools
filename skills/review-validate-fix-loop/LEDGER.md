@@ -341,6 +341,15 @@ Keep schema 1 and its exact event fields. The outer loop translates it:
 | Assessment | `decision` after `review_done` or `fixes_reviewed`; retain validator identity, reachability, confidence, priority and its `priority_level`, `introduced`, `done_when`, `report_action`, and reasoning in the reason/evidence fields. Resolve pending caller validation first. Do not add these as event fields. |
 | Incomplete required work | Preserve received candidates, then `stop`; put assignment outcomes, coverage gaps, selection provenance, and diagnostics in its reason. Do not emit `review_done` or `fixes_reviewed` for partial passes. |
 
+In every decision's `evidence` array, retain the complete latest assessment
+as a JSON-encoded `{"assessment": {...}}` string, including `key`, `title`,
+`summary`, `locations`, `evidence`, `material`, `sensitive`, `introduced`,
+`report_action`, `reason`, and any `duplicate_of`. These remain evidence, not
+new schema-1 event fields. The event's validation, disposition and severity
+remain authoritative for replay. Copy the reporting fields when recording
+later decisions, including fix outcomes. The reporting helper uses this
+record without trying to infer materiality from free-form prose.
+
 Keep an unobserved `report.worker` as JSON `null` in the original report.
 For the ledger pass's required text `worker`, use the caller-observed native
 identity when available and retain its observation source in `evidence`.
@@ -461,6 +470,9 @@ metadata. No command restores them over the working tree.
 `status` returns current findings with observations and decision history,
 loops and cycles, outcome, history, and drift information. Use it for
 intermediate/final reporting. Usage is explicitly `not_collected`.
+Its `known_issues` projection supports **Known issues not fixed here** under
+[../review-code/KNOWN_ISSUES.md](../review-code/KNOWN_ISSUES.md).
+It does not change dispositions, fix eligibility or completion.
 
 Updates use a per-worktree lock and expected revision, followed by atomic
 replacement. Only one running/resumable run is allowed in a worktree.

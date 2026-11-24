@@ -61,7 +61,7 @@ category's findings cannot replace the missing independent assignment.
 ## Human report
 
 The report's main reader is an agent or person deciding what to fix. Report
-only `Act`, `Decide`, and `Investigate` items. Keep supported corrections
+`Act`, `Decide`, and `Investigate` items in the main index. Keep supported corrections
 distinct from decisions and investigations.
 
 Start with an index, ordered by priority level, then severity:
@@ -95,9 +95,17 @@ assessment, to the index and blocks only. Count otherwise-reportable below-thres
 items separately. That display preference does not discard evidence, accept
 risk, or change which corrections a calling loop should make.
 
-Keep rejected, duplicate, style-only, and low-value observations in the private
+## Known issues not fixed here
+
+Apply [KNOWN_ISSUES.md](KNOWN_ISSUES.md) after the main findings. Name every
+valid or credibly uncertain unresolved material finding, including pre-existing,
+out-of-scope and deferred issues with `report_action: None`. Neither an `ignored`
+disposition nor the main severity floor may hide it. Keep truth separate from
+action; this section does not authorize corrections or publication.
+
+Keep rejected, duplicate, style-only, and genuinely immaterial observations in the private
 handback or ledger, with a count only in the report. Do not add a second table,
-collapsed cleanup backlog, or unsolicited location list for them.
+collapsed cleanup backlog, or unsolicited location list for those observations.
 
 Preserve underlying-issue
 keys, duplicate/recurrence references, and coverage in the

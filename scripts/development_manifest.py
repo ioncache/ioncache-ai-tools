@@ -239,8 +239,9 @@ def validate(manifest, folder):
     for value in manifest["limits"].values():
         require(type(value) is int and value > 0, "Limits must be positive integers")
     permission_names = "commit push create_pr mark_ready screenshots"
-    if isinstance(manifest["permissions"], dict) and "publish_audit" in manifest["permissions"]:
-        permission_names += " publish_audit"
+    for name in ("publish_audit", "create_follow_up_issues"):
+        if isinstance(manifest["permissions"], dict) and name in manifest["permissions"]:
+            permission_names += " " + name
     fields(manifest["permissions"], permission_names)
     require(all(type(value) is bool for value in manifest["permissions"].values()),
             "Permissions must be explicit booleans")

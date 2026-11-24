@@ -707,8 +707,11 @@ def status(args, root):
         require_current(ledger)
     current = snapshot(root) if root is not None else None
     before = ledger["snapshots"][state["snapshot"]]
+    import review_reporting
+
     return {"ledger": str(path), "objective": ledger["objective"],
             "scope": ledger["scope"], "base": ledger["base"], **state,
+            "known_issues": review_reporting.project(review_reporting.records(state))["known_issues"],
             "drift": current != before if current is not None else None,
             "changed_files": changed(before, current) if current is not None else None,
             "usage": "not_collected", "history": ledger["events"]}
