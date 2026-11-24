@@ -57,7 +57,7 @@ def merge(previous, incoming):
                     "reason": "Earlier finding awaits renewed validation after review invalidation.",
                     "disposition": "open", "snapshot": item.get("snapshot")}
         result[key] = {**(prior or {}), **item, "material": item.get("material"),
-                       "duplicate_of": item.get("duplicate_of")}
+                       "duplicate_of": item.get("duplicate_of"), "sensitive": item.get("sensitive")}
     return list(result.values())
 
 

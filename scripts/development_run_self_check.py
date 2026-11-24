@@ -616,29 +616,93 @@ class DevelopmentRunTests(unittest.TestCase):
         self.path.write_bytes(manifest.encode(self.plan))
         self.assertIn("explicit booleans", self.cli("validate", self.path, ok=False))
 
-    @pytest.mark.stable_storage
-    def test_blocked_review_still_retains_named_findings_for_the_final_report(self):
-        self.init()
-        self.preflight()
-        root = self.prepare()
-        self.execute_fixture(self.next())
-        self.assertEqual(self.next()["role"], "review")
+    def stopped_review_with_finding(self, outcome="blocked", root=None):
+        root = root or self.start_review_fixture()
         data = self.review(root, record=False, finding=True, advance=False)
         state = self.review_cli(root, ["status", data["ledger"]])
         events = [
             {"type": "decision", "id": "F001", "validation": "valid", "disposition": "out_of_scope",
              "severity": "Low", "evidence": ["Established a real pre-existing problem"]},
-            {"type": "stop", "outcome": "blocked"},
+            {"type": "stop", "outcome": outcome},
         ]
         for event in events:
             event.update(actor="fixture-owner", reason="Remaining investigation unavailable")
             state = self.review_cli(root, ["apply", data["ledger"], "--revision", str(state["revision"])], event)
+        return root, data
+
+    @pytest.mark.stable_storage
+    def test_blocked_review_still_retains_named_findings_for_the_final_report(self):
+        _, data = self.stopped_review_with_finding()
         self.finish(data, outcome="blocked")
         self.assertEqual(self.state["outcome"], "blocked")
         report = self.state["prs"]["first"]["known_issues_report"]
         self.assertIn("PRIVATE-AUDIT-SENTINEL", report)
         self.assertIn("Remaining investigation unavailable", report)
         self.assertIsNone(development.load(self.store)["prs"]["first"]["accepted"])
+
+    @pytest.mark.stable_storage
+    def test_retired_review_retains_findings_without_acceptance_and_retry_keeps_them(self):
+        root, data = self.stopped_review_with_finding("failed")
+        before = development.load(self.store)
+        self.mutate("retire", "--reason", "Worker stopped before submitting its report",
+                    "--shutdown-evidence", "Synchronous fixture workers exited")
+        result = self.state["prs"]["first"]
+        self.assertIn("PRIVATE-AUDIT-SENTINEL", result["known_issues_report"])
+        self.assertNotIn("finding_reporting_error", result)
+        saved = development.load(self.store)
+        self.assertIsNone(saved["active"])
+        self.assertIsNone(saved["prs"]["first"]["accepted"])
+        self.assertEqual(saved["attempts"], before["attempts"])
+        self.assertEqual(saved["history"][-1]["retired_review_ledger"], data["ledger"])
+        self.mutate("resume", "--reason", "Retry within the retained allowance")
+        self.assertEqual(self.next()["attempt"], 2)
+        self.review(root)
+        self.assertIn("PRIVATE-AUDIT-SENTINEL", self.state["prs"]["first"]["known_issues_report"])
+
+    @pytest.mark.stable_storage
+    def test_retirement_ignores_previously_collected_ledgers(self):
+        root = self.start_review_fixture()
+        self.review(root)
+        self.execute_fixture(self.next())
+        self.execute_fixture(self.next())
+        self.assertEqual(self.next()["role"], "review")
+        _, data = self.stopped_review_with_finding("failed", root)
+        self.mutate("retire", "--reason", "Full review worker stopped",
+                    "--shutdown-evidence", "Synchronous fixture workers exited")
+        self.assertNotIn("finding_reporting_error", self.state["prs"]["first"])
+        self.assertIn("PRIVATE-AUDIT-SENTINEL", self.state["prs"]["first"]["known_issues_report"])
+        self.assertEqual(development.load(self.store)["history"][-1]["retired_review_ledger"], data["ledger"])
+
+    @pytest.mark.stable_storage
+    def test_retirement_reports_unavailable_findings_without_blocking_recovery(self):
+        _, data = self.stopped_review_with_finding("failed")
+        path = Path(data["ledger"])
+        original = path.read_bytes()
+        before = development.load(self.store)
+        other = path.parent.parent / ("0" * 32)
+        for condition in ("missing", "corrupt", "ambiguous"):
+            with self.subTest(condition=condition):
+                development.save(self.store, copy.deepcopy(before))
+                self.state = self.cli("status", self.store)
+                if condition == "missing":
+                    path.unlink()
+                elif condition == "corrupt":
+                    path.write_text("{")
+                else:
+                    other.mkdir()
+                self.mutate("retire", "--reason", "Review evidence unavailable",
+                            "--shutdown-evidence", "Synchronous fixture workers exited")
+                self.assertIn("Retired review findings unavailable",
+                              self.state["prs"]["first"]["finding_reporting_error"])
+                self.assertIn("Inventory gap: Retired review findings unavailable",
+                              self.state["prs"]["first"]["known_issues_report"])
+                self.assertIn("Inventory gap:", self.state["prs"]["first"]["known_issues_pr_draft"])
+                self.assertIsNone(development.load(self.store)["active"])
+                self.mutate("resume", "--reason", "Continue after recording the inventory gap")
+                self.assertEqual(self.next()["attempt"], 2)
+                path.write_bytes(original)
+                if other.exists():
+                    other.rmdir()
 
     def execute_fixture(self, assignment):
         root = Path(assignment["root"])
@@ -2228,6 +2292,9 @@ class DevelopmentRunTests(unittest.TestCase):
                                     .split(". text means", 1)[0])
                 self.assertTrue(set(fields) <= schema.keys())
                 if role in ("draft", "ready"):
+                    self.assertIn("from progress.known_issues_pr_draft in the PR", prompt)
+                    self.assertIn("from progress.known_issues_report in the private report", prompt)
+                    self.assertNotIn("from progress.known_issues in", prompt)
                     self.assertEqual(schema["evidence"]["type"], "text")
                     self.assertEqual(schema["state"]["type"], role)
         disabled = {**assignment, "report_contract_enabled": False}

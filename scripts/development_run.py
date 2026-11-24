@@ -885,6 +885,30 @@ def rebase_review(state, args, settings):
     state["outcome"], state["reason"] = "running", args.reason
 
 
+def retain_retired_findings(state):
+    active = state["active"]
+    if active["role"] != "review":
+        return
+    progress = state["prs"][active["pr"]]
+    try:
+        root = Path(active["root"])
+        recorded = {
+            Path(reference).parent.name for item in state["history"] if item["pr"] == active["pr"]
+            for reference in (item.get("report", {}).get("data", {}).get("ledger"),
+                              item.get("retired_review_ledger"))
+            if isinstance(reference, str)
+        }
+        paths = [path for path in audit.stored_review_paths(root, [Path(active["review_storage"])])
+                 if path.parent.name not in recorded]
+        plan.require(len(paths) == 1, "Retired review ledger is missing or ambiguous")
+        active["retired_review_ledger"] = str(paths[0])
+        retained = review.status(SimpleNamespace(ledger=str(paths[0])), root)
+        followups.retain(progress, retained)
+    except (ValueError, OSError, KeyError, TypeError):
+        progress["finding_reporting_error"] = (
+            "Retired review findings unavailable; inspect the retained assignment and review storage.")
+
+
 def mutate(args, folder):
     with locked(folder), ExitStack() as guards:
         state = load(folder)
@@ -923,6 +947,7 @@ def mutate(args, folder):
             plan.require(state["active"] is not None, "No outstanding assignment")
             plan.text(args.reason)
             plan.text(args.shutdown_evidence)
+            retain_retired_findings(state)
             state["active"].update(outcome="retired", reason=args.reason,
                                    shutdown_evidence=args.shutdown_evidence)
             state["history"][-1] = state["active"]

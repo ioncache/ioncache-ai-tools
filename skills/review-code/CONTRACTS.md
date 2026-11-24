@@ -171,7 +171,8 @@ or uncertain material assessment even with `report_action: None`, also has:
 - `title`: a one-line headline.
 - `summary`: the trigger, behaviour and consequence, and the requirement it
   breaks, readable without the review's private evidence.
-- `next_step`: the simplest coherent correction, decision, or check.
+- `next_step`: the simplest coherent correction, decision, or check, or `null`
+  for a known-issue-only entry when none is warranted or known.
 - `basis`: `observed` or `inferred` for the merged issue, `inferred` unless its
   claimed failure was observed.
 - `priority_level`: `P1`, `P2`, or `P3` under

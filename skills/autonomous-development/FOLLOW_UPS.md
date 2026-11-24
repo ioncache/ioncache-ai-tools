@@ -21,6 +21,9 @@ text and the audit worker's managed link block. Refresh the section during
 
 The run's final human report includes the same named list and ticket status.
 An interrupted run reports the available list and any evidence gaps too.
+Retirement retains findings from a uniquely identifiable ledger in the assigned
+store. Missing, unreadable, or ambiguous evidence leaves an explicit inventory
+gap, never a new retirement gate or accepted review.
 When `review-known-issues` is disabled, disclose the omitted section instead.
 Never describe a disabled or incomplete report as having no known defects.
 
@@ -111,6 +114,10 @@ Search, API, permission, or disclosure failures must not block otherwise
 authorized development or PR publication. Missing or unusable receipts are
 reported as unfiled, not accepted as success. Preserve earlier verified links
 on replay. Do not automatically reopen, close, or edit an existing issue.
+If creation is no longer approved at collection, the controller retains a
+repository-validated reported URL only in the private diagnostic reason.
+The receipt stays `not_filed` with `url: null`; this evidence does not authorize
+creation or become an accepted public follow-up link.
 
 Creating a ticket never resolves a finding, accepts a risk, or waives a
 pre-existing readiness requirement. The implementation must still meet its

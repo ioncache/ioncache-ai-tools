@@ -31,8 +31,12 @@ def presentation(progress, settings):
         inventory = reporting.records(progress.get("review") or {})
     report = reporting.project(inventory)
     options = {"show": reporting.enabled(settings), "tickets": progress.get("follow_up_issues")}
-    return {**report, "known_issues_report": reporting.render(report, **options),
-            "known_issues_pr_draft": reporting.public_draft(report, **options)}
+    result = {**report, "known_issues_report": reporting.render(report, **options),
+              "known_issues_pr_draft": reporting.public_draft(report, **options)}
+    if progress.get("finding_reporting_error"):
+        result["known_issues_report"] += "\n\nInventory gap: " + progress["finding_reporting_error"]
+        result["known_issues_pr_draft"] += "\n\nInventory gap: Earlier review findings could not be recovered."
+    return result
 
 
 def receipt(value, *, allow_create, repository):
@@ -43,9 +47,6 @@ def receipt(value, *, allow_create, repository):
         return {"status": "not_filed", "reason": "Publisher did not supply supporting evidence.", "url": None}
     status, url = value["status"], value.get("url")
     if status in ("created", "reused"):
-        if status == "created" and not allow_create:
-            return {"status": "not_filed", "reason": "Unapproved creation was reported; inspect remote effects.",
-                    "url": None}
         try:
             repo = audit.repository(repository)
         except ValueError:
@@ -54,6 +55,9 @@ def receipt(value, *, allow_create, repository):
                 rf"https://github\.com/{re.escape(repo)}/issues/[1-9][0-9]*", url):
             return {"status": "not_filed", "reason": "Reported issue URL did not identify the approved repository.",
                     "url": None}
+        if status == "created" and not allow_create:
+            return {"status": "not_filed", "reason": (
+                f"Unapproved creation was reported; inspect remote effects at {url}."), "url": None}
     else:
         url = None
     return {"status": status, "reason": reason, "url": url}
@@ -83,7 +87,8 @@ def instructions(assignment, role, executor):
                    if control["enabled"] else
                    "Do not create follow-up issues: publication is unapproved or independently disabled. "
                    "Existing issue links may be reused after read-only verification. ")
-    display = ("Include Known issues not fixed here from progress.known_issues in the PR and report. "
+    display = ("Include Known issues not fixed here from progress.known_issues_pr_draft in the PR "
+               "and from progress.known_issues_report in the private report. "
                if control["reporting_enabled"] else
                "The named known-issue section is disabled; disclose the omission and retain the private inventory. ")
     return (f"Follow {executor}/skills/autonomous-development/FOLLOW_UPS.md for this publication. "

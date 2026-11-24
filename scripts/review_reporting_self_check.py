@@ -97,6 +97,25 @@ class ReportingTests(unittest.TestCase):
         current = reporting.merge(prior, [{"key": "duplicate", "validation": "valid"}])
         self.assertEqual(len(reporting.project(current)["known_issues"]), 2)
 
+    def test_reassessment_requires_its_own_disclosure_clearance(self):
+        for separate_reviews in (False, True):
+            for cleared in (False, True):
+                with self.subTest(separate_reviews=separate_reviews, cleared=cleared):
+                    updated = finding(title="Updated disclosure", evidence=["New private evidence"])
+                    del updated["sensitive"]
+                    if cleared:
+                        updated["sensitive"] = False
+                    progress = {}
+                    if separate_reviews:
+                        followups.retain(progress, {"assessments": [finding()]})
+                        followups.retain(progress, {"assessments": [updated]})
+                    else:
+                        followups.retain(progress, {"assessments": [finding(), updated]})
+                    result = followups.presentation(progress, self.settings)
+                    self.assertIn("New private evidence", result["known_issues_report"])
+                    self.assertEqual("New private evidence" in result["known_issues_pr_draft"], cleared)
+                    self.assertEqual("Updated disclosure" in result["known_issues_pr_draft"], cleared)
+
     def test_legacy_materiality_and_invalidation_remain_visible_as_gaps(self):
         legacy = finding()
         del legacy["material"]
@@ -179,6 +198,29 @@ class ReportingTests(unittest.TestCase):
         value["status"] = "reused"
         followups.record(progress, {"follow_up_issues": {"settings-path": value}}, self.manifest, self.settings)
         self.assertEqual(progress["follow_up_issues"]["settings-path"]["url"], value["url"])
+
+    def test_revoked_creation_retains_only_validated_private_diagnostics(self):
+        self.assertTrue(followups.policy(self.manifest, self.settings)["enabled"])
+        self.settings.disabled.add(followups.FEATURE)
+        for url, valid in (
+            ("https://github.com/fixture/project/issues/7", True),
+            ("https://github.com/fixture/other/issues/7", False),
+            ("https://github.com/fixture/project/issues/7?private=diagnostic", False),
+        ):
+            with self.subTest(url=url):
+                progress = {}
+                followups.retain(progress, {"assessments": [finding()]})
+                value = {"status": "created", "url": url, "reason": "Observed before settings changed"}
+                followups.record(progress, {"follow_up_issues": {"settings-path": value}},
+                                 self.manifest, self.settings)
+                receipt = progress["follow_up_issues"]["settings-path"]
+                self.assertEqual(receipt["status"], "not_filed")
+                self.assertIsNone(receipt["url"])
+                result = followups.presentation(progress, self.settings)
+                self.assertEqual(url in result["known_issues_report"], valid)
+                self.assertNotIn(url, result["known_issues_pr_draft"])
+                self.assertIn("not_filed", result["known_issues_pr_draft"])
+        self.assertFalse(followups.policy(self.manifest, self.settings)["enabled"])
 
     def test_unrecognized_input_is_not_an_empty_successful_report(self):
         with self.assertRaisesRegex(ValueError, "Expected assessed findings"):

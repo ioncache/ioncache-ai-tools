@@ -139,9 +139,11 @@ dispositions to `None` for that list; preserve their reasons in the ledger.
 Do not use a finding quota, inflate severity, or suppress consequential
 uncertainty to improve an apparent success ratio.
 
-P3 opportunistic edits, cosmetic preferences, duplicates, refuted claims, and
-evidence-backed low-value observations remain in the ledger only. Do not turn
-them into a second reading assignment or an unsolicited cleanup backlog.
+P3 opportunistic edits stay out of the main action list; include their unresolved
+issues in Known issues not fixed here when material. Cosmetic preferences,
+duplicates, refuted claims, and evidence-backed immaterial observations remain
+in the ledger only. Do not turn them into a second reading assignment or an
+unsolicited cleanup backlog.
 Never silently accept a material risk solely to shorten the report.
 Out-of-scope material risks should be clearly separated from in-scope actions;
 their discovery does not authorize expanding the reviewed target.
@@ -205,8 +207,10 @@ rewrite history. Explain any difference from the current actionable count.
 
 List newly reportable findings as numbered items in priority order. Each
 needs a stable ID, originating round, plain-language problem or uncertainty,
-trigger and consequence, evidence, priority, risk, and the worthwhile next
-action. Keep consequential decisions/investigations separate from supported
+trigger and consequence, evidence, priority, and risk. Include the worthwhile
+next action when identified. For a known-issue-only entry with action `None`,
+state explicitly when no next action is warranted or known.
+Keep consequential decisions/investigations separate from supported
 corrections. Call out material updates by ID, including withdrawn findings.
 Do not repeat suppressed items unless explicitly requested.
 
