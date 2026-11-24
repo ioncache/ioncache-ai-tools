@@ -112,6 +112,11 @@ def render(inputs, settings):
             "\nWriting standards: " + json.dumps(prepare(inputs, settings)))
 
 
+def unavailable(error):
+    return (f"Writing guidance unavailable: {error}. Continue the bounded assignment under its "
+            "existing constraints and report this limitation, not a completed standards check.\n")
+
+
 def job_guidance(assignment, request, executor):
     if request["role"] not in ("fixer", "implement"):
         return ""
@@ -119,8 +124,7 @@ def job_guidance(assignment, request, executor):
     try:
         settings = configuration(root)
     except (OSError, ValueError) as error:
-        return (f"Writing guidance unavailable: {error}. Continue the bounded assignment under its "
-                "existing constraints and report this limitation, not a completed standards check.\n")
+        return unavailable(error)
     if not settings["enabled"]:
         return ""
     reference = request.get("writing_plan")
@@ -128,8 +132,11 @@ def job_guidance(assignment, request, executor):
     if phase is not None:
         assignments.require(phase["request"]["base"] == assignment["comparison_base"],
                             "Writing plan has another comparison base; supply this assignment's saved phase")
-    return render({"root": str(root), "plugin_root": str(executor),
-                   "phase": phase, "reference": reference}, settings) + "\n"
+    try:
+        return render({"root": str(root), "plugin_root": str(executor),
+                       "phase": phase, "reference": reference}, settings) + "\n"
+    except (OSError, ValueError) as error:
+        return unavailable(error)
 
 
 def main(argv=None):

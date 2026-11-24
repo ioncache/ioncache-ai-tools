@@ -163,12 +163,15 @@ target branch only when that ref is absent. Fetch a stale or missing target
 through the already authorized Git workflow, then retry.
 
 The helper reconstructs the original reviewed and current snapshot trees in a
-temporary private Git index/object store. This includes binary content, modes,
-symlink targets and non-ignored untracked files. It compares binary-capable diffs
-with `git patch-id --verbatim`, which preserves whitespace and ignores line
-numbers. It does not use whitespace-insensitive stable IDs. Missing Git support
-or objects reports unavailability; restore them and retry.
-An altered patch, changed context, invalidated/abandoned ledger or missing
+temporary private Git repository. This includes binary content, modes,
+symlink targets and non-ignored untracked files. It uses `git merge-tree --write-tree`
+to replay the reviewed snapshot onto the new base and requires the result tree
+to match the current snapshot exactly. Matching patch IDs alone cannot prove
+equivalence: the same edit in a different repeated section must not pass.
+Source-repository reads keep Git's existing trust checks; replay uses a separate
+repository without the source's local, global or system configuration.
+Missing Git support or objects reports unavailability; restore them and retry.
+Conflicts, a different result tree, an invalidated/abandoned ledger or a missing
 retained snapshot cannot use this path. Changed patches need a counted review.
 
 Successful recovery appends old/new bases, heads, snapshot and patch identities,
@@ -177,8 +180,13 @@ accepted checkout and future comparison base, not the original review ledger,
 snapshot, category coverage or review history. The original ledger can still
 report checkout drift; the separate rebase evidence explains that transition.
 No review or assignment is launched, and no allowance is reset.
-Head-bound publication, audit and UI evidence must still describe the new commit;
-rebase equivalence does not refresh those receipts or bypass their checks.
+Completed UI evidence and final audits for an older commit are scheduled again
+before readiness, with UI evidence first when both need refreshing. Old reports
+remain historical evidence, not receipts for the new commit. Recovery checks
+that the remaining assignment and per-role attempts can cover this PR's delivery
+steps before changing acceptance; insufficient capacity leaves the state intact.
+Readiness reservation and handback require UI evidence and any enabled final
+audit to identify the accepted commit.
 
 `reconcile` checks review and assignment capacity before dropping acceptance.
 If review attempts are exhausted, it leaves the state intact for a provable
@@ -187,7 +195,7 @@ allowance remains. `autonomous-development-rebase-review: false` disables this
 specialized recovery without disabling ordinary review or inspection.
 
 Git contracts used here:
-https://git-scm.com/docs/git-patch-id
+https://git-scm.com/docs/git-merge-tree
 https://git-scm.com/docs/git-diff
 https://git-scm.com/docs/git-hash-object
 https://git-scm.com/docs/git-update-index

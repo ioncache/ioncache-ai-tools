@@ -11,7 +11,7 @@ import development_manifest as plan
 import review_ledger as review
 
 
-def git(context, arguments, content=None):
+def git(context, arguments, content=None, *, conflict_message=None):
     try:
         result = subprocess.run(
             ["git", "--no-pager", "-C", str(context["root"]), "-c", "core.splitIndex=false",
@@ -20,6 +20,8 @@ def git(context, arguments, content=None):
     except (OSError, subprocess.TimeoutExpired) as error:
         raise plan.ManifestError(f"Rebase verification unavailable: {error}. "
                                  "Restore Git availability and retry without changing review history.") from error
+    if result.returncode == 1 and conflict_message:
+        raise plan.ManifestError(conflict_message)
     plan.require(result.returncode == 0, "Rebase verification unavailable: " +
                  result.stderr.decode(errors="replace").strip() +
                  ". Restore the required Git objects/tools and retry without changing review history.")
@@ -30,12 +32,18 @@ def context(root, directory):
     objects = directory / "git-objects"
     objects.mkdir()
     source = (root / os.fsdecode(review.git(root, ["rev-parse", "--git-path", "objects"])).strip()).resolve()
+    object_format = review.git(root, ["rev-parse", "--show-object-format=storage"]).decode().strip()
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(GIT_INDEX_FILE=str(directory / "index"), GIT_OBJECT_DIRECTORY=str(objects),
                        GIT_ALTERNATE_OBJECT_DIRECTORIES=json.dumps(str(source), ensure_ascii=False),
                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-                       GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1")
-    return {"root": root, "environment": environment}
+                       GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1",
+                       GIT_AUTHOR_NAME="Rebase verification", GIT_AUTHOR_EMAIL="rebase@localhost",
+                       GIT_COMMITTER_NAME="Rebase verification", GIT_COMMITTER_EMAIL="rebase@localhost",
+                       GIT_AUTHOR_DATE="2000-01-01T00:00:00Z", GIT_COMMITTER_DATE="2000-01-01T00:00:00Z")
+    isolated = {"root": directory, "environment": environment}
+    git(isolated, ["init", "--bare", "--quiet", "--template=", f"--object-format={object_format}"])
+    return isolated
 
 
 def snapshot_tree(git_context, snapshot, folder):
@@ -65,6 +73,14 @@ def patch_identity(git_context, base, tree):
     return {"patch_id": output[0].decode() if output else "empty", "diff_sha256": plan.digest(patch)}
 
 
+def replay_tree(git_context, base, tree, new_base):
+    commit = git(git_context, ["commit-tree", tree, "-p", base], b"Reviewed snapshot\n").decode().strip()
+    result = git(git_context, ["merge-tree", "--write-tree", new_base, commit],
+                 conflict_message="The reviewed patch cannot be replayed without conflicts; preserve "
+                                  "the changes and use reconcile for a counted review if allowance remains")
+    return result.decode().splitlines()[0]
+
+
 def verify(root, reviewed, new_base):
     path = Path(reviewed["ledger"])
     retained = review.status(SimpleNamespace(ledger=str(path)), root)
@@ -84,9 +100,10 @@ def verify(root, reviewed, new_base):
         new_tree = snapshot_tree(git_context, current, current_folder)
         before = patch_identity(git_context, reviewed["base"], old_tree)
         after = patch_identity(git_context, new_base, new_tree)
-        plan.require(before["patch_id"] == after["patch_id"],
+        expected_tree = replay_tree(git_context, reviewed["base"], old_tree, new_base)
+        plan.require(expected_tree == new_tree,
                      "Rebased patch differs from the reviewed patch; preserve the changes and use "
                      "reconcile for a counted review if allowance remains")
         plan.require(current == review.snapshot(root), "Worktree changed during rebase verification; retry")
-    return current, {"method": "git-patch-id-verbatim-with-snapshot-trees",
+    return current, {"method": "git-merge-tree-with-snapshot-trees", "expected_tree": expected_tree,
                      "reviewed_patch": before, "rebased_patch": after}

@@ -391,6 +391,11 @@ class DevelopmentRunTests(unittest.TestCase):
         result = subprocess.run(["node", str(SCRIPTS / "development_workflow_self_check.js"), "--writer-prompts"],
                                 input=json.dumps(jobs), capture_output=True, text=True, env=self.env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        jobs[1]["prompt"] = jobs[1]["prompt"].replace("Writing standards: ", "Missing standards: ")
+        rejected = subprocess.run(
+            ["node", str(SCRIPTS / "development_workflow_self_check.js"), "--writer-prompts"],
+            input=json.dumps(jobs), capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(rejected.returncode, 0, "Native prompt assertions were swallowed")
 
     @pytest.mark.stable_storage
     def test_fixer_plan_reference_can_be_corrected_without_repeating_review(self):
@@ -432,6 +437,26 @@ class DevelopmentRunTests(unittest.TestCase):
         for role in ("reviewer", "validator", "adjudicator"):
             self.assertEqual(handoffs.jobs.writing_guidance.job_guidance(
                 assignment, {"role": role}, SCRIPTS.parent), "")
+
+    @pytest.mark.stable_storage
+    def test_missing_optional_guidance_keeps_the_bounded_implementation_launchable(self):
+        self.init()
+        self.preflight()
+        self.prepare()
+        self.mutate("interrupt", "--reason", "Exercise optional resource loss before a new pin")
+        state = development.load(self.store)
+        self.assertIsNone(state["active"])
+        source = self.folder / "executor-without-writing-contract"
+        shutil.copytree(handoffs.executor.ROOT, source)
+        (source / "skills/review-code/WRITING.md").unlink()
+        self.mutate("resume", "--reason", "Continue with the available installed resources")
+        with patch.object(handoffs.executor, "ROOT", source):
+            batch = self.handoff("prepare")
+            job = self.claim_handoff(batch)[0]
+        self.assertIn("Writing guidance unavailable", job["prompt"])
+        self.assertIn("Perform the bounded implement assignment", job["prompt"])
+        self.assertIn("Development report contract", job["prompt"])
+        self.assertEqual(development.load(self.store)["active"]["attempt"], 1)
 
     def prepare(self):
         assignment = self.next()
@@ -3197,9 +3222,18 @@ class DevelopmentRunTests(unittest.TestCase):
             assignment = self.next()
         return root, reviewed
 
-    def accepted_rebase_fixture(self):
+    def advance_rebase_target(self, root, content=None):
+        name = "app.txt" if content is not None else "upstream.txt"
+        (self.root / name).write_text(content if content is not None else "Target branch change\n")
+        self.git("add", name)
+        self.git("commit", "-qm", "Fixture target update")
+        new_base = self.git("rev-parse", "HEAD")
+        self.git("rebase", "main", root=root)
+        return new_base
+
+    def accepted_rebase_fixture(self, content="after\n"):
         root = self.start_review_fixture()
-        (root / "app.txt").write_text("after\n")
+        (root / "app.txt").write_text(content)
         self.review(root)
         self.execute_fixture(self.next())
         self.execute_fixture(self.next())
@@ -3214,12 +3248,166 @@ class DevelopmentRunTests(unittest.TestCase):
         self.next()
         self.review(root)
         before = development.load(self.store)
-        (self.root / "upstream.txt").write_text("Target branch change\n")
-        self.git("add", "upstream.txt")
-        self.git("commit", "-qm", "Fixture target update")
-        new_base = self.git("rev-parse", "HEAD")
-        self.git("rebase", "main", root=root)
+        new_base = self.advance_rebase_target(root)
         return root, before, new_base
+
+    @pytest.mark.stable_storage
+    def test_rebase_rejects_relocated_edits_with_matching_patch_ids(self):
+        section = "pad1\npad2\npad3\ntimeout = 30\npad4\npad5\npad6\n"
+        base = "[first]\n" + section + "[second]\n" + section
+        (self.root / "app.txt").write_text(base)
+        self.git("add", "app.txt")
+        self.git("commit", "-qm", "Repeated-section fixture")
+        self.plan["prs"][0]["base"] = self.git("rev-parse", "HEAD")
+        reviewed = base.replace("timeout = 30", "timeout = 60", 1)
+        root, before, new_base = self.accepted_rebase_fixture(reviewed)
+        (root / "app.txt").write_text("timeout = 60".join(base.rsplit("timeout = 30", 1)))
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("patch differs", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", new_base,
+            "--reason", "The same-looking edit moved to another section", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        (root / "app.txt").write_text(reviewed)
+        new_base = self.advance_rebase_target(root, base.replace("pad1", "upstream pad1", 1))
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Preserve both the reviewed edit and nearby target changes")
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"], before["attempts"])
+        self.assertEqual((root / "app.txt").read_text(), reviewed.replace("pad1", "upstream pad1", 1))
+
+    @pytest.mark.stable_storage
+    def test_rebase_uses_existing_shared_checkout_trust_without_widening_it(self):
+        root, before, new_base = self.accepted_rebase_fixture()
+        config = self.folder / "trusted-git-config"
+        self.env["GIT_CONFIG_GLOBAL"] = str(config)
+        self.git("config", "--global", "safe.directory", str(root))
+        original_run = subprocess.run
+
+        def shared_checkout(command, *args, **kwargs):
+            if command[0] == "git" and "-C" in command and Path(command[command.index("-C") + 1]) == root:
+                kwargs["env"] = {**kwargs.get("env", os.environ), "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+            return original_run(command, *args, **kwargs)
+
+        with patch.object(subprocess, "run", shared_checkout):
+            self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                        "--reason", "Already trusted shared checkout")
+            config.write_text("")
+            self.assertIn("dubious ownership", self.mutate(
+                "rebase-review", "--pr", "first", "--new-base", new_base,
+                "--reason", "Removed trust must still be refused", ok=False))
+        self.assertEqual(development.load(self.store)["attempts"], before["attempts"])
+
+    def completed_delivery_rebase_fixture(self, *, auditing=False, screenshots=True, fail_evidence=False):
+        self.plan["permissions"]["screenshots"] = screenshots
+        root = self.start_audit_fixture() if auditing else self.start_review_fixture()
+        while True:
+            assignment = self.state["assignment"] or self.next()
+            if assignment["role"] == "evidence":
+                if fail_evidence:
+                    self.finish(outcome="blocked")
+                    self.mutate("resume", "--reason", "Retry failed UI capture within its remaining allowance")
+                    fail_evidence = False
+                    continue
+                self.finish({"commit": self.git("rev-parse", "HEAD", root=root),
+                             "artifacts": ["Original UI evidence"]})
+            else:
+                self.execute_fixture(assignment)
+            if assignment["role"] == "review" and assignment["task"] is None and assignment["attempt"] == 1:
+                self.mutate("reconcile", "--pr", "first", "--reason", "Consume the last review attempt")
+            if assignment["role"] == ("audit-final" if auditing else "evidence"):
+                break
+        before = development.load(self.store)
+        new_base = self.advance_rebase_target(root)
+        if auditing:
+            old_head = before["prs"]["first"]["accepted"]["head"]
+            self.git("push", f"--force-with-lease=refs/heads/fixture-feature:{old_head}",
+                     "origin", "HEAD:refs/heads/fixture-feature", root=root)
+        return root, before, new_base
+
+    @pytest.mark.stable_storage
+    def test_rebase_refreshes_completed_evidence_without_another_review(self):
+        root, before, new_base = self.completed_delivery_rebase_fixture()
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Refresh screenshots for the rebased commit")
+        self.assertEqual(self.next()["role"], "evidence")
+        self.finish({"commit": self.git("rev-parse", "HEAD", root=root), "artifacts": ["Updated UI evidence"]})
+        self.assertEqual(self.next()["role"], "ready")
+        self.execute_fixture(self.state["assignment"])
+        self.assertIsNone(self.next())
+        saved = development.load(self.store)
+        self.assertEqual(saved["prs"]["first"]["review"], before["prs"]["first"]["review"])
+        self.assertEqual(saved["attempts"]["first:review:pr"], 2)
+        self.assertEqual(saved["attempts"]["first:evidence:pr"], 2)
+        self.assertEqual(saved["history"][:len(before["history"])], before["history"])
+
+    @pytest.mark.stable_storage
+    def test_rebase_refreshes_final_audit_after_refreshing_evidence(self):
+        root, before, new_base = self.completed_delivery_rebase_fixture(auditing=True)
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Refresh completed delivery evidence without a counted review")
+        self.assertEqual(self.next()["role"], "evidence")
+        self.finish({"commit": self.git("rev-parse", "HEAD", root=root), "artifacts": ["Updated UI evidence"]})
+        self.assertEqual(self.next()["role"], "audit-final")
+        self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.next()["role"], "ready")
+        self.execute_fixture(self.state["assignment"])
+        self.assertIsNone(self.next())
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"]["first:review:pr"], 2)
+        self.assertEqual(saved["attempts"]["first:audit-final:pr"], 2)
+        self.assertEqual(saved["prs"]["first"]["audits"][:-1], before["prs"]["first"]["audits"])
+        self.assertEqual(saved["prs"]["first"]["audits"][-1]["code_commit"],
+                         self.git("rev-parse", "HEAD", root=root))
+
+    @pytest.mark.stable_storage
+    def test_rebase_refreshes_final_audit_without_scheduled_screenshots(self):
+        root, before, new_base = self.completed_delivery_rebase_fixture(auditing=True, screenshots=False)
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Refresh the final audit only")
+        self.assertEqual(self.next()["role"], "audit-final")
+        self.execute_fixture(self.state["assignment"])
+        self.assertEqual(self.next()["role"], "ready")
+        self.execute_fixture(self.state["assignment"])
+        self.assertIsNone(self.next())
+        self.assertEqual(development.load(self.store)["prs"]["first"]["review"],
+                         before["prs"]["first"]["review"])
+
+    @pytest.mark.stable_storage
+    def test_rebase_delivery_refresh_preserves_state_when_assignments_cannot_finish(self):
+        self.plan["limits"]["assignments"] = 11
+        root, before, new_base = self.completed_delivery_rebase_fixture()
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("Not enough assignment allowance", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", new_base,
+            "--reason", "Insufficient capacity for refreshed evidence and readiness", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+
+    @pytest.mark.stable_storage
+    def test_rebase_delivery_refresh_does_not_refund_exhausted_evidence_attempts(self):
+        root, before, new_base = self.completed_delivery_rebase_fixture(fail_evidence=True)
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("No attempts remain for first:evidence:pr", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", new_base,
+            "--reason", "UI capture already used its retry", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+
+    @pytest.mark.stable_storage
+    def test_stale_ui_evidence_is_rejected_at_readiness_reservation_and_handback(self):
+        root, before, new_base = self.completed_delivery_rebase_fixture()
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Reject stale evidence retained by an older executor")
+        saved = development.load(self.store)
+        saved["prs"]["first"]["position"] = before["prs"]["first"]["position"]
+        with patch.dict(os.environ, self.env, clear=True):
+            settings = development.feature(root)
+            with self.assertRaisesRegex(manifest.ManifestError, "UI evidence is missing or stale"):
+                development.reserve(saved, settings)
+            accepted = saved["prs"]["first"]["accepted"]
+            assignment = {"role": "ready", "pr": "first", "root": str(root), "before": accepted}
+            data = {"commit": accepted["head"], "url": saved["prs"]["first"]["url"],
+                    "state": "ready", "evidence": "Offline receipt for the current commit"}
+            with self.assertRaisesRegex(manifest.ManifestError, "UI evidence is missing or stale"):
+                development.delivery_result(saved, assignment, data, settings)
 
     @pytest.mark.stable_storage
     def test_clean_target_rebase_preserves_review_and_continues_at_exhausted_review_limit(self):
@@ -3287,6 +3475,25 @@ class DevelopmentRunTests(unittest.TestCase):
             "rebase-review", "--pr", "first", "--new-base", foreign, "--reason", "Not a target base", ok=False))
         self.close_accepted_review(root)
         self.assertIn("Cached review cannot", self.mutate("rebase-review", *arguments, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+
+    @pytest.mark.stable_storage
+    def test_rebase_recovery_rejects_a_resolved_conflict_without_counted_review(self):
+        root, before, _ = self.accepted_rebase_fixture()
+        (self.root / "app.txt").write_text("upstream changed the same line\n")
+        self.git("add", "app.txt")
+        self.git("commit", "-qm", "Conflicting target edit")
+        new_base = self.git("rev-parse", "HEAD")
+        conflict = subprocess.run(["git", "merge", "--no-commit", "main"], cwd=root,
+                                  env=self.env, capture_output=True, text=True)
+        self.assertEqual(conflict.returncode, 1, conflict.stdout + conflict.stderr)
+        (root / "app.txt").write_text("after\n")
+        self.git("add", "app.txt", root=root)
+        self.git("commit", "-qm", "Fixture resolves the target conflict", root=root)
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("cannot be replayed without conflicts", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", new_base,
+            "--reason", "A conflict resolution is not an unchanged reviewed patch", ok=False))
         self.assertEqual((self.store / "RUN.json").read_bytes(), original)
 
     @pytest.mark.stable_storage

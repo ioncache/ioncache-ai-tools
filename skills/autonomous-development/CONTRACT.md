@@ -497,14 +497,16 @@ For an already accepted, unchanged patch rebased onto its target, use
 at an assignment boundary instead. The enabled-by-default
 `autonomous-development-rebase-review` feature requires a full new-base commit ID,
 approved-base ancestry, target-ref reachability, branch ancestry and valid
-retained review history. It compares whitespace-preserving patch IDs from
-binary-capable diffs of the complete saved and current snapshot trees, including
-untracked files and modes, without writing the real Git index or objects.
+retained review history. It replays the reviewed snapshot onto the new base with
+`git merge-tree --write-tree` and requires exact tree equality, including binary
+content, untracked files and modes, without writing the real Git index or objects.
 It appends durable `review_rebases` evidence, updates the accepted checkout and
 effective comparison base, and leaves the original review record and allowances
 unchanged. Future coverage checks use that effective base for this exact accepted
-review. An altered patch still requires counted review. Existing publication,
-audit and UI evidence checks remain bound to the actual current commit.
+review. An altered patch still requires counted review. Stale completed UI
+evidence and final audits are scheduled again within existing allowances before
+readiness; insufficient delivery capacity leaves acceptance unchanged.
+Publication, audit and UI evidence checks remain bound to the actual current commit.
 See RECOVERY.md for the command and verification limits.
 
 Accepted reviews without category-coverage records or a bound file inventory

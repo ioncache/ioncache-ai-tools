@@ -252,8 +252,10 @@ async function main() {
     for (const job of jobs) {
       const spec = { batch: 'B000001', assignment: 'A0001', store: '/private/run',
         pluginRoot: '/plugin', jobs: [job] }
-      await execute(source.replace('const handoff = null', `const handoff = ${JSON.stringify(spec)}`),
+      let calls = 0
+      const result = await execute(source.replace('const handoff = null', `const handoff = ${JSON.stringify(spec)}`),
         async (prompt, options) => {
+          calls += 1
           const writer = ['implement', 'fixer'].includes(options.label)
           assert.equal(prompt.includes('# Writing quality'), writer)
           assert.equal(prompt.includes('Before reporting, self-check your actual diff'), writer)
@@ -263,6 +265,9 @@ async function main() {
           }
           return null
         })
+      assert.equal(calls, 1)
+      assert.equal(result.observations.length, 1)
+      assert(!result.observations[0].error, result.observations[0].error)
     }
     return
   }

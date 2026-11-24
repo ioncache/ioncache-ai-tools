@@ -65,7 +65,15 @@ def require_final_audit(state, pr, commit, settings):
         plan.require(published.get("stage") == "audit-final" and
                      published.get("code_commit") == commit and not published.get("disabled") and
                      published.get("index_url") == audit.wiki_index(state) and published.get("wiki_commit"),
-                     "Final audit is missing, stale or not in the wiki; reconcile for a counted review and audit")
+                     "Final audit is missing, stale or not in the wiki; use rebase-review for an unchanged "
+                     "target rebase, or reconcile for a counted review and audit")
+
+
+def require_ready_evidence(state, pr, commit):
+    if state["manifest"]["permissions"]["screenshots"]:
+        plan.require(state["prs"][pr].get("evidence", {}).get("commit") == commit,
+                     "UI evidence is missing or stale; use rebase-review for an unchanged target rebase, "
+                     "or reconcile for a counted review before refreshing evidence")
 
 
 def common_directory(root):
@@ -382,6 +390,7 @@ def reserve(state, settings, launch_models=None):
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
         if role == "ready":
+            require_ready_evidence(state, pr_id, before["head"])
             require_final_audit(state, pr_id, before["head"], settings)
     if role == "implement":
         state["prs"][pr_id].setdefault("task_bases", {}).setdefault(task_id, before["head"])
@@ -573,6 +582,7 @@ def delivery_result(state, assignment, data, settings):
     expected = "draft" if assignment["role"] == "draft" else "ready"
     plan.require(data["state"] == expected, "PR state does not match the assignment")
     if assignment["role"] == "ready":
+        require_ready_evidence(state, assignment["pr"], after["head"])
         require_final_audit(state, assignment["pr"], after["head"], settings)
     if progress["url"]:
         plan.require(progress["url"] == data["url"], "Publication cannot replace the owned PR")
@@ -785,6 +795,31 @@ def reconcile(state, args, settings):
     state["outcome"] = "running"
 
 
+def rebase_delivery_position(state, pr, commit, settings):
+    progress = state["prs"][pr]
+    sequence = steps(state["manifest"], pr)
+    position = progress["position"]
+    for index, (role, _) in enumerate(sequence[:position]):
+        stale_evidence = role == "evidence" and progress.get("evidence", {}).get("commit") != commit
+        stale_audit = (role == "audit-final" and audit_enabled(state, settings) and
+                       (progress.get("audits", [{}])[-1].get("code_commit") != commit or
+                        progress.get("audits", [{}])[-1].get("disabled")))
+        if stale_evidence or stale_audit:
+            position = min(position, index)
+    if position < progress["position"]:
+        remaining = sequence[position:]
+        limits = state["manifest"]["limits"]
+        plan.require(len(state["history"]) + len(remaining) <= limits["assignments"],
+                     "Not enough assignment allowance to refresh rebased delivery evidence and finish this PR; "
+                     "preserve the accepted review and incomplete work without resetting allowances")
+        for role, task in remaining:
+            key = f"{pr}:{role}:{task or 'pr'}"
+            plan.require(state["attempts"].get(key, 0) < limits["attempts"],
+                         f"No attempts remain for {key} after rebase; preserve the accepted review "
+                         "and incomplete work without resetting allowances")
+    return position
+
+
 def rebase_review(state, args, settings):
     feature(Path(state["root"]), settings)
     name = "autonomous-development-rebase-review"
@@ -820,6 +855,7 @@ def rebase_review(state, args, settings):
     current, evidence = rebases.verify(root, progress["review"], args.new_base)
     plan.require(git(root, "rev-parse", target_ref) == target, "Target moved during verification; retry")
     unchanged(current, capture(root))
+    position = rebase_delivery_position(state, args.pr, current["head"], settings)
     if old_base != args.new_base or current != progress["accepted"]:
         progress.setdefault("review_rebases", []).append({
             "review": cached_review_identity(progress["review"]), "old_base": old_base,
@@ -827,8 +863,9 @@ def rebase_review(state, args, settings):
             "old_head": progress["accepted"]["head"], "new_head": current["head"],
             "before": plan.digest(plan.encode(progress["accepted"])),
             "after": plan.digest(plan.encode(current)), "reason": args.reason, **evidence,
+            "delivery_refresh": [role for role, _ in steps(state["manifest"], args.pr)[position:progress["position"]]],
         })
-    progress.update(base=args.new_base, accepted=current)
+    progress.update(base=args.new_base, accepted=current, position=position)
     if progress.get("commit"):
         progress["commit"] = current["head"]
     state["outcome"], state["reason"] = "running", args.reason
