@@ -274,6 +274,7 @@ def export(state, assignment, public):
         "title": plan.text(pull["title"]), "pr_url": f"https://github.com/{repo}/pull/{number}",
         "head": pull["head"]["sha"], "date": datetime.now(timezone.utc).date().isoformat(),
     }
+    page_name(number, bundle["publication"]["title"])
     folder = directory(state, assignment)
     folder.parent.mkdir(exist_ok=True, mode=0o700)
     folder.mkdir(exist_ok=True, mode=0o700)
@@ -643,6 +644,10 @@ def previous_pages(root, publication):
                      old.get("stage") in (*ROLES, "archive") and
                      isinstance(old.get("run"), str) and re.fullmatch(r"[a-f0-9]{32}", old["run"]),
                      "Existing page is not a recognized audit; preserve it under another page name before retrying")
+        if page.startswith("Audit:-PR-"):
+            plan.require(old["schema"] == 2,
+                         "Title-based audit lacks PR ownership metadata; restore its schema-2 data from wiki "
+                         "history or preserve the pair under another page name before retrying")
         if old["schema"] == 2:
             metadata = old.get("publication")
             plan.require(isinstance(metadata, dict) and isinstance(metadata.get("pr_url"), str) and
@@ -706,6 +711,23 @@ def verify_wiki_commit(root, parent, expected):
     return commit
 
 
+def confirm_published_pair(root, publication, files):
+    commit = command(["git", "rev-parse", "FETCH_HEAD"], cwd=root).decode().strip()
+    for extension, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
+        filename = publication["page"] + extension
+        entry = command(["git", "--literal-pathspecs", "ls-tree", commit, "--", filename], cwd=root)
+        plan.require(entry.startswith(b"100644 blob ") and
+                     command(["git", "show", f"{commit}:{filename}"], cwd=root) == files[source],
+                     "Published audit pair changed; restore the approved pair from wiki history or preserve "
+                     "conflicting pages, then retry the reviewed export")
+    return commit
+
+
+def check_publication_date(publication, already_published):
+    plan.require(already_published or publication["date"] == datetime.now(timezone.utc).date().isoformat(),
+                 "Publication day changed; regenerate and review an export for today's UTC date")
+
+
 def publish_files(state, publication, files, *, storage=None, recovery=None):
     url = state["manifest"]["repository"]["url"]
     remote = url.removesuffix(".git") + ".wiki.git"
@@ -726,9 +748,8 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
             expected = wiki_files(root, publication, files)
             if recovery is not None:
                 archive_wiki_recovery(recovery, publication, pages, expected)
-            plan.require(approved_files_present(root, publication, files) or
-                         publication["date"] == datetime.now(timezone.utc).date().isoformat(),
-                         "Publication day changed; regenerate and review an export for today's UTC date")
+            already_published = approved_files_present(root, publication, files)
+            check_publication_date(publication, already_published)
             deletions = [name for name, data in expected.items() if data is None]
             writes = {name: data for name, data in expected.items() if data is not None}
             # Stage removals before writes so old spellings cannot alias replacements.
@@ -741,6 +762,7 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
                 return verify_wiki_commit(root, parent, expected)
             command(["git", "commit", "-qm", "docs: publish development process audit"], cwd=root)
             commit = verify_wiki_commit(root, parent, expected)
+            check_publication_date(publication, already_published)
             try:
                 command(["git", "push", "--no-follow-tags", remote, f"{commit}:{ref}"], cwd=root)
             except plan.ManifestError:
@@ -750,7 +772,7 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
                 continue
             command(["git", "fetch", "-q", "--no-tags", remote, ref], cwd=root)
             command(["git", "merge-base", "--is-ancestor", commit, "FETCH_HEAD"], cwd=root)
-            return commit
+            return confirm_published_pair(root, publication, files)
     raise plan.ManifestError("Wiki kept changing during publication; retry the same export without force-pushing")
 
 

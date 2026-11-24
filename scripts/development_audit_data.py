@@ -24,7 +24,7 @@ def evidence_categories(evidence, categories):
     try:
         metadata = json.loads(evidence)
     except (ValueError, RecursionError):
-        values = re.findall(r"(?:^|\s)review_type=([a-z][a-z0-9:-]*)", evidence)
+        values = re.findall(r"(?:^|\s)review_type=(\S+)", evidence)
     else:
         values = [metadata.get("review_type")] if isinstance(metadata, dict) else []
     return {value for value in values if isinstance(value, str) and category(value, categories)}
@@ -75,7 +75,7 @@ def review_passes(ledger, state):
     for phase in phases:
         decisions = phase.pop("decisions")
         phase["assessed"] = len(decisions)
-        phase["to_fix"] = sum(item["validation"] == "valid" and item["disposition"] == "open"
+        phase["to_fix"] = sum(item["validation"] == "valid" and item["disposition"] in ("open", "fix_failed")
                               for item in decisions.values())
     return phases, event_pass
 

@@ -15,7 +15,7 @@ import development_manifest as plan
 import review_loop_state
 
 
-def reviewed_fixture(*, extra_review_fixes=False, category_format="token"):
+def reviewed_fixture(*, extra_review_fixes=False, category_format="token", retry_failed_fix=False):
     ledger = {"schema": 1, "run_id": "a" * 32, "root": "/private/fixture",
               "objective": "Fixture", "scope": "Fixture", "base": "b" * 40,
               "limits": {"outer": 3 if extra_review_fixes else 2, "inner": 2}, "initial": "before",
@@ -59,14 +59,21 @@ def reviewed_fixture(*, extra_review_fixes=False, category_format="token"):
         decision(number, disposition, validation, "Medium" if number == 1 else "Low")
     event("start_fix", findings=["F001", "F005"], files=["source.py"])
     snapshot = "after"
-    event("fix_done", results={name: {"result": "applied", "evidence": "PRIVATE-FIX"}
+    event("fix_done", results={name: {"result": "failed" if retry_failed_fix and name == "F001" else "applied",
+                                    "evidence": "PRIVATE-FIX"}
                               for name in ("F001", "F005")}, checks=checks)
     event("fixes_reviewed", passes=passes)
-    decision(1, "fixed", severity="Medium")
+    decision(1, "fix_failed" if retry_failed_fix else "fixed", severity="Medium")
     decision(5, "fixed")
     finding(7, "project:autonomous-continuation")
     decision(7, "ignored")
     event("advance")
+    if retry_failed_fix:
+        event("start_fix", findings=["F001"], files=["source.py"])
+        event("fix_done", results={"F001": {"result": "applied", "evidence": "PRIVATE-FIX"}}, checks=checks)
+        event("fixes_reviewed", passes=passes)
+        decision(1, "fixed", severity="Medium")
+        event("advance")
     event("start_review")
     event("review_done", passes=passes, checks=checks)
     finding(8)
@@ -244,6 +251,32 @@ class AuditFormatTests(unittest.TestCase):
             'review_type=correctness review_type=integration review_type=correctness', categories),
             {"correctness", "integration"})
 
+    def test_category_tokens_do_not_credit_identifier_prefixes(self):
+        categories = {"correctness", "integration"}
+        for suffix in ("_extra", ".extra", "/extra", ",", '"'):
+            with self.subTest(suffix=suffix):
+                evidence = f"review_type=correctness{suffix} review_type=project:recovery{suffix}"
+                self.assertEqual(projection.evidence_categories(evidence, categories), set())
+        self.assertEqual(projection.evidence_categories(
+            "review_type=correctness\nreview_type=project:recovery\t review_type=integration", categories),
+            {"correctness", "project:recovery", "integration"})
+
+    def test_partial_model_observations_keep_all_saved_requests(self):
+        bundle = copy.deepcopy(self.bundle)
+        bundle["requested_models"]["reviewer"] = [
+            {"model": "requested-review", "effort": "high"},
+            {"model": "retry-review", "effort": "medium"},
+        ]
+        report = audit.render(bundle).decode()
+        self.assertEqual(report.count(
+            "| Review and judgment | Category reviewers | requested-review | high |"), 1)
+        self.assertIn("| Review and judgment | Category reviewers | retry-review | medium |", report)
+        self.assertNotIn("actual-private-model", report)
+        bundle["models"][0].update(selected_model=None, selected_effort=None)
+        rows = rendering.model_rows(bundle)
+        self.assertIn(["Review and judgment", "Category reviewers", "requested-review", "high"], rows)
+        self.assertIn(["Review and judgment", "Category reviewers", "retry-review", "medium"], rows)
+
     def test_requested_models_use_scoped_saved_jobs_not_configuration_or_private_fields(self):
         state = {
             "history": [{"id": "A1", "pr": None}, {"id": "A2", "pr": "first"},
@@ -291,6 +324,14 @@ class AuditFormatTests(unittest.TestCase):
         self.assertIn("| Check of the fixes (review 2) |", report)
         self.assertIn("| Review pass 3 |", report)
         self.assertEqual(bundle["reviews"][0]["findings"][-1]["pass"], "Check of the fixes (review 2)")
+
+    def test_failed_corrections_remain_to_fix_until_a_successful_retry(self):
+        bundle = reviewed_fixture(retry_failed_fix=True)
+        report = audit.render(bundle).decode()
+        self.assertIn("| Fix cycle | Fixer assigned 2 corrections | 1 applied; 1 failed |", report)
+        self.assertIn("| Check of the fixes | 2 recorded category passes | 3 findings assessed; 1 to fix |", report)
+        self.assertIn("| Fix cycle 2 | Fixer assigned 1 correction | 1 applied; 0 failed |", report)
+        self.assertIn("| Check of the fixes 2 | 2 recorded category passes | 1 finding assessed; 0 to fix |", report)
 
     def test_multiple_ledgers_have_distinct_display_numbers_and_regression_references(self):
         bundle = copy.deepcopy(self.bundle)
@@ -417,6 +458,17 @@ class AuditFormatTests(unittest.TestCase):
         self.assertNotRegex(report, r"(?m)^# ")
         self.assertEqual(rendering.code("source`name.py:1"), "`` source`name.py:1 ``")
 
+    def test_narrative_tildes_cannot_consume_the_outcome_table(self):
+        for summary, escaped in (("~~~", r"\~\~\~"), ("~~~~ python", r"\~\~\~\~ python"),
+                                 ("~~~\nexample", r"\~\~\~ example")):
+            with self.subTest(summary=summary):
+                bundle = copy.deepcopy(self.bundle)
+                bundle["public"]["summary"] = summary
+                audit.public_narrative(bundle["public"], bundle["reviews"])
+                report = audit.contents(bundle)["AUDIT.md"].decode()
+                self.assertIn(f"## Outcome\n\n{escaped}\n\n| Result | Findings | Meaning |", report)
+                self.assertNotRegex(report, r"(?m)^ {0,3}~{3,}")
+
     def test_human_page_name_encodes_fragments_and_preserves_literal_hyphens(self):
         state = {"manifest": {"repository": {"url": "https://github.com/fixture/project.git"}},
                  "prs": {"first": {"url": "https://github.com/fixture/project/pull/69"}}}
@@ -472,6 +524,12 @@ class AuditFormatTests(unittest.TestCase):
             report.write_bytes(files["AUDIT.md"])
             with self.assertRaisesRegex(plan.ManifestError, "matching report/data pair"):
                 audit.wiki_files(root, publication, files)
+            legacy = {"schema": 1, "stage": "audit-final", "run": "a" * 32}
+            data.write_bytes(plan.encode(legacy))
+            with self.assertRaisesRegex(plan.ManifestError, "ownership metadata"):
+                audit.wiki_files(root, publication, files)
+            self.assertEqual(data.read_bytes(), plan.encode(legacy))
+            self.assertEqual(report.read_bytes(), files["AUDIT.md"])
             foreign = copy.deepcopy(self.bundle)
             foreign["publication"]["pr_url"] = "https://github.com/other/repository/pull/69"
             data.write_bytes(plan.encode(foreign))

@@ -44,7 +44,7 @@ ROLE_NAMES = {
 
 def text(value):
     value = html.escape(" ".join(str(value).split()), quote=False)
-    return re.sub(r"([\\`*_\[\]#|])", r"\\\1", value)
+    return re.sub(r"([\\`*_\[\]#|~])", r"\\\1", value)
 
 
 def code(value):
@@ -193,9 +193,8 @@ def model_rows(bundle):
         for role in roles:
             records = [item for item in bundle["models"] if item["role"] == role]
             selections = {(item["selected_model"], item["selected_effort"]) for item in records}
-            if not selections:
-                selections.update((choice["model"], choice["effort"])
-                                  for choice in bundle["requested_models"].get(role, []))
+            selections.update((choice["model"], choice["effort"])
+                              for choice in bundle["requested_models"].get(role, []))
             if not selections:
                 selections.add((None, None))
             for selection in sorted(selections, key=lambda pair: (pair[0] or "", pair[1] or "")):

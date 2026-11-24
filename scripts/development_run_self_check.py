@@ -1052,6 +1052,28 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish(final)
 
     @pytest.mark.stable_storage
+    def test_audit_export_rejects_unpublishable_titles_before_writing_and_recovers(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        folder = Path(exported["directory"])
+        original = {name: (folder / name).read_bytes() for name in audit.FILES}
+        public = json.loads(original["audit.json"])["public"]
+        before = (self.store / "RUN.json").read_bytes()
+        self.audit_title = "???"
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with self.assertRaisesRegex(manifest.ManifestError, "readable text before exporting"):
+                audit.export(state, active, public)
+            self.assertEqual(original, {name: (folder / name).read_bytes() for name in audit.FILES})
+            self.assertEqual(self.audit_body_updates, [])
+            self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+            self.audit_title = "Readable title"
+            replacement = audit.export(state, active, public)
+            receipt = audit.publish(state, active, replacement["identity"])
+        self.assertNotEqual(exported["identity"], replacement["identity"])
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.finish(receipt)
+
+    @pytest.mark.stable_storage
     def test_audit_case_only_title_change_preserves_the_exact_new_pair_and_history(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -1084,8 +1106,10 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(sorted(name for name in pages if name.startswith("Audit:")),
                          sorted([new_page + ".md", new_page + ".json"]))
         for extension, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
-            expected = (Path(replacement["directory"]) / source).read_text().strip()
-            self.assertEqual(self.git("show", f"FETCH_HEAD:{new_page}{extension}", root=self.wiki), expected)
+            expected = (Path(replacement["directory"]) / source).read_bytes()
+            actual = subprocess.run(["git", "show", f"FETCH_HEAD:{new_page}{extension}"],
+                                    cwd=self.wiki, env=self.env, check=True, capture_output=True).stdout
+            self.assertEqual(actual, expected)
             self.assertTrue(self.git("show", f"{initial['wiki_commit']}:{old_page}{extension}", root=self.wiki))
         self.assertEqual(self.git("show", "FETCH_HEAD:Home.md", root=self.wiki), "Existing wiki content")
         self.assertNotIn(initial["url"], self.audit_body)
@@ -1121,6 +1145,34 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish(receipt)
 
     @pytest.mark.stable_storage
+    def test_title_based_legacy_audit_is_preserved_until_ownership_is_restored(self):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        files = {name: (Path(exported["directory"]) / name).read_bytes() for name in audit.FILES}
+        page = audit.publication_links(state, active, self.audit_title)["page"]
+        data = json.loads(files["audit.json"])
+        data["schema"] = 1
+        data.pop("publication")
+        (self.wiki / (page + ".md")).write_bytes(files["AUDIT.md"])
+        (self.wiki / (page + ".json")).write_bytes(manifest.encode(data))
+        self.git("add", ".", root=self.wiki)
+        self.git("commit", "-qm", "Unverified title-based legacy audit", root=self.wiki)
+        self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+        before = self.git("ls-remote", str(self.wiki_remote), "HEAD")
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with self.assertRaisesRegex(manifest.ManifestError, "ownership metadata"):
+                audit.publish(state, active, exported["identity"])
+            self.assertEqual(self.git("ls-remote", str(self.wiki_remote), "HEAD"), before)
+            self.assertEqual(self.audit_body_updates, [])
+            self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
+            (self.wiki / (page + ".json")).write_bytes(files["audit.json"])
+            self.git("add", ".", root=self.wiki)
+            self.git("commit", "-qm", "Restore matching PR ownership", root=self.wiki)
+            self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+            receipt = audit.publish(state, active, exported["identity"])
+        self.finish(receipt)
+
+    @pytest.mark.stable_storage
     def test_publication_date_requires_fresh_export_but_later_retries_remain_idempotent(self):
         from datetime import timedelta
 
@@ -1149,6 +1201,54 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.assertEqual(len(self.audit_body_updates), 1)
         self.finish(receipt)
+
+    @pytest.mark.stable_storage
+    def test_publication_rechecks_date_after_commit_and_preserves_later_day_repairs(self):
+        from datetime import timedelta
+
+        self.start_audit_fixture()
+        instant = audit.datetime(2026, 11, 24, 23, 59, 59, tzinfo=audit.timezone.utc)
+
+        class Clock(audit.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant
+
+        original = audit.command
+
+        def midnight_after_commit(argv, **kwargs):
+            nonlocal instant
+            result = original(argv, **kwargs)
+            if argv[1] == "commit":
+                instant += timedelta(seconds=2)
+            return result
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "datetime", Clock), \
+                patch.object(audit, "api", self.audit_api):
+            state, active, exported = self.audit_export()
+            with patch.object(audit, "command", side_effect=midnight_after_commit):
+                with self.assertRaisesRegex(manifest.ManifestError, "Publication day changed"):
+                    audit.publish(state, active, exported["identity"])
+            self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+            self.assertEqual(self.audit_body_updates, [])
+            self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
+            state, active, fresh = self.audit_export()
+            receipt = audit.publish(state, active, fresh["identity"])
+            self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+            self.git("merge", "--ff-only", "FETCH_HEAD", root=self.wiki)
+            self.git("rm", "--", audit.INDEX_PAGE + ".md", root=self.wiki)
+            self.git("commit", "-qm", "Index needs regeneration", root=self.wiki)
+            self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+            instant += timedelta(days=1)
+            repaired = audit.publish(state, active, fresh["identity"])
+            self.assertEqual(repaired["bundle"], receipt["bundle"])
+            self.assertNotEqual(repaired["wiki_commit"], receipt["wiki_commit"])
+            self.assertEqual(audit.publish(state, active, fresh["identity"]), repaired)
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        index = self.git("show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md", root=self.wiki)
+        self.assertIn("| 2026-11-25 |", index)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.finish(repaired)
 
     @pytest.mark.stable_storage
     def test_published_audit_survives_later_worker_and_control_model_observations(self):
@@ -2432,6 +2532,74 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertLess(index.index("/pull/1)"), index.index("/pull/9)"))
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent wiki edit")
         self.finish(receipt)
+
+    def check_wiki_post_push_change(self, change):
+        self.start_audit_fixture()
+        state, active, exported = self.audit_export()
+        folder = Path(exported["directory"])
+        page = audit.publication_links(state, active, self.audit_title)["page"]
+        original = audit.command
+        pushed = []
+        filename = page + (".json" if change == "replace" else ".md")
+
+        def concurrent_update(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[1] == "push" and not pushed:
+                pushed.append(argv[-1].split(":")[0])
+                self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+                self.git("merge", "--ff-only", "FETCH_HEAD", root=self.wiki)
+                path = self.wiki / filename
+                if change == "remove":
+                    path.unlink()
+                elif change == "replace":
+                    path.write_bytes(b"{}\n")
+                elif change == "symlink":
+                    path.unlink()
+                    path.symlink_to("Home.md")
+                else:
+                    (self.wiki / "Other-page.md").write_text("Concurrent content\n")
+                self.git("add", ".", root=self.wiki)
+                self.git("commit", "-qm", "Concurrent wiki update", root=self.wiki)
+                self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+            return result
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
+            with patch.object(audit, "command", side_effect=concurrent_update):
+                if change == "unrelated":
+                    receipt = audit.publish(state, active, exported["identity"])
+                else:
+                    with self.assertRaisesRegex(manifest.ManifestError, "Published audit pair changed"):
+                        audit.publish(state, active, exported["identity"])
+            self.assertEqual(len(pushed), 1)
+            if change != "unrelated":
+                self.assertFalse((folder / "receipt.json").exists())
+                self.assertEqual(self.audit_body_updates, [])
+                self.git("restore", f"--source={pushed[0]}", "--", filename, root=self.wiki)
+                self.git("add", "--", filename, root=self.wiki)
+                self.git("commit", "-qm", "Restore approved audit from history", root=self.wiki)
+                self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+                receipt = audit.publish(state, active, exported["identity"])
+            else:
+                self.assertEqual(self.git("show", "HEAD:Other-page.md", root=self.wiki), "Concurrent content")
+                self.assertEqual(receipt["wiki_commit"], self.git("rev-parse", "HEAD", root=self.wiki))
+            self.assertEqual(audit.publish(state, active, exported["identity"]), receipt)
+        self.finish(receipt)
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_removal_requires_restoring_the_approved_pair(self):
+        self.check_wiki_post_push_change("remove")
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_replacement_requires_restoring_the_approved_pair(self):
+        self.check_wiki_post_push_change("replace")
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_symlink_requires_restoring_the_approved_pair(self):
+        self.check_wiki_post_push_change("symlink")
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_unrelated_update_preserves_publication_and_retry(self):
+        self.check_wiki_post_push_change("unrelated")
 
     @pytest.mark.stable_storage
     def test_wiki_contention_stops_after_three_attempts_and_can_resume(self):

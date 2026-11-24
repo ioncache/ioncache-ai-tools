@@ -34,7 +34,9 @@ pairs for that PR are removed from the current tree. Do not keep superseded page
 copies. Wiki Git history and retained receipts preserve prior versions.
 Partial pairs, symlinks, unrecognized content and foreign-PR data are not replaced:
 restore the pair from wiki history or preserve conflicting content under another
-page name, then retry. Unrelated wiki pages remain untouched. Repository access,
+page name, then retry. Title-based pairs require schema-2 PR ownership metadata;
+schema-1 pairs are recognized only under legacy per-run names.
+Unrelated wiki pages remain untouched. Repository access,
 deletion and retention policies still apply; the wiki is not tamper-proof storage.
 
 Update the `Automated-Pull-Request-Audits` wiki page automatically. Create that
@@ -138,8 +140,9 @@ in the separately reviewed public narrative. Categories and pass membership are
 mechanical; their identifiers still require publication review.
 Review progress checkpoints remain private and are not exported as evidence.
 Model observations project only the fields above, not their raw private files.
-Without a role's model observations, requested models and efforts come from saved
-dispatch job options, including explicit overrides and configured fallbacks.
+Requested models and efforts combine saved dispatch job options with advisory
+selections, deduplicated per role. Partial observations do not hide other saved
+requests. Dispatch options include explicit overrides and configured fallbacks.
 Raw manifest and launch defaults are not evidence of an effective request.
 When neither record exists, the requested selection remains unknown.
 Their export-time snapshot stays fixed during acknowledgment; later observations
@@ -270,11 +273,13 @@ python3 "/absolute/plugin/scripts/development_audit.py" export "/private/run" \
 
 The helper writes two files under that assignment's private `audit/` directory
 and returns their combined identity. Export reads the open PR to freeze its
-title, head and UTC date before rendering. Publication and acknowledgment
+title, head and UTC date before rendering. A title with no usable filename text
+must be corrected before export writes either file. Publication and acknowledgment
 reuse that metadata; a title or head change requires a fresh export and review.
-If the UTC date changes before the first successful wiki publication, regenerate
-and review the export. Retries of an already published identical bundle retain
-its original date and remain idempotent on later days.
+The publication date is the UTC date at push initiation, not remote acceptance.
+If it changes before the first push, regenerate and review the export.
+Retries of an already published identical bundle retain its original date and
+remain idempotent on later days.
 Historical exports do not fetch a live PR head and explicitly leave it unobserved.
 Read both complete files. Check publication
 scope, secrets, personal data, private-source references, accuracy and missing
@@ -303,10 +308,13 @@ HTTPS Git operations use `gh auth git-credential` in the temporary checkout;
 SSH URLs retain Git's SSH authentication. Verify the chosen credential's actual
 wiki access rather than inferring it from access to the implementation repository.
 Before pushing, the helper verifies the two approved files, generated index and
-Home bytes and removal of superseded audit pairs, and rejects unrelated changed files. Other wiki files remain
-untouched. Existing page bytes come from the fetched commit, not the checkout
-that smudge filters can transform. Filters or commit hooks cannot silently change the published bundle
-or navigation, or retain a superseded page.
+Home bytes and removal of superseded audit pairs, and rejects unrelated changed
+files. Existing page bytes come from the fetched commit, not the checkout that
+smudge filters can transform. Filters or commit hooks cannot silently change the
+published bundle or navigation, or retain a superseded page.
+After pushing, the helper verifies both approved files at the fetched wiki head.
+A missing, changed or non-regular file prevents receipt creation; unrelated
+concurrent edits remain allowed. The receipt identifies that confirmed commit.
 It respects Git signing configuration. Missing access or signing failures
 produce failure, not a fallback destination or a false successful receipt.
 
