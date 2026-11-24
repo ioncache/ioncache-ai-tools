@@ -47,7 +47,9 @@ time-budget options.
    unchecked, and low-value observations privately. Reopen an assessment when
    new evidence contradicts it.
 5. Report new worthwhile actions and consequential uncertainties, plus
-   material changes to earlier reportable findings. Keep noise in the ledger.
+   material changes to earlier reportable findings. Include Known issues not
+   fixed here under [../review-code/KNOWN_ISSUES.md](../review-code/KNOWN_ISSUES.md).
+   Keep noise in the ledger.
 6. Stop after **two consecutive complete rounds with no new reportable
    information**, or at the configured cap. Failed or incomplete rounds are
    never quiet. Repeated findings alone do not reset the quiet streak.

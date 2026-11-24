@@ -16,7 +16,8 @@ is not evidence that there is no PR or default branch.
 
 For repository or path reviews, pre-existing issues within the target are
 in scope. For branch/PR changes, focus corrections on introduced or worsened
-issues and record discovered out-of-scope risks separately. Pin the base
+issues and report discovered out-of-scope risks under Known issues not fixed here.
+Pin the base
 commit in the ledger. Include local staged, unstaged, and relevant untracked
 files. Do not repeatedly review a remote diff that excludes local fixes.
 Do not check out a different branch or overwrite existing work to review a PR.
@@ -276,6 +277,9 @@ Report run ID, outcome, loop/cycle usage, reportable findings by severity and
 action, verified resolutions, consequential accepted risks, failed attempts,
 and incomplete coverage. Use the shared human-report policy; count non-reportable
 observations without dumping their details or presenting them as residual risks.
+Include **Known issues not fixed here** using
+[../review-code/KNOWN_ISSUES.md](../review-code/KNOWN_ISSUES.md), even when a
+material finding has `report_action: None` or an `ignored` disposition.
 Reports between iterations distinguish new findings from repeated observations.
 Do not claim token or cost limits; Phase 1 does not collect usage.
 

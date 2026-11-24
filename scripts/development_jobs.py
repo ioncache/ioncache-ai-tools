@@ -8,6 +8,7 @@ import stat
 
 import development_manifest as plan
 import development_models as models
+import development_followups as followups
 import review_assignments as assignments
 import review_ledger as review
 import writing_guidance
@@ -261,6 +262,7 @@ def instructions(assignment, request, executor):
         authorization(assignment, role) +
         writing_guidance.job_guidance(assignment, request, executor) +
         report_contract(assignment, role) +
+        followups.instructions(assignment, role, executor) +
         "Write the development report to the assigned result file.\nAssignment data: " + json.dumps(assignment))
 
 

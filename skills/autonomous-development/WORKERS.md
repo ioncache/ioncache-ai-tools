@@ -328,6 +328,11 @@ lost response; return `data.commit` for the actual accepted commit.
 draft PR. Reuse the existing write-pr-descriptions skill and preserve intervening
 human edits. Inspect existing branch and PR state before repeating any operation.
 Never push the default branch or silently create a replacement PR.
+Both `draft` and `ready` must apply [FOLLOW_UPS.md](FOLLOW_UPS.md): include
+**Known issues not fixed here** from the cumulative inventory, safely publish
+or reuse tickets only within the assignment's authority, and return
+`data.follow_up_issues` with observed links or explicit unfiled reasons.
+Do not turn a ticket failure into a blocked development result.
 
 `audit-initial` and `audit-final` follow [AUDIT.md](AUDIT.md). If the assignment
 reports audit publication disabled, return `data: {"disabled": true}` without
@@ -352,6 +357,8 @@ Preserve the managed `Audit` link block when updating the description, along wit
 existing human text. Keep initial and final wiki files; neither is a review approval.
 When disabled, disclose
 that no final audit was published rather than presenting initial evidence as final.
+The final human report includes the named unresolved list and publication
+limitations regardless of whether audit or ticket publication was approved.
 
 `evidence` uses approved startup commands, fixtures, and native browser tools.
 Verify readiness, capture screenshots for the accepted revision, and write them

@@ -76,7 +76,8 @@ Assign a stable `F001`-style ID to each underlying issue. Record:
 - The underlying issue key, plain-language claim, affected locations,
   triggering conditions, expected behavior, consequence, and evidence.
 - Validity, kind, reachability, risk, confidence, priority, and disposition
-  from the workflow, with reasons for each assessment.
+  from the workflow, with reasons for each assessment. Include `material`,
+  `introduced`, disclosure sensitivity, and why an unresolved issue was not fixed.
 - The next worthwhile correction, investigation, or decision; what would
   settle uncertainty; dependencies and shared-correction groups.
 - Each assessment change, its round/checkpoint, previous assessment, new
@@ -91,6 +92,8 @@ explicit duplicate of one. No candidate may disappear during filtering.
 
 Record the latest completed round table, current reportable IDs, material
 updates not yet communicated, coverage/verification gaps, and stop reason.
+Retain the named Known issues not fixed here list, including material no-action
+findings. The main action list's filters do not discard this list.
 Record whether each round's report was delivered so resumption can deliver
 an interrupted report without starting another review.
 

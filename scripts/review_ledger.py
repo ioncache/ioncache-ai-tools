@@ -249,6 +249,7 @@ def load_history(path):
     """Validate surviving history without authorizing use of a closed run."""
     try:
         require(not path.is_symlink(), f"Symlink not allowed: {path}")
+        require(stat.S_ISREG(path.lstat().st_mode), f"Expected a regular ledger file: {path}")
         ledger = json.loads(path.read_bytes())
         validate_snapshots(ledger, path.parent)
         state = replay(ledger, check_snapshot_transition)
@@ -707,8 +708,11 @@ def status(args, root):
         require_current(ledger)
     current = snapshot(root) if root is not None else None
     before = ledger["snapshots"][state["snapshot"]]
+    import review_reporting
+
     return {"ledger": str(path), "objective": ledger["objective"],
             "scope": ledger["scope"], "base": ledger["base"], **state,
+            "known_issues": review_reporting.project(review_reporting.records(state))["known_issues"],
             "drift": current != before if current is not None else None,
             "changed_files": changed(before, current) if current is not None else None,
             "usage": "not_collected", "history": ledger["events"]}

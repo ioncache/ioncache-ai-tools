@@ -160,12 +160,19 @@ documentation accuracy, test gaps, and extreme-edge-case exclusions. A valid
 style deviation can have `report_action: None`; a consequential uncertainty
 can have `report_action: Investigate` without a known fix.
 
-Each reportable assessment (`Act`, `Decide`, or `Investigate`) also has:
+Every assessment records `material: true` for an evidenced defect or credible
+consequential uncertainty, or `false` for a style-only or genuinely immaterial
+observation, with its reason. Record `duplicate_of` only for a true duplicate,
+using its canonical key. Disposition and publication do not change materiality.
+
+Each reportable assessment (`Act`, `Decide`, or `Investigate`), and each valid
+or uncertain material assessment even with `report_action: None`, also has:
 
 - `title`: a one-line headline.
 - `summary`: the trigger, behaviour and consequence, and the requirement it
   breaks, readable without the review's private evidence.
-- `next_step`: the simplest coherent correction, decision, or check.
+- `next_step`: the simplest coherent correction, decision, or check, or `null`
+  for a known-issue-only entry when none is warranted or known.
 - `basis`: `observed` or `inferred` for the merged issue, `inferred` unless its
   claimed failure was observed.
 - `priority_level`: `P1`, `P2`, or `P3` under
@@ -174,6 +181,19 @@ Each reportable assessment (`Act`, `Decide`, or `Investigate`) also has:
 - `done_when`: the test or check that shows the correction worked, or `null`
   when none is identified.
 - `locations`: every affected `path:line`, plus affected callers or documentation.
+- `sensitive`: whether public disclosure could expose an exploitable weakness
+  or personal data. Missing disclosure assessment is not clearance to publish.
+- `public`: a separately disclosure-reviewed presentation with nonempty `title`,
+  `summary`, and `reason`, a `locations` list of safe repository-relative
+  references, and optional `next_step`. Distill the evidence and consequence
+  into this summary; never copy raw evidence, private paths, or diagnostics.
+  Omit it or use `null` when safe disclosure is unavailable. A non-sensitive
+  finding without this presentation is still withheld from public drafts.
+  Supply it again for each changed assessment; earlier presentation is not clearance.
+
+Use [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for unresolved reporting independently
+of fix scope. Retain these fields for pre-existing, ignored and out-of-scope
+issues too, not just findings selected for correction.
 
 When the request's `posting` is not `null`, each reportable assessment also has:
 

@@ -56,6 +56,10 @@ the assignment or stop workers. Hand-backs are not user questions.
    the independent audit opt-out leaves publication disabled, not implied.
    Budget two additional assignments per PR plus any publication retries.
    See [AUDIT.md](AUDIT.md) for the export and publication contract.
+   Also resolve `permissions.create_follow_up_issues`, proposing `true` for
+   automatic issue creation by the existing PR publishers. Explain deduplication,
+   safe disclosure and the independent publication opt-out in
+   [FOLLOW_UPS.md](FOLLOW_UPS.md). This needs no extra assignment or per-ticket approval.
 
 Run the helper by resolving `../../scripts/development_run.py` relative to this
 installed skill directory:
@@ -215,7 +219,11 @@ issues, commits or evidence. Rollback is a separate destructive action. Clarify 
 ambiguous "undo" before modifying either the target work or durable history.
 
 Report per-PR progress, readiness, exceptions, consumed allowances, incomplete
-work, and evidence references. A runtime success is not acceptance. Mark a PR
+work, and evidence references. A runtime success is not acceptance. Include a
+**Known issues not fixed here** section in the PR body and the same named
+list in the final report, following [FOLLOW_UPS.md](FOLLOW_UPS.md). Use the
+cumulative `progress.known_issues`, not only the last review's action count.
+Ticket failures remain visible but do not add readiness gates. Mark a PR
 ready only for its verified revision. Never approve or merge it, force-push,
 push the default branch, deploy, or change production flags.
 When audit publication is approved and enabled, publish initial evidence after

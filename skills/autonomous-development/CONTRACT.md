@@ -22,8 +22,18 @@ letters, digits, and hyphens, beginning with a letter.
 | `prs` | PR records below |
 | `tasks` | Task records below |
 | `limits` | Positive integer `assignments`, `attempts`, `review_loops`, `fix_cycles`, `review_dispatches` |
-| `permissions` | Explicit booleans for `commit`, `push`, `create_pr`, `mark_ready`, `screenshots`; new plans also specify `publish_audit` |
+| `permissions` | Explicit booleans for `commit`, `push`, `create_pr`, `mark_ready`, `screenshots`; new plans also specify `publish_audit` and `create_follow_up_issues` |
 | `constraints` | Non-empty list of scope, decision, risk-acceptance, model, and operational constraints |
+
+`create_follow_up_issues` authorizes the existing `draft` and `ready` workers
+to create deduplicated follow-ups under [FOLLOW_UPS.md](FOLLOW_UPS.md).
+Omission means false and preserves older approval identities. Issue creation
+has an independent feature opt-out and never becomes a readiness prerequisite.
+Their optional `data.follow_up_issues` receipts carry URLs or unfiled reasons.
+The controller carries a cumulative assessed inventory in private state and
+returns `known_issues`, private `known_issues_report` and disclosure-filtered
+`known_issues_pr_draft` in per-PR progress. This includes
+material pre-existing, out-of-scope and deferred issues even when action is None.
 
 Artifacts include all three roles: `requirements`, `design`, and `plan`.
 `source` identifies the authoritative issue, document, or file. `snapshot` is a

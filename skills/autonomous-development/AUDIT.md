@@ -38,6 +38,11 @@ the description, including an existing checklist and human notes. The helper
 owns only the link block between `ioncache-audit:start` and `ioncache-audit:end`
 HTML comments. Initial and final publication update that block; they do not post
 conversation comments or require manual uploads.
+The approved narrative can reference follow-up issues from
+[FOLLOW_UPS.md](FOLLOW_UPS.md), making the audit the discovery index without a
+per-run parent issue. Keep those references disclosure-reviewed. The `draft`
+and `ready` workers, not the audit publisher, own the PR's Known issues not fixed
+here section; never overwrite it when replacing the audit link block.
 
 An initialized, writable wiki is a deployment prerequisite. GitHub documents
 creating its initial page before cloning; enabling the repository's wiki setting

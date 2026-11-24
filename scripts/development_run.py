@@ -26,6 +26,7 @@ import development_models as models
 import development_dispatch as dispatches
 import development_jobs as jobs
 import development_rebase as rebases
+import development_followups as followups
 import review_assignments as assignments
 import review_ledger as review
 
@@ -491,6 +492,7 @@ def review_result(state, assignment, data):
     preserve_checkout(assignment, after)
     unchanged(after, capture(root))
     progress["accepted"] = after
+    followups.retain(progress, report)
     progress["review"] = report
 
 
@@ -587,6 +589,7 @@ def delivery_result(state, assignment, data, settings):
     if progress["url"]:
         plan.require(progress["url"] == data["url"], "Publication cannot replace the owned PR")
     progress["url"] = data["url"]
+    followups.record(progress, data, state["manifest"], settings)
 
 
 @contextmanager
@@ -623,6 +626,7 @@ def complete(state, report, settings):
         else:
             state["outcome"] = "blocked"
             state.pop("stop_kind", None)
+            retain_incomplete_findings(state, report["data"].get("ledger"))
         active.update(worker=report["worker"], outcome=report["outcome"], report=report)
         state["history"][-1] = active
         state["active"] = None
@@ -715,11 +719,12 @@ def request(state, settings):
             "pr_plan": plan.indexed(manifest["prs"]).get(assignment["pr"]),
             "task_plan": task_details(manifest, assignment["task"]),
             "dependencies": {
-                key: progress_summary(state["prs"][key])
+                key: progress_summary(state["prs"][key], settings)
                 for key in (plan.indexed(manifest["prs"])[assignment["pr"]]["dependencies"]
                             if assignment["pr"] else [])
             },
-            "progress": progress_summary(state["prs"][assignment["pr"]]) if assignment["pr"] else None,
+            "progress": progress_summary(state["prs"][assignment["pr"]], settings) if assignment["pr"] else None,
+            "follow_ups": followups.policy(manifest, settings),
             "audit": {"enabled": audit_enabled(state, settings),
                       "index_url": audit.wiki_index(state) if audit_enabled(state, settings) else None},
             "monitoring": {"enabled": monitoring.enabled(settings)},
@@ -729,8 +734,10 @@ def request(state, settings):
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
 
-def progress_summary(progress):
-    result = {key: value for key, value in progress.items() if key not in ("accepted", "review", "changed")}
+def progress_summary(progress, settings):
+    result = {key: value for key, value in progress.items()
+              if key not in ("accepted", "review", "changed", "finding_inventory")}
+    result.update(followups.presentation(progress, settings))
     reviewed = progress.get("review")
     if reviewed:
         result["review"] = {"ledger": reviewed["ledger"], "outcome": reviewed["outcome"],
@@ -765,7 +772,7 @@ def summary(state, settings=None):
             "model_selection": model_policy(state, settings),
             "input_error": input_error(state),
             "consumed_assignments": len(state["history"]), "limits": state["manifest"]["limits"],
-            "prs": {key: progress_summary(value) for key, value in state["prs"].items()},
+            "prs": {key: progress_summary(value, settings) for key, value in state["prs"].items()},
             "assignment": request(state, settings),
             "usage": "Model tokens, cost, and native retries are not measured by this ledger"}
 
@@ -871,6 +878,44 @@ def rebase_review(state, args, settings):
     state["outcome"], state["reason"] = "running", args.reason
 
 
+def incomplete_review_path(state, reference):
+    active = state["active"]
+    root = Path(active["root"])
+    reference = reference or active.get("resume_ledger")
+    if reference:
+        path = review.ledger_path(root, reference, allow_unavailable=True)
+    else:
+        recorded = {
+            Path(reference).parent.name for item in state["history"] if item["pr"] == active["pr"]
+            for reference in (item.get("report", {}).get("data", {}).get("ledger"),
+                              item.get("retired_review_ledger"), item.get("finding_ledger"))
+            if isinstance(reference, str)
+        }
+        paths = [path for path in audit.stored_review_paths(root, [Path(active["review_storage"])])
+                 if path.parent.name not in recorded]
+        plan.require(len(paths) == 1, "Incomplete review ledger is missing or ambiguous")
+        path = paths[0]
+    if active.get("review_storage"):
+        plan.require(path.parent.parent == Path(active["review_storage"]),
+                     "Incomplete review ledger is outside the pinned review storage")
+    return path
+
+
+def retain_incomplete_findings(state, reference=None):
+    active = state["active"]
+    if active["role"] != "review":
+        return
+    progress = state["prs"][active["pr"]]
+    try:
+        path = incomplete_review_path(state, reference)
+        active["finding_ledger"] = str(path)
+        retained = review.status(SimpleNamespace(ledger=str(path)), Path(active["root"]))
+        followups.retain(progress, retained)
+    except (ValueError, OSError, KeyError, TypeError):
+        progress["finding_reporting_error"] = (
+            "Incomplete review findings unavailable; inspect the retained assignment and review storage.")
+
+
 def mutate(args, folder):
     with locked(folder), ExitStack() as guards:
         state = load(folder)
@@ -909,6 +954,7 @@ def mutate(args, folder):
             plan.require(state["active"] is not None, "No outstanding assignment")
             plan.text(args.reason)
             plan.text(args.shutdown_evidence)
+            retain_incomplete_findings(state)
             state["active"].update(outcome="retired", reason=args.reason,
                                    shutdown_evidence=args.shutdown_evidence)
             state["history"][-1] = state["active"]

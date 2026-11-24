@@ -73,6 +73,7 @@ def executor_source(tmp_path_factory):
         "workflows/autonomous-development.js", ".claude-plugin/plugin.json",
         "skills/autonomous-development/WORKERS.md",
         "skills/review-code/WRITING.md", "skills/review-code/categories.json",
+        "skills/autonomous-development/FOLLOW_UPS.md",
     ):
         destination = source / name
         destination.parent.mkdir(parents=True, exist_ok=True)

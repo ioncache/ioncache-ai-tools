@@ -20,6 +20,10 @@ and action. A real issue is not invalid because it is pre-existing,
 inconvenient, or expensive to fix. Do not invent requirements.
 Explain the affected behavior, contract, or concrete maintenance consequence.
 A stylistic preference or metric violation alone is not a substantive issue.
+Record materiality independently of the chosen action. A valid defect or
+credible consequential uncertainty remains material when pre-existing,
+out of scope, deferred, or accepted; a style-only observation does not.
+Scope or correction cost must never be used to hide the existence of a defect.
 
 ## Extreme edge cases
 

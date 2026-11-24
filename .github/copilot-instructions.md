@@ -134,6 +134,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   eligibility, anchors comments to the merge-base diff, applies the sensitive
   findings policy and posts one `COMMENT` review. All GitHub calls go through
   its `api()` function; the self-check replaces it with fakes and never posts.
+- `review_reporting.py` projects unresolved material findings independently of
+  action and disposition. `development_followups.py` carries the cumulative
+  inventory and optional native publisher receipts. The existing draft/ready
+  workers own follow-up issues and the PR's known-issue section; ticket failures
+  add no acceptance gate. Keep full evidence private and disclosure-filter PR drafts.
 - `scripts/development_manifest.py` validates approved inputs, and
   `scripts/development_run.py` owns private development-run bookkeeping outside
   the repository. It does not launch models or publish. `development_handoff.py`
