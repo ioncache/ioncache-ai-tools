@@ -1170,10 +1170,15 @@ class DevelopmentRunTests(unittest.TestCase):
         saved = (folder / "receipt.json").read_bytes()
         head = self.git("ls-remote", str(self.wiki_remote), "HEAD")
         updates = copy.deepcopy(self.audit_body_updates)
+        attempt = (folder / "publication-attempt.json").read_bytes()
+        self.assertEqual(development.load(self.store)["prs"]["first"]["accepted"]["head"], receipt["code_commit"])
+        self.assertEqual(self.audit_api("repos/fixture/project/pulls/1")["head"]["sha"], receipt["code_commit"])
         with patch.object(audit, "api", side_effect=AssertionError("Historical acknowledgement contacted GitHub")), \
                 patch.object(audit, "command", side_effect=AssertionError("Historical acknowledgement ran Git")):
             self.assertEqual(self.audit_cli(*args), receipt)
+            self.assertIn("Archive evidence changed", self.audit_cli(*args, "--republish", ok=False))
         self.assertEqual((folder / "receipt.json").read_bytes(), saved)
+        self.assertEqual((folder / "publication-attempt.json").read_bytes(), attempt)
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.assertEqual(self.git("ls-remote", str(self.wiki_remote), "HEAD"), head)
         self.assertEqual(self.audit_body_updates, updates)
@@ -1285,6 +1290,137 @@ class DevelopmentRunTests(unittest.TestCase):
             receipt = self.audit_cli(*args, "--republish")
         self.assertEqual(receipt, json.loads((folder / "receipt.json").read_bytes()))
         self.assertEqual(len(self.audit_body_updates), 1)
+
+    @pytest.mark.stable_storage
+    def test_archive_recovers_matching_legacy_publication_without_local_records(self):
+        _, _, exported = self.archive_fixture()
+        args = ("publish-archive", "--pr", "first", "--approved", exported["identity"])
+        folder = Path(exported["directory"])
+        before = (self.store / "RUN.json").read_bytes()
+        with patch.object(audit, "api", self.audit_api):
+            receipt = self.audit_cli(*args)
+            head = self.git("ls-remote", str(self.wiki_remote), "HEAD")
+            body = self.audit_body
+            (folder / "receipt.json").unlink()
+            (folder / "publication-attempt.json").unlink()
+            recovered = self.audit_cli(*args)
+        self.assertEqual(recovered, receipt)
+        self.assertEqual(json.loads((folder / "receipt.json").read_bytes()), receipt)
+        self.assertTrue((folder / "publication-attempt.json").is_file())
+        self.assertEqual(self.git("ls-remote", str(self.wiki_remote), "HEAD"), head)
+        self.assertEqual(self.audit_body, body)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        with patch.object(audit, "api", side_effect=AssertionError("Acknowledgement contacted GitHub")), \
+                patch.object(audit, "command", side_effect=AssertionError("Acknowledgement ran Git")):
+            self.assertEqual(self.audit_cli(*args), receipt)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+
+    @pytest.mark.stable_storage
+    def test_archive_retry_preserves_unrelated_navigation_edits_with_a_saved_attempt(self):
+        _, _, exported = self.archive_fixture()
+        args = ("publish-archive", "--pr", "first", "--approved", exported["identity"])
+        folder = Path(exported["directory"])
+        before = (self.store / "RUN.json").read_bytes()
+        original = audit.command
+
+        def unavailable_push(argv, **kwargs):
+            if argv[1] == "push":
+                raise OSError("Publication push unavailable")
+            return original(argv, **kwargs)
+
+        with patch.object(audit, "api", self.audit_api), \
+                patch.object(audit, "command", side_effect=unavailable_push):
+            self.assertIn("Publication push unavailable", self.audit_cli(*args, ok=False))
+        attempt = (folder / "publication-attempt.json").read_bytes()
+        self.assertFalse((folder / "receipt.json").exists())
+        self.assertEqual(self.audit_body_updates, [])
+        self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
+        body = self.audit_body + "\nUnrelated PR notes.\n"
+        self.audit_body = body
+        other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
+        index = f"Human introduction\n\n{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n{other_row}\nHuman footer\n"
+        (self.wiki / (audit.INDEX_PAGE + ".md")).write_text(index)
+        self.git("add", ".", root=self.wiki)
+        self.git("commit", "-qm", "Unrelated navigation edits", root=self.wiki)
+        self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+        with patch.object(audit, "api", self.audit_api):
+            receipt = self.audit_cli(*args)
+        self.assertEqual((folder / "publication-attempt.json").read_bytes(), attempt)
+        self.assertEqual(json.loads((folder / "receipt.json").read_bytes()), receipt)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        block = f"\n\n## Audit\n\n{audit.LINK_START}\n{audit.audit_links(receipt)}\n{audit.LINK_END}\n\n"
+        self.assertEqual(self.audit_body.replace(block, "", 1), body)
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        published = audit.command(["git", "show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md"], cwd=self.wiki).decode()
+        own_row = next(line for line in published.splitlines(keepends=True)
+                       if "](https://github.com/fixture/project/pull/1)" in line)
+        self.assertEqual(published.replace(own_row, "", 1), index)
+        self.assertIn(receipt["url"], own_row)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+
+    def archive_contention_fixture(self, *, superseded):
+        _, _, exported = self.archive_fixture()
+        state = development.load(self.store)
+        publication = audit.publication_links(state, audit.archive_assignment(state, "first"), "0" * 64)
+        if not superseded:
+            publication = {key: value.replace("/pull/1", "/pull/9").replace("Audit-PR-1-", "Audit-PR-9-")
+                           for key, value in publication.items()}
+        index = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n",
+                                  {**publication, "title": "Concurrent audit"})
+        original = audit.command
+        pushes = 0
+        raced_head = None
+
+        def concurrent_update(argv, **kwargs):
+            nonlocal pushes, raced_head
+            if argv[1] == "push":
+                pushes += 1
+                if pushes == 1:
+                    (self.wiki / (audit.INDEX_PAGE + ".md")).write_text(index)
+                    self.git("add", ".", root=self.wiki)
+                    self.git("commit", "-qm", "Concurrent archive navigation", root=self.wiki)
+                    self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+                    raced_head = self.git("rev-parse", "HEAD", root=self.wiki)
+            return original(argv, **kwargs)
+
+        before = (self.store / "RUN.json").read_bytes()
+        body = self.audit_body
+        with patch.object(audit, "api", self.audit_api), \
+                patch.object(audit, "command", side_effect=concurrent_update):
+            result = self.audit_cli("publish-archive", "--pr", "first", "--approved", exported["identity"],
+                                    ok=not superseded)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        return {"result": result, "pushes": pushes, "raced_head": raced_head, "index": index,
+                "body": body, "folder": Path(exported["directory"])}
+
+    @pytest.mark.stable_storage
+    def test_archive_refetch_preserves_newer_own_navigation(self):
+        raced = self.archive_contention_fixture(superseded=True)
+        self.assertIn("partial or superseded", raced["result"])
+        self.assertEqual(raced["pushes"], 1)
+        self.assertEqual(self.git("rev-parse", "FETCH_HEAD", root=self.wiki), raced["raced_head"])
+        self.assertEqual(audit.command(["git", "show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md"], cwd=self.wiki),
+                         raced["index"].encode())
+        self.assertEqual(self.audit_body, raced["body"])
+        self.assertEqual(self.audit_body_updates, [])
+        self.assertFalse((raced["folder"] / "receipt.json").exists())
+
+    @pytest.mark.stable_storage
+    def test_archive_refetch_preserves_other_pr_navigation_and_completes(self):
+        raced = self.archive_contention_fixture(superseded=False)
+        receipt = raced["result"]
+        self.assertEqual(raced["pushes"], 2)
+        self.assertNotEqual(receipt["wiki_commit"], raced["raced_head"])
+        self.assertEqual(self.git("rev-parse", "FETCH_HEAD", root=self.wiki), receipt["wiki_commit"])
+        published = audit.command(["git", "show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md"], cwd=self.wiki).decode()
+        own_row = next(line for line in published.splitlines(keepends=True)
+                       if "](https://github.com/fixture/project/pull/1)" in line)
+        self.assertEqual(published.replace(own_row, "", 1), raced["index"])
+        self.assertIn(receipt["url"], own_row)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.assertIn(receipt["url"], self.audit_body)
+        self.assertEqual(json.loads((raced["folder"] / "receipt.json").read_bytes()), receipt)
 
     @pytest.mark.stable_storage
     def test_archive_rechecks_pr_navigation_after_wiki_publication(self):
@@ -1733,6 +1869,27 @@ class DevelopmentRunTests(unittest.TestCase):
                        f"[Audits][index]\n\n[index]: Other-page\n[index]: {url}"):
             with self.subTest(hidden=hidden):
                 self.assertIn(audit.HOME_START, audit.home_page(hidden, url))
+
+    def test_wiki_home_rescans_links_inside_escaped_outer_brackets(self):
+        url = "https://github.com/fixture/project/wiki/" + audit.INDEX_PAGE
+        link = f"[Audits]({url})"
+        for visible in ("\\[See " + link + "\\]", "\\[" + link + "\\]",
+                        "\\[\\[See " + link + "\\]\\]",
+                        "\\[See [Audits][index]\\]\n\n[index]: " + url,
+                        "\\[See [Audits][]\\]\n\n[Audits]: " + url,
+                        "\\[See [Audits]\\]\n\n[Audits]: " + url,
+                        "[\\[Audits](" + url + ")"):
+            with self.subTest(visible=visible):
+                original = "# Home\n\n" + visible + "\n"
+                self.assertEqual(audit.home_page(original, url), original)
+        for hidden in ("\\[See \\" + link + "\\]", "\\[See !" + link + "\\]",
+                       "![Image " + link + "](picture.png)"):
+            with self.subTest(hidden=hidden):
+                updated = audit.home_page(hidden, url)
+                self.assertTrue(updated.startswith(hidden))
+                self.assertEqual(updated[len(hidden):].count(url), 1)
+                self.assertIn(audit.HOME_START, updated)
+                self.assertEqual(audit.home_page(updated, url), updated)
 
     @pytest.mark.stable_storage
     def test_archive_publication_preserves_existing_markdown_home_files(self):

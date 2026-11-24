@@ -541,11 +541,14 @@ def home_link_destinations(visible):
         return "\n" * match[0].count("\n")
 
     visible = re.sub(HOME_REFERENCE, retain_definition, visible, flags=re.MULTILINE)
-    link = (r'(!?)\[([^\]\n]+)\](?:'
-            r'\(\s*<?([^>\s)]+)>?(?:\s+' + HOME_TITLE + r')?\s*\)|'
-            r'\[([^\]\n]*)\])?')
-    for match in re.finditer(link, visible):
+    link = re.compile(r'(!?)\[([^\]\n]+)\](?:'
+                      r'\(\s*<?([^>\s)]+)>?(?:\s+' + HOME_TITLE + r')?\s*\)|'
+                      r'\[([^\]\n]*)\])?')
+    offset = 0
+    while match := link.search(visible, offset):
+        offset = match.end()
         if markdown_escaped(visible, match.start() + len(match[1])):
+            offset = match.start() + len(match[1]) + 1
             continue
         if match[1] and not markdown_escaped(visible, match.start()):
             continue
