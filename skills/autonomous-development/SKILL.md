@@ -229,3 +229,12 @@ push the default branch, deploy, or change production flags.
 When audit publication is approved and enabled, publish initial evidence after
 creating the draft PR and final evidence before readiness. Preserve both immutable
 links. Report disabled publication explicitly; never upload the private run store.
+For a stopped, failed or completed run, `development_audit.py archive` followed
+by `publish-archive` publishes reviewed historical evidence without reserving
+work or changing outcomes, history or allowances. Follow [AUDIT.md](AUDIT.md)
+for exact-byte approval, existing permissions, open-PR ownership, accepted-commit
+binding and the durable receipt. A historical publication never substitutes for
+final review, a pending audit assignment or readiness.
+Archive retries acknowledge validated receipts without replacing newer audit
+links. Missing receipts require reconciliation of existing effects. Use
+`--republish` only for intentional restoration, with the same publication checks.

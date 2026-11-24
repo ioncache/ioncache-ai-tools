@@ -32,6 +32,17 @@ surrounding content intact. Use the UTC publication date, PR number/title/link,
 and links to the report and JSON. Repeating the same publication leaves its
 existing row in place rather than duplicating or reordering it.
 
+Keep the index discoverable from the existing `Home.md` or `Home.markdown`.
+If both exist, preserve and update both rather than relying on GitHub's
+same-title selection. If Home has no index link, append
+one between `ioncache-audit-index:start` and `ioncache-audit-index:end` HTML
+comments. Create `Home.md` only if neither exists. Preserve all other Home content
+and existing handwritten inline, reference-style or wiki index links instead of
+duplicating them. An edited or malformed managed block requires preserving its
+human notes outside the block before repair and retry. Marker examples inside
+code are literal content, not managed blocks. Home bytes are verified
+along with the audit and index.
+
 Update an `Audit` section in the PR body with `Report`, `Data (audit.json)`, and
 `Automated Pull Request Audits` links, as in the wiki index. Preserve the rest of
 the description, including an existing checklist and human notes. The helper
@@ -63,8 +74,12 @@ python3 "/absolute/plugin/scripts/development_audit.py" archive "/private/run" \
 
 This reads saved snapshots and history, writes identity-addressed files under
 `<private-run-store>/archives/`, and performs no publication or live-worktree
-acceptance. It cannot substitute for a reserved audit assignment. Legacy migrated
-ledgers stay at their external migration destination; retain that storage too.
+acceptance. It uses the saved accepted snapshot when present, otherwise the
+latest saved PR snapshot. The bundle identifies the historical run outcome and
+whether an accepted code commit exists. Use `publish-archive` below to publish
+an inspected archive without reserving an assignment. An archive cannot satisfy
+the workflow's final-audit or readiness requirements.
+Legacy migrated ledgers stay at their external migration destination; retain that storage too.
 If an existing run needed external-storage recovery, retain its assigned review
 storage too. While the original store remains invalid, new archives use
 `$XDG_STATE_HOME/ioncache-ai-tools/development-recovery/<run-id>/archives/`
@@ -148,7 +163,8 @@ proximity. An empty list means no relationship was supplied, not that none occur
 ## Export, inspect, publish
 
 Resolve `../../scripts/development_audit.py` relative to this skill directory.
-Use it only for the current reserved `audit-initial` or `audit-final` assignment.
+Use `export` and `publish` only for the current reserved `audit-initial` or
+`audit-final` assignment. The separate archive commands do not require one.
 Write the narrative under `<store>/reports/<assignment-id>/public.json`.
 
 ```sh
@@ -183,21 +199,106 @@ Repository identities are case-insensitive; branch names remain case-sensitive.
 HTTPS Git operations use `gh auth git-credential` in the temporary checkout;
 SSH URLs retain Git's SSH authentication. Verify the chosen credential's actual
 wiki access rather than inferring it from access to the implementation repository.
-Before pushing, the helper verifies the two approved files and generated index
-bytes, and rejects any unrelated changed files. Existing wiki files remain
-untouched. Filters or commit hooks cannot silently change the published bundle.
+Before pushing, the helper verifies the two approved files, generated index and
+Home bytes, and rejects any unrelated changed files. Other wiki files remain
+untouched. Existing page bytes come from the fetched commit, not the checkout
+that smudge filters can transform. Filters or commit hooks cannot silently change the published bundle
+or navigation.
 It respects Git signing configuration. Missing access or signing failures
 produce failure, not a fallback destination or a false successful receipt.
+
+## Publish outside an active audit assignment
+
+Run `archive` first, then read both complete exported files and perform the same
+publication-safety review as for a live export. Publish those exact bytes:
+
+```sh
+python3 "/absolute/plugin/scripts/development_audit.py" publish-archive "/private/run" \
+  --pr "<plan-pr-id>" --approved "<archived-bundle-identity>"
+```
+
+This works for running, blocked, interrupted, failed and completed runs, including
+after implementation-worktree cleanup. It requires the original approved inputs
+and manifest, `publish_audit`, `push` and `create_pr` permissions, the enabled
+audit feature and workflow, and native permission. It does not infer new human
+authorization or waive an opt-out. Use an intact current helper when an older
+pinned executor lacks this command; do not replace the run's executor pin.
+
+The saved accepted file snapshot must match a successful commit handoff.
+Review acceptance alone does not establish that its fixes were committed.
+For supported rebases, the retained snapshot-to-tree evidence must match the
+Git commit object in the main repository; retain those objects after worktree
+cleanup. Missing evidence leaves local export available. Complete the accepted
+commit handoff or restore the retained objects before publishing.
+The PR must be open in the approved repository on its owned branch, and its head
+must equal that exact commit.
+Even a patch-identical rebase with a different commit is refused. Reconcile
+the review within existing allowances, or use `rebase-review` for a supported
+unchanged target rebase, then regenerate and inspect the archive. If that
+recovery is unavailable, retain the local archive and report publication
+incomplete. Never relabel old evidence, reset limits, or force-push to make it fit.
+Historical publication records prior evidence, including failed or unavailable
+reviews; it does not revalidate the code or imply current acceptance.
+
+If draft creation succeeded but its report did not record the URL, add
+`--pull-request "https://github.com/OWNER/REPO/pull/NUMBER"`. This identifies an
+existing PR; it does not create one. The same repository, branch, open-state
+and commit checks still apply. It cannot replace a different recorded PR URL.
+The URL is retained in the receipt, not written into workflow state.
+
+The command uses the same guarded wiki push, index and Home updates, PR link
+block and confirmed PR reread as normal publication. After confirmation, it
+atomically saves `receipt.json` beside the archive's two files, including the
+manifest approval identity and `publish_audit` authorization basis.
+
+A normal retry with a valid receipt acknowledges that historical publication.
+It verifies the approved archive bytes, receipt, PR target and authorization,
+then returns the saved receipt without contacting the remote or rewriting it.
+Later run history does not invalidate that acknowledgement. It does not confirm
+current PR acceptance, current navigation or continued remote availability.
+Permissions, feature opt-outs and approved-input checks still apply.
+
+Without a receipt, publication still requires fresh matching run evidence and
+the exact current PR head. Before remote writes, the helper saves
+`publication-attempt.json` with the original managed PR block and wiki-row
+digests. Retries can finish effects that still match those originals or this
+archive. Unrelated PR text and other PRs' rows do not prevent recovery.
+If either audit pointer has changed to another record, report the publication
+as partial or superseded and preserve the newer navigation. A receipt write
+failure remains incomplete; matching effects can be confirmed and receipted
+without another wiki commit or PR update. For older publications without an
+attempt record, existing archive pages require matching index and PR links
+before automatic recovery.
+
+To intentionally make the same approved archive current again, use
+`publish-archive STORE --pr ID --approved IDENTITY --republish`. This starts
+a new attempt against the current navigation and replaces the receipt only
+after successful confirmation. It is not an automatic retry fallback.
+Fresh-evidence, ownership, permission and exact-head checks still apply;
+if run evidence changed, export and inspect a new archive instead.
+
+`RUN.json`, outcomes, history, assignments and allowances remain byte-for-byte
+unchanged. When archive storage uses the external recovery location, its receipt
+and temporary wiki checkout stay there too, never in a repository.
+
+New remote publication after changed history, outcome, acceptance or review
+evidence requires a fresh archive and inspection. Later model observations alone do not revoke approval of a
+frozen archive. If an old archive is incompatible or unavailable, regenerate it
+from the retained evidence rather than editing its files. A historical receipt
+does not complete a pending audit assignment or mark a PR ready.
 
 ## Recovery and limitations
 
 If a response is lost, inspect the existing export, wiki files and PR body.
-Repeating the same publication reuses matching files and links without creating
-another row, commit or PR update. Page names include the run, assignment and
+Live publication retries reuse matching files and links without creating
+another row, commit or PR update. Archive retries follow the acknowledgement
+and supersession rules above. Page names include the run, assignment and
 export identities. Different assignments retain distinct publication records.
 Concurrent wiki pushes are retried at most three times by fetching the new head
 and rebuilding the table edit; never force-push or discard another writer's rows.
 If contention continues, retry the same export within the assignment's limits.
+Archive publication has the same three-attempt contention bound per invocation
+but does not spend or refund development assignments.
 
 If the table or managed PR link block was edited into an unsupported shape,
 preserve the human content and repair only the structure before retrying.
@@ -226,7 +327,8 @@ audit without resetting approvals or consumed assignments.
 The bundle records its publication assignment as reserved: it is captured before
 the controller acknowledges publication. Its wiki files, PR links and retained receipt
 record that external effect. It does not claim subsequent readiness or merging.
-Native tool transcripts, complete control-event history, actual model usage,
+Archives instead record their captured historical run outcome, not a new
+workflow transition. Native tool transcripts, complete control-event history, actual model usage,
 cost and reliable worker durations are not automatically captured.
 Original private evidence remains useful for a deeper authorized investigation.
 
@@ -234,4 +336,5 @@ Protocol references:
 https://git-scm.com/docs/git-push
 https://cli.github.com/manual/gh_api
 https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages
+https://docs.github.com/en/communities/documenting-your-project-with-wikis/editing-wiki-content
 https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
