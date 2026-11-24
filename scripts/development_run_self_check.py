@@ -571,6 +571,7 @@ class DevelopmentRunTests(unittest.TestCase):
                        "validation": validation, "material": material, "sensitive": False,
                        "introduced": False, "report_action": "None", "locations": ["app.txt:1"],
                        "reason": "Not introduced by this change", "evidence": ["Verified fixture premise"]}
+            details["public"] = {name: details[name] for name in ("title", "summary", "locations", "reason")}
             events = [
                 {"type": "finding", "key": key, "summary": details["title"], "severity": "Low",
                  "locations": ["app.txt:1"], "evidence": ["Fixture observation"]},
@@ -641,6 +642,39 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIsNone(development.load(self.store)["prs"]["first"]["accepted"])
 
     @pytest.mark.stable_storage
+    def test_blocked_review_without_a_ledger_retains_findings_without_acceptance(self):
+        root, data = self.stopped_review_with_finding("failed")
+        self.finish({}, outcome="blocked")
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.assertIn("PRIVATE-AUDIT-SENTINEL", self.state["prs"]["first"]["known_issues_report"])
+        saved = development.load(self.store)
+        self.assertIsNone(saved["active"])
+        self.assertIsNone(saved["prs"]["first"]["accepted"])
+        self.assertEqual(saved["history"][-1]["finding_ledger"], data["ledger"])
+        self.mutate("resume", "--reason", "Retry after the blocked review")
+        self.assertEqual(self.next()["attempt"], 2)
+        _, retry = self.stopped_review_with_finding(root=root)
+        self.finish({}, outcome="blocked")
+        saved = development.load(self.store)
+        self.assertNotIn("finding_reporting_error", saved["prs"]["first"])
+        self.assertEqual(saved["history"][-1]["finding_ledger"], retry["ledger"])
+        self.assertNotEqual(retry["ledger"], data["ledger"])
+        self.assertIsNone(saved["prs"]["first"]["accepted"])
+
+    @pytest.mark.stable_storage
+    def test_blocked_review_without_a_ledger_reports_an_inventory_gap(self):
+        _, data = self.stopped_review_with_finding()
+        Path(data["ledger"]).unlink()
+        self.finish({}, outcome="blocked")
+        self.assertEqual(self.state["outcome"], "blocked")
+        self.assertIn("Inventory gap:", self.state["prs"]["first"]["known_issues_report"])
+        saved = development.load(self.store)
+        self.assertIsNone(saved["active"])
+        self.assertIsNone(saved["prs"]["first"]["accepted"])
+        self.mutate("resume", "--reason", "Continue after recording the gap")
+        self.assertEqual(self.next()["attempt"], 2)
+
+    @pytest.mark.stable_storage
     def test_retired_review_retains_findings_without_acceptance_and_retry_keeps_them(self):
         root, data = self.stopped_review_with_finding("failed")
         before = development.load(self.store)
@@ -653,7 +687,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIsNone(saved["active"])
         self.assertIsNone(saved["prs"]["first"]["accepted"])
         self.assertEqual(saved["attempts"], before["attempts"])
-        self.assertEqual(saved["history"][-1]["retired_review_ledger"], data["ledger"])
+        self.assertEqual(saved["history"][-1]["finding_ledger"], data["ledger"])
         self.mutate("resume", "--reason", "Retry within the retained allowance")
         self.assertEqual(self.next()["attempt"], 2)
         self.review(root)
@@ -671,7 +705,7 @@ class DevelopmentRunTests(unittest.TestCase):
                     "--shutdown-evidence", "Synchronous fixture workers exited")
         self.assertNotIn("finding_reporting_error", self.state["prs"]["first"])
         self.assertIn("PRIVATE-AUDIT-SENTINEL", self.state["prs"]["first"]["known_issues_report"])
-        self.assertEqual(development.load(self.store)["history"][-1]["retired_review_ledger"], data["ledger"])
+        self.assertEqual(development.load(self.store)["history"][-1]["finding_ledger"], data["ledger"])
 
     @pytest.mark.stable_storage
     def test_retirement_reports_unavailable_findings_without_blocking_recovery(self):
@@ -692,9 +726,9 @@ class DevelopmentRunTests(unittest.TestCase):
                     other.mkdir()
                 self.mutate("retire", "--reason", "Review evidence unavailable",
                             "--shutdown-evidence", "Synchronous fixture workers exited")
-                self.assertIn("Retired review findings unavailable",
+                self.assertIn("Incomplete review findings unavailable",
                               self.state["prs"]["first"]["finding_reporting_error"])
-                self.assertIn("Inventory gap: Retired review findings unavailable",
+                self.assertIn("Inventory gap: Incomplete review findings unavailable",
                               self.state["prs"]["first"]["known_issues_report"])
                 self.assertIn("Inventory gap:", self.state["prs"]["first"]["known_issues_pr_draft"])
                 self.assertIsNone(development.load(self.store)["active"])

@@ -70,6 +70,11 @@ caller may do so only under separate authorization. Autonomous development
 uses [../autonomous-development/FOLLOW_UPS.md](../autonomous-development/FOLLOW_UPS.md).
 
 Never automatically copy raw private evidence into a public PR or issue.
+Public drafts use only the assessment's separately reviewed `public`
+presentation, never its raw evidence or private narrative fields. Missing or
+incomplete presentation produces a withholding notice, even for a non-sensitive
+finding. Keep its title, consequence summary, locations, deferral reason, and
+optional next action safe for the intended audience.
 Sensitive findings require safe disclosure; withhold pre-existing exploitable
 details and personal data from public output. Keep the full evidence in private
 storage, and use a safe notice or approved private destination. A publication

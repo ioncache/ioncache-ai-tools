@@ -626,14 +626,7 @@ def complete(state, report, settings):
         else:
             state["outcome"] = "blocked"
             state.pop("stop_kind", None)
-            if active["role"] == "review" and report["data"].get("ledger"):
-                try:
-                    retained = review.status(SimpleNamespace(ledger=report["data"]["ledger"]),
-                                             Path(active["root"]))
-                    followups.retain(state["prs"][active["pr"]], retained)
-                except (ValueError, OSError):
-                    state["prs"][active["pr"]]["finding_reporting_error"] = (
-                        "Incomplete review findings unavailable; inspect the retained worker report.")
+            retain_incomplete_findings(state, report["data"].get("ledger"))
         active.update(worker=report["worker"], outcome=report["outcome"], report=report)
         state["history"][-1] = active
         state["active"] = None
@@ -885,28 +878,41 @@ def rebase_review(state, args, settings):
     state["outcome"], state["reason"] = "running", args.reason
 
 
-def retain_retired_findings(state):
+def incomplete_review_path(state, reference):
+    active = state["active"]
+    root = Path(active["root"])
+    if reference:
+        path = review.ledger_path(root, reference, allow_unavailable=True)
+    else:
+        recorded = {
+            Path(reference).parent.name for item in state["history"] if item["pr"] == active["pr"]
+            for reference in (item.get("report", {}).get("data", {}).get("ledger"),
+                              item.get("retired_review_ledger"), item.get("finding_ledger"))
+            if isinstance(reference, str)
+        }
+        paths = [path for path in audit.stored_review_paths(root, [Path(active["review_storage"])])
+                 if path.parent.name not in recorded]
+        plan.require(len(paths) == 1, "Incomplete review ledger is missing or ambiguous")
+        path = paths[0]
+    if active.get("review_storage"):
+        plan.require(path.parent.parent == Path(active["review_storage"]),
+                     "Incomplete review ledger is outside the pinned review storage")
+    return path
+
+
+def retain_incomplete_findings(state, reference=None):
     active = state["active"]
     if active["role"] != "review":
         return
     progress = state["prs"][active["pr"]]
     try:
-        root = Path(active["root"])
-        recorded = {
-            Path(reference).parent.name for item in state["history"] if item["pr"] == active["pr"]
-            for reference in (item.get("report", {}).get("data", {}).get("ledger"),
-                              item.get("retired_review_ledger"))
-            if isinstance(reference, str)
-        }
-        paths = [path for path in audit.stored_review_paths(root, [Path(active["review_storage"])])
-                 if path.parent.name not in recorded]
-        plan.require(len(paths) == 1, "Retired review ledger is missing or ambiguous")
-        active["retired_review_ledger"] = str(paths[0])
-        retained = review.status(SimpleNamespace(ledger=str(paths[0])), root)
+        path = incomplete_review_path(state, reference)
+        active["finding_ledger"] = str(path)
+        retained = review.status(SimpleNamespace(ledger=str(path)), Path(active["root"]))
         followups.retain(progress, retained)
     except (ValueError, OSError, KeyError, TypeError):
         progress["finding_reporting_error"] = (
-            "Retired review findings unavailable; inspect the retained assignment and review storage.")
+            "Incomplete review findings unavailable; inspect the retained assignment and review storage.")
 
 
 def mutate(args, folder):
@@ -947,7 +953,7 @@ def mutate(args, folder):
             plan.require(state["active"] is not None, "No outstanding assignment")
             plan.text(args.reason)
             plan.text(args.shutdown_evidence)
-            retain_retired_findings(state)
+            retain_incomplete_findings(state)
             state["active"].update(outcome="retired", reason=args.reason,
                                    shutdown_evidence=args.shutdown_evidence)
             state["history"][-1] = state["active"]

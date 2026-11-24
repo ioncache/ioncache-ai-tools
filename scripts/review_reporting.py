@@ -57,7 +57,8 @@ def merge(previous, incoming):
                     "reason": "Earlier finding awaits renewed validation after review invalidation.",
                     "disposition": "open", "snapshot": item.get("snapshot")}
         result[key] = {**(prior or {}), **item, "material": item.get("material"),
-                       "duplicate_of": item.get("duplicate_of"), "sensitive": item.get("sensitive")}
+                       "duplicate_of": item.get("duplicate_of"), "sensitive": item.get("sensitive"),
+                       "public": item.get("public")}
     return list(result.values())
 
 
@@ -73,6 +74,17 @@ def text(value, fallback):
 
 def boolean(value):
     return value if type(value) is bool else None
+
+
+def public_presentation(value):
+    required = ("title", "summary", "reason")
+    if not isinstance(value, dict) or not all(text(value.get(name), None) for name in required):
+        return None
+    locations = value.get("locations")
+    if not isinstance(locations, list) or not all(text(item, None) for item in locations):
+        return None
+    return {**{name: value[name] for name in required}, "locations": list(locations),
+            "next_step": text(value.get("next_step"), None)}
 
 
 def known_issue(item):
@@ -92,6 +104,7 @@ def known_issue(item):
         "reason": text(item.get("reason"), "No deferral reason recorded; remains unresolved."),
         "next_step": text(item.get("next_step"), None), "done_when": text(item.get("done_when"), None),
         "ledger": item.get("ledger"), "snapshot": item.get("snapshot"),
+        "public": public_presentation(item.get("public")),
     }
 
 
@@ -116,7 +129,7 @@ def project(inventory):
     return {"known_issues": known, "counted_only": counted, "fixed": fixed, "pending": pending}
 
 
-def render(report, *, show=True, tickets=None):
+def render(report, *, show=True, tickets=None, include_evidence=True):
     if not show:
         return "Known-issue reporting is disabled; assessed findings remain in private storage."
     lines = [HEADING, ""]
@@ -127,9 +140,10 @@ def render(report, *, show=True, tickets=None):
                       f"- Location: {', '.join(item['locations']) or 'not recorded'}.",
                       f"- Assessment: {item['validation']}; {item['severity']}; {scope}.",
                       f"- Confidence: {item['confidence']}.",
-                      f"- Problem: {item['summary']}",
-                      f"- Evidence ({item['basis']}): {'; '.join(item['evidence']) or 'not recorded'}.",
-                      f"- Why not fixed: {item['reason']}"])
+                      f"- Problem: {item['summary']}"])
+        if include_evidence:
+            lines.append(f"- Evidence ({item['basis']}): {'; '.join(item['evidence']) or 'not recorded'}.")
+        lines.append(f"- Why not fixed: {item['reason']}")
         if item["material"] is None:
             lines.append("- Limitation: materiality was not recorded; do not silently suppress this finding.")
         if item["next_step"]:
@@ -146,20 +160,30 @@ def render(report, *, show=True, tickets=None):
 
 
 def public_draft(report, *, show=True, tickets=None):
-    issues = []
+    issues, links = [], {}
     for item in report["known_issues"]:
-        if item["sensitive"] is False:
-            issues.append(item)
+        identity = hashlib.sha256(item["key"].encode()).hexdigest()[:12]
+        severity = item["severity"] if item["severity"] in ("High", "Medium", "Low") else "Not recorded"
+        if item["sensitive"] is False and item["public"] is not None:
+            key = "finding-" + identity
+            issues.append(known_issue({
+                **{name: item[name] for name in ("validation", "introduced", "material")},
+                "severity": severity,
+                "confidence": item["confidence"] if item["confidence"] in
+                ("High", "Medium", "Low") else "Not recorded",
+                **item["public"], "key": key,
+            }))
+            ticket = (tickets or {}).get(item["key"])
+            if ticket:
+                links[key] = {"status": ticket["status"], "url": ticket.get("url"), "reason": ""}
             continue
-        key = "withheld-" + hashlib.sha256(item["key"].encode()).hexdigest()[:12]
         issues.append(known_issue({
-            "key": key, "title": "Finding withheld pending safe disclosure",
+            "key": "withheld-" + identity, "title": "Finding withheld pending safe disclosure",
             "summary": "Details remain in the private report.",
-            "validation": item["validation"], "severity": item["severity"], "material": True,
+            "validation": item["validation"], "severity": severity, "material": True,
             "reason": "Public disclosure has not been cleared.",
         }))
-    links = {key: {**value, "reason": ""} for key, value in (tickets or {}).items()}
-    return render({**report, "known_issues": issues}, show=show, tickets=links)
+    return render({**report, "known_issues": issues}, show=show, tickets=links, include_evidence=False)
 
 
 def main(argv=None):

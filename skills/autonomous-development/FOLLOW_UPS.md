@@ -3,8 +3,10 @@
 Use the reporting set in [../review-code/KNOWN_ISSUES.md](../review-code/KNOWN_ISSUES.md).
 The controller carries `progress.known_issues` across task and PR reviews.
 `progress.known_issues_report` is private final-report material.
-`progress.known_issues_pr_draft` withholds sensitive or disclosure-unassessed
-details and raw ticket diagnostics. Review even this draft for safe disclosure
+`progress.known_issues_pr_draft` uses the separately disclosure-reviewed `public`
+presentation from each non-sensitive assessment. It withholds records without
+that presentation and never copies raw evidence, private narratives, or ticket
+diagnostics. Review even this draft for safe disclosure
 before publication; a supplied `sensitive: false` is an assessment, not proof.
 Preserve the underlying keys during full-PR review,
 including earlier task findings. Resolve key aliases with evidence before
@@ -21,9 +23,10 @@ text and the audit worker's managed link block. Refresh the section during
 
 The run's final human report includes the same named list and ticket status.
 An interrupted run reports the available list and any evidence gaps too.
-Retirement retains findings from a uniquely identifiable ledger in the assigned
-store. Missing, unreadable, or ambiguous evidence leaves an explicit inventory
-gap, never a new retirement gate or accepted review.
+Retirement and blocked reports without a ledger retain findings from a uniquely
+identifiable ledger in the assigned store. Missing, unreadable, or ambiguous
+evidence leaves an explicit inventory gap, never a new recovery gate or accepted
+review.
 When `review-known-issues` is disabled, disclose the omitted section instead.
 Never describe a disabled or incomplete report as having no known defects.
 

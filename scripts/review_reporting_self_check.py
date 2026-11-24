@@ -14,7 +14,7 @@ from self_check_support import run_main
 
 
 def finding(key="settings-path", **changes):
-    return {
+    result = {
         "key": key, "title": "Settings lookup uses a different path",
         "summary": "Symlinked project paths select inconsistent overrides.",
         "validation": "valid", "disposition": "ignored", "report_action": "None",
@@ -26,6 +26,9 @@ def finding(key="settings-path", **changes):
         "next_step": "Use the same path identity at both entry points.",
         **changes,
     }
+    result.setdefault("public", {name: result[name] for name in
+                                 ("title", "summary", "locations", "reason", "next_step")})
+    return result
 
 
 class ReportingTests(unittest.TestCase):
@@ -113,8 +116,42 @@ class ReportingTests(unittest.TestCase):
                         followups.retain(progress, {"assessments": [finding(), updated]})
                     result = followups.presentation(progress, self.settings)
                     self.assertIn("New private evidence", result["known_issues_report"])
-                    self.assertEqual("New private evidence" in result["known_issues_pr_draft"], cleared)
+                    self.assertNotIn("New private evidence", result["known_issues_pr_draft"])
                     self.assertEqual("Updated disclosure" in result["known_issues_pr_draft"], cleared)
+
+    def test_public_draft_uses_only_the_explicit_public_presentation(self):
+        private = finding("PRIVATE-KEY", title="PRIVATE-TITLE", summary="PRIVATE-SUMMARY",
+                          locations=["/private/location.py:9"], evidence=["PRIVATE-EVIDENCE"],
+                          confidence="High: PRIVATE-INVESTIGATION",
+                          reason="PRIVATE-REASON", next_step="PRIVATE-NEXT-STEP", public={
+                              "title": "Safe title", "summary": "Safe consequence",
+                              "locations": ["src/app.py:9"], "reason": "Deferred follow-up",
+                              "next_step": "Investigate the public symptom",
+                              "evidence": ["PRIVATE-EXTRA-FIELD"],
+                          })
+        for presentation in (private["public"], None, {"title": "Incomplete presentation"}):
+            with self.subTest(presentation=presentation):
+                progress = {}
+                followups.retain(progress, {"assessments": [{**private, "public": presentation}]})
+                result = followups.presentation(progress, self.settings)
+                self.assertIn("PRIVATE-EVIDENCE", result["known_issues_report"])
+                self.assertNotIn("PRIVATE-", result["known_issues_pr_draft"])
+                self.assertNotIn("/private/", result["known_issues_pr_draft"])
+                if presentation == private["public"]:
+                    self.assertIn("Safe consequence", result["known_issues_pr_draft"])
+                    self.assertIn("src/app.py:9", result["known_issues_pr_draft"])
+                else:
+                    self.assertIn("Finding withheld", result["known_issues_pr_draft"])
+
+    def test_reassessment_does_not_inherit_an_earlier_public_presentation(self):
+        progress = {}
+        followups.retain(progress, {"assessments": [finding()]})
+        updated = finding(summary="Changed finding")
+        del updated["public"]
+        followups.retain(progress, {"assessments": [updated]})
+        result = followups.presentation(progress, self.settings)
+        self.assertIn("Changed finding", result["known_issues_report"])
+        self.assertIn("Finding withheld", result["known_issues_pr_draft"])
 
     def test_legacy_materiality_and_invalidation_remain_visible_as_gaps(self):
         legacy = finding()
@@ -181,8 +218,11 @@ class ReportingTests(unittest.TestCase):
         followups.record(progress, {}, self.manifest, self.settings)
         failed = {"settings-path": {"status": "not_filed", "reason": "Search unavailable"}}
         followups.record(progress, {"follow_up_issues": failed}, self.manifest, self.settings)
-        text = followups.presentation(progress, self.settings)["known_issues_report"]
+        result = followups.presentation(progress, self.settings)
+        text = result["known_issues_report"]
         self.assertIn(url, text)
+        self.assertIn(url, result["known_issues_pr_draft"])
+        self.assertNotIn("settings-path", result["known_issues_pr_draft"])
         self.assertIn("Earlier verified link retained", text)
         self.assertNotIn("Fixes #7", text)
         marker = followups.presentation(progress, self.settings)["known_issues"][0]["tracking_marker"]

@@ -183,6 +183,13 @@ or uncertain material assessment even with `report_action: None`, also has:
 - `locations`: every affected `path:line`, plus affected callers or documentation.
 - `sensitive`: whether public disclosure could expose an exploitable weakness
   or personal data. Missing disclosure assessment is not clearance to publish.
+- `public`: a separately disclosure-reviewed presentation with nonempty `title`,
+  `summary`, and `reason`, a `locations` list of safe repository-relative
+  references, and optional `next_step`. Distill the evidence and consequence
+  into this summary; never copy raw evidence, private paths, or diagnostics.
+  Omit it or use `null` when safe disclosure is unavailable. A non-sensitive
+  finding without this presentation is still withheld from public drafts.
+  Supply it again for each changed assessment; earlier presentation is not clearance.
 
 Use [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for unresolved reporting independently
 of fix scope. Retain these fields for pre-existing, ignored and out-of-scope
