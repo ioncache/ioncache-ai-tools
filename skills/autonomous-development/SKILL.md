@@ -32,15 +32,24 @@ the assignment or stop workers. Hand-backs are not user questions.
    GitHub issues and Notion pages are optional destinations, not prerequisites.
 4. Establish task and PR boundaries, dependencies, exact acceptance commands,
    behavioral scope, compatibility, flags, intermediate states, rollout, rollback,
-   and cleanup. Several tasks may form one PR.
+   and cleanup. Several tasks may form one PR. First resolve the incremental
+   planning setting below. When it is enabled, make these decisions with
+   [PLANNING.md](PLANNING.md): PR slicing, the feature-flag decision, issue
+   structure, boundary contracts, prerequisite evidence and conditional candidates.
 5. Read [CONTRACT.md](CONTRACT.md). Produce a human-readable plan and a manifest
    with private snapshots of requirements, design, and plan content. Present the
-   normalized interpretation and content identity for approval. For the packaged
+   normalized interpretation and content identity for approval, or record an
+   approval the human has already given for this content (step 6). For the packaged
    Claude adapter, set `configuration.execution.provider` to exactly
    `claude-workflows`. This identifier is not the workflow's display name.
    Run provider-specific validation before presenting the identity.
 6. Resolve permissions and finite limits explicitly. Approval of document content
    is not native host permission. Do not infer publication or model budgets.
+   Reuse explicit authorization the human already gave for this plan, its
+   models, bounded execution and publication: record it against the returned
+   identity and pass that identity to `init` yourself. Do not ask them to repeat
+   consent or transcribe the hash. Ask only about choices that authorization
+   does not cover, such as content changed outside its scope.
    Resolve native model and effort choices before launch under
    [MODELS.md](MODELS.md), including suitable implementation, adjudication and
    fixing choices. Bookkeeping runs in Python, not a model.
@@ -69,13 +78,43 @@ python3 "/absolute/plugin/scripts/development_run.py" validate "/private/bundle/
   --provider claude-workflows
 ```
 
+### Incremental planning setting
+
+`autonomous-development-incremental-planning` is an independent,
+enabled-by-default setting. Resolve its effective value before step 4 with this
+read-only lookup, passing the installed plugin root and the consuming project root:
+
+```sh
+python3 -I -B -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1], "hooks", "scripts")))
+import plugin_config
+catalog = plugin_config.defaults()
+project = str(Path(sys.argv[2]).resolve())
+disabled = plugin_config.synchronize(project, catalog=catalog, persist=False, strict=True)
+name = "autonomous-development-incremental-planning"
+print("true" if name in catalog and name not in disabled else "false")
+' "/absolute/plugin" "/absolute/project"
+```
+
+It reads every host's global, embedded-project and project settings without
+writing them, so a disable on any host applies. `true` applies PLANNING.md.
+`false` keeps the baseline step 4 above. Disabling the guide does not disable
+this skill, reviews, audits, compatibility obligations or other safeguards.
+
+A nonzero exit means the guide is unavailable, not enabled or disabled. Report
+that and its error, then continue with the baseline step 4. It grants or denies
+no permission. After the settings are repaired, rerun the lookup before
+finalizing the plan.
+
 ## Execute
 
 Generic validation without `--provider` also accepts other execution providers,
 with a warning when no packaged adapter exists. It does not authorize Claude
 to execute that manifest.
 
-After explicit approval of the returned identity, initialize private state
+Once explicit approval covers the returned identity, initialize private state
 outside the launch repository and every planned worktree. Respect the project's
 worktree-location convention, including sibling directories. Keep the approved
 input bundle and raw evidence private.
@@ -151,10 +190,25 @@ ignore them and use only their explicitly assigned ruleset. Disclose observed
 ambient sources; their presence must not stop execution, make coverage partial,
 or trigger replacements.
 
-The controller and adapter have offline checks, not completed live-host
-qualification. Disclose that limitation and distinguish a separately scoped
-qualification experiment from executing already approved work. Do not invent
-another "live-trial approval" gate for actions and limits the human already approved.
+Offline self-checks establish only the controller, handoff and generated-script
+contracts they exercise. They do not show that a given host provides artifact
+access and native permissions, launches fresh workers, keeps review independent,
+delivers results or honors cancellation. Under [WORKERS.md](WORKERS.md),
+preflight records artifact access and native permissions from the selected
+host's evidence, the handoff helper records fresh launch and result delivery,
+review acceptance checks independent review, and the launcher holds
+cancellation, recorded as available or deferred. Report a capability that no
+step has established as deferred, never as established. State that precise
+coverage limit, not an undefined qualification label.
+Explicit authorization the human already gave for the plan, models, bounded
+execution and publication covers ordinary execution: do not request a separate
+trial approval, repeated consent or a trial budget. Keep the approved finite
+logical limits, honor available native resource controls, and disclose that
+logical limits are not time or spending caps.
+When an operation fails because a capability is missing or a host permission is
+denied, report that operation, its evidence and the available recovery options,
+preserving state and consumed limits. Do not fabricate capability evidence, claim
+that allow-all grants unavailable capabilities, or bypass a host restriction.
 Ask only for a genuinely missing decision, permission or increased allowance.
 Copilot and Codex can prepare manifests and inspect state; they do not yet have
 packaged execution adapters. Do not imply cloud hosting or shared controls have

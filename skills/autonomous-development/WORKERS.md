@@ -93,8 +93,8 @@ records both from this batch's start receipt and validated report. Defer
 Commit, push and PR permissions are established when those steps run; a denial
 there blocks that step with its evidence. Never invent a probe, alter host
 settings or launch another CLI to upgrade a status, and never report an
-unexercised capability as `verified` or summarize these observations as an
-end-to-end qualification.
+unexercised capability as `verified` or present these observations as proof of
+end-to-end execution; name the capabilities that remain deferred.
 Preflight identifies and discloses observed ambient project instructions in
 evidence, optionally listing `data.ambient_sources`. Also disclose any that
 appear to conflict with an approved permission, such as a rule against pushing

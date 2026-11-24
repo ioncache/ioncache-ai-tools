@@ -4,6 +4,9 @@ The manifest is a normalized interpretation of the human plan, not a second
 source of requirements. JSON is used for deterministic validation. Approval
 identifies its canonical JSON digest and every referenced artifact digest.
 It is an approval record, not authentication or a native permission grant.
+Explicit authorization the human already gave for this content and its
+execution is recorded against the identity; it needs no repeated consent or
+manually transcribed hash. Content outside that authorization needs new approval.
 
 ## Manifest schema 1
 
@@ -106,6 +109,31 @@ Every task and PR has at least one check:
 Commands come from the consuming project, not this example. Record semantic
 acceptance evidence when a command alone cannot establish the outcome. Required
 checks cannot be replaced by `not_applicable` in the final review handback.
+
+### Planning records
+
+The human design stays authoritative. Incremental planning under
+[PLANNING.md](PLANNING.md) maps into existing schema-1 fields without new
+fields or changed identities:
+
+| Planning record | Manifest location |
+| --- | --- |
+| Delivery recommendation and increment map | One `prs` entry per selected increment; its tasks in `tasks`; the reasoning and rejected alternatives in the design or plan snapshot |
+| Ordering | Task and PR `dependencies`, kept acyclic; cross-PR task edges also need the PR edge |
+| Boundary contracts | The authoritative design snapshot in each affected task's `artifacts`; producer and consumer obligations in task `compatibility`, `completion` and `checks` |
+| Prerequisite evidence | Plan or design text, plus the applicable `checks`, task `completion` or `compatibility`, or PR `rollout` for operational state |
+| Flag decision, rollout, rollback and cleanup | PR `rollout`, task `compatibility`, and checks for disabled and enabled paths |
+| Issue decision | Planning or design artifacts and their `source`; issues are not manifest records |
+| Shared scope, decisions and accepted risks | `constraints` |
+| Conditional candidates and unresolved uncertainty | The human-readable design only, until resolved |
+
+Include in the approved snapshots every boundary contract and parent or child
+issue content that tasks need; workers take scope from pinned snapshots.
+Only selected, resolved work enters the executable manifest. Schema 1 has no
+optional tasks or conditional edges. A later scope change follows the existing
+approval process for a new plan and manifest identity; an initialized run's
+approved manifest is never rewritten. The controller checks structure and
+bookkeeping, not the semantic quality of these decisions.
 
 `assignments` caps durable top-level reservations across the run. `attempts`
 caps attempts at the same role/task or role/PR. Reservations consume capacity
@@ -236,8 +264,8 @@ records the attempt before validation, keeps its evidence and candidate digest,
 uses unchanged validators and requires normal collection. It never repeats work,
 changes a limit or resets a counter. Failed recovery remains consumed; a validated
 receipt is idempotent, not another grant to alter accepted reports.
-See RECOVERY.md for exact recovery choices, executor restoration and known
-native-qualification limits.
+See RECOVERY.md for exact recovery choices, executor restoration and the
+coverage limits of offline checks.
 
 `publish_audit: true` authorizes the selected worker to publish a reviewed export
 to the modified repository's GitHub wiki, prepend or update its PR's row in

@@ -1113,6 +1113,108 @@ class ConfigurationTests(unittest.TestCase):
                     **data, 'tool_name': 'stop_agent', 'tool_input': {'agent_id': 'worker'},
                 }), [])
 
+    def planning_lookup(self, plugin=ROOT, project=None):
+        """Runs the documented incremental-planning lookup exactly as Prepare does."""
+        skill = (ROOT / 'skills/autonomous-development/SKILL.md').read_text()
+        blocks = [block for block in skill.split('```sh\n')[1:]
+                  if 'autonomous-development-incremental-planning' in block.split('```', 1)[0]]
+        self.assertEqual(len(blocks), 1)
+        command = blocks[0].split('```', 1)[0]
+        command = command.replace('/absolute/plugin', str(plugin))
+        command = command.replace('/absolute/project', str(project or self.project))
+        return subprocess.run(['/bin/sh', '-c', command], cwd=self.root, text=True, capture_output=True)
+
+    def test_incremental_planning_lookup_matches_embedded_project_through_a_symlink(self):
+        name = 'autonomous-development-incremental-planning'
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        global_path = config.paths(self.project)['claude'][0]
+        # Embedded overrides are keyed by the resolved root, so the lookup must normalize its argument.
+        self.write(global_path, {'features': {}, 'projects': {str(self.project): {'features': {name: False}}}})
+        result = self.planning_lookup(project=link)
+        self.assertEqual((result.returncode, result.stdout), (0, 'false\n'), result.stderr)
+        self.write(global_path, {'features': {}, 'projects': {str(self.project): {'features': {name: True}}}})
+        self.assertEqual(self.planning_lookup(project=link).stdout, 'true\n')
+
+    def test_incremental_planning_lookup_quotes_spaced_paths_and_ignores_cwd_modules(self):
+        name = 'autonomous-development-incremental-planning'
+        plugin = self.root / 'plugin with spaces'
+        plugin.symlink_to(ROOT, target_is_directory=True)
+        project = self.root / 'project with spaces'
+        project.mkdir()
+        # An unquoted project argument would read the unconfigured sibling `project` and print true.
+        self.write(config.paths(project)['claude'][1], {'features': {name: False}})
+        result = self.planning_lookup(plugin, project)
+        self.assertEqual((result.returncode, result.stdout), (0, 'false\n'), result.stderr)
+        config.paths(project)['claude'][1].unlink()
+        result = self.planning_lookup(plugin, project)
+        self.assertEqual((result.returncode, result.stdout), (0, 'true\n'), result.stderr)
+        # A consuming project's stdlib-named module in the working directory never runs.
+        (self.root / 'tomllib.py').write_text('raise SystemExit("planted module executed")\n')
+        result = self.planning_lookup(plugin, project)
+        self.assertEqual((result.returncode, result.stdout), (0, 'true\n'), result.stderr)
+
+    def test_incremental_planning_lookup_is_effective_read_only_and_independent(self):
+        name = 'autonomous-development-incremental-planning'
+        paths = config.paths(self.project)
+        self.assertIs(config.defaults()[name], True)
+        result = self.planning_lookup()
+        self.assertEqual((result.returncode, result.stdout), (0, 'true\n'), result.stderr)
+        self.assertFalse(any(path.is_file() for path in self.root.rglob('*')))
+
+        # Unrelated autonomous-development and skill controls do not disable the guide.
+        self.write(paths['claude'][0], {'features': {'autonomous-development-audit': False,
+                                                      'autonomous-development-model-selection': False,
+                                                      'skill:engineering-judgment': False}})
+        self.assertEqual(self.planning_lookup().stdout, 'true\n')
+
+        # A sparse project opt-out applies, and the global file keeps its retained values.
+        self.write(paths['copilot'][1], {'features': {name: False}})
+        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        self.assertEqual(self.planning_lookup().stdout, 'false\n')
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
+
+        # The opt-out leaves the skill, execution and other safeguards enabled.
+        disabled = config.synchronize(str(self.project), 'claude', strict=True, persist=False)
+        for feature in ('autonomous-development', 'skill:autonomous-development',
+                        'autonomous-development-explicit-only', 'autonomous-development-progress'):
+            self.assertNotIn(feature, disabled)
+        self.assertIn('deny', str(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'pkill worker'},
+        })))
+        self.assertIsNone(guidance.run_hook('PreToolUse', {
+            **self.data, 'tool_name': 'Skill', 'tool_input': {'skill': 'review-code'},
+        }))
+
+        # A global disable on one host applies even where another host's project re-enables it.
+        paths['copilot'][1].unlink()
+        self.write(paths['codex'][0], {'features': {name: False}})
+        self.write(paths['claude'][1], {'features': {name: True}})
+        self.assertEqual(self.planning_lookup().stdout, 'false\n')
+        # Within one host, a project setting overrides its global value.
+        self.write(paths['codex'][1], {'features': {name: True}})
+        self.assertEqual(self.planning_lookup().stdout, 'true\n')
+
+        # Legacy Codex TOML is honored without migrating or rewriting it.
+        for path in (paths['codex'][0], paths['codex'][1], paths['claude'][1]):
+            path.unlink()
+        legacy = paths['codex'][0].with_name('config.toml')
+        legacy.write_text(f'[ioncache-ai-tools]\ndisabled_rules = ["{name}"]\n')
+        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        self.assertEqual(self.planning_lookup().stdout, 'false\n')
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
+        legacy.unlink()
+
+        # Unreadable settings report unavailability, never an enabled result, and stay untouched.
+        paths['claude'][0].write_text('{bad')
+        result = self.planning_lookup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(paths['claude'][0].read_text(), '{bad')
+        # Repairing the settings restores the effective value without other recovery.
+        self.write(paths['claude'][0], {'features': {}})
+        self.assertEqual(self.planning_lookup().stdout, 'true\n')
+
     def test_question_marker_applies_only_to_the_questioned_identity(self):
         root = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'requested'}}
         child = {**root, 'agent_id': 'worker'}
