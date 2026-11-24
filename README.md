@@ -224,8 +224,9 @@ It reports assignment and review progress, stopped outcomes and inactivity
 without changing the run. Worktrees may follow the project's sibling-directory
 convention; the private store must remain separate from every worktree.
 
-When approved, runs automatically publish initial and final process audit bundles
-in the modified repository's wiki, update its newest-first
+When approved, runs automatically publish a readable process audit in the modified
+repository's wiki. The final audit updates the initial page in place, retaining
+older versions in wiki history. Runs update the newest-first
 `Automated-Pull-Request-Audits` table, and add report/data/index links to the PR
 body. The wiki must already be initialized and writable. No audit branch or
 manual upload is used. Private inputs and raw reports stay local. The public narrative

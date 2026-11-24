@@ -48,7 +48,8 @@ Publication remains an assigned worker operation under native permissions.
 The helper does not independently verify the truth of remote receipts.
 With approved audit publication, separate initial and final assignments export
 selected process evidence and a publication-reviewed narrative. The audit helper
-publishes separately named files in the modified repository's wiki and links them
+updates one readable page and matching data file per PR in the modified
+repository's wiki, retaining older versions in wiki history, and links them
 from the PR body's `Audit` section, without changing the implementation snapshot.
 It automatically puts that PR's current record at the top of the
 `Automated-Pull-Request-Audits` table while preserving other rows. Preflight

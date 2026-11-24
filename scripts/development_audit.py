@@ -16,7 +16,10 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 
+import development_audit_data as projection
+from development_audit_render import render
 import development_manifest as plan
 import development_models as models
 import review_history
@@ -115,14 +118,8 @@ def review_record(path, root=None):
                   loops=len(state["loops"]),
                   fix_cycles=sum(len(loop["cycles"]) for loop in state["loops"]),
                   findings=[], events=[])
-    for item in state["findings"].values():
-        result["findings"].append({
-            "id": item["id"], "severity": item["severity"], "validation": item["validation"],
-            "disposition": item["disposition"],
-            "observations": [event["sequence"] for event in item["observations"]],
-            "decisions": [{key: event[key] for key in ("sequence", "validation", "disposition", "severity")}
-                          for event in item["decisions"]],
-        })
+    result["passes"], event_pass = projection.review_passes(ledger, state)
+    result["findings"] = projection.review_findings(state, event_pass)
     for event in ledger["events"]:
         row = {key: event[key] for key in ("sequence", "type", "snapshot")}
         row["time"] = timestamp(event["time"])
@@ -145,23 +142,22 @@ def review_record(path, root=None):
 
 
 def public_narrative(value, reviews):
-    plan.fields(value, "summary method verification findings regressions limitations")
-    for key in ("summary", "method", "verification"):
-        plan.text(value[key])
+    projection.narrative_options(value)
     plan.strings(value["limitations"], empty=True)
-    known = {(item["id"], finding["id"]) for item in reviews if item["available"]
+    known = {(item["id"], finding["id"]): finding for item in reviews if item["available"]
              for finding in item["findings"]}
     supplied = set()
     plan.require(isinstance(value["findings"], list) and isinstance(value["regressions"], list),
                  "Public findings and regressions must be lists")
     for item in value["findings"]:
-        plan.fields(item, "review id summary rationale")
+        plan.require(isinstance(item, dict), "Public finding must be an object")
         key = (plan.text(item["review"]), plan.text(item["id"]))
         plan.require(key in known and key not in supplied, "Unknown or duplicate public finding")
         supplied.add(key)
         plan.text(item["summary"])
         plan.text(item["rationale"])
-    plan.require(supplied == known, "Public narrative must account for every recorded finding")
+        projection.finding_details(item, known[key])
+    plan.require(supplied == set(known), "Public narrative must account for every recorded finding")
     for item in value["regressions"]:
         plan.fields(item, "cause effect basis evidence")
         for key in ("cause", "effect"):
@@ -209,7 +205,7 @@ def review_locations(state, assignment):
     return sorted(referenced.values(), key=review_identity)
 
 
-def build(state, assignment, public, *, model_snapshot=None):
+def build(state, assignment, public, *, model_snapshot=None, publication_snapshot=None):
     root = Path(assignment["root"])
     records = [review_record(path, root) for path in review_locations(state, assignment)]
     for record in records:
@@ -233,13 +229,31 @@ def build(state, assignment, public, *, model_snapshot=None):
                         if item["role"] in ROLES else None})
     model_records, models_unavailable = (models.observations(state, assignment["pr"])
                                        if model_snapshot is None else model_snapshot)
-    return {"schema": 1, "run": state["id"], "pr": assignment["pr"], "assignment": assignment["id"],
+    records.sort(key=lambda item: (item["assignment_ids"] or ["~"], item["id"]))
+    if len(records) > 1:
+        for number, record in enumerate(records, 1):
+            for finding in record.get("findings", []):
+                finding["pass"] = f"Review {number}: {finding['pass']}"
+    public = public_narrative(public, records)
+    projection.add_public_findings(records, public)
+    requested_models = {role: [{"model": choice["model"], "effort": choice["effort"]}]
+                        for role, choice in state["manifest"]["configuration"]["execution"].get("models", {}).items()}
+    for item in state["history"]:
+        if item["pr"] in (None, assignment["pr"]):
+            for role, choice in item.get("launch_models", {}).items():
+                selection = {"model": choice["model"], "effort": choice["effort"]}
+                values = requested_models.setdefault(role, [])
+                if selection not in values:
+                    values.append(selection)
+    publication = publication_snapshot or default_publication(state, assignment)
+    return {"schema": 2, "run": state["id"], "pr": assignment["pr"], "assignment": assignment["id"],
             "stage": assignment["role"], "approval": state["approval"],
             "inputs": [{"role": item["role"], "digest": item["sha256"]}
                        for item in state["manifest"]["artifacts"]],
             "code_commit": assignment["before"]["head"], "snapshot": identity(assignment["before"]),
             "limits": state["manifest"]["limits"], "consumed_assignments": len(state["history"]),
-            "history": history, "reviews": records, "public": public_narrative(public, records),
+            "history": history, "reviews": records, "public": public,
+            "publication": publication, "requested_models": requested_models,
             "models": model_records, "models_unavailable": models_unavailable,
             "metrics": {"tokens": None, "cost": None, "worker_durations": None},
             "limitations": [
@@ -253,36 +267,6 @@ def build(state, assignment, public, *, model_snapshot=None):
             ]}
 
 
-def render(bundle):
-    public = bundle["public"]
-    lines = ["# Development process audit", "", public["summary"], "",
-             f"Stage: `{bundle['stage']}`. Code commit: `{bundle['code_commit']}`.",
-             f"Run: `{bundle['run']}`. Assignment: `{bundle['assignment']}`.", ""]
-    if bundle["stage"] == "archive":
-        lines.extend([f"Historical run outcome: `{bundle['run_outcome']}`.",
-                      "This publication does not establish current PR review acceptance.", ""])
-    lines.extend(["## Review method", "", public["method"], "", "## Verification", "", public["verification"],
-                  "", "## Findings and decisions", ""])
-    for item in public["findings"]:
-        lines.extend([f"### {item['review']}/{item['id']}", "", item["summary"], "", item["rationale"], ""])
-    if not public["findings"]:
-        lines.extend(["No findings are present in the available recorded histories.", ""])
-    lines.extend(["## Regression relationships", ""])
-    for item in public["regressions"]:
-        cause, effect = (item[key] for key in ("cause", "effect"))
-        lines.extend([f"- `{cause['review']}/{cause['id']}` -> `{effect['review']}/{effect['id']}` "
-                      f"({item['basis']}): {item['evidence']}"])
-    if not public["regressions"]:
-        lines.append("No causal relationships were supplied; this does not establish absence of regressions.")
-    lines.extend(["", "## Process records", "", f"Consumed assignments across the run: {bundle['consumed_assignments']}.",
-                  "See audit.json for iteration history, decisions, checks, limits and evidence identities.",
-                  "Token usage, cost and worker durations are not collected.", "", "## Limitations", ""])
-    lines.extend(f"- {item}" for item in bundle["limitations"] + public["limitations"])
-    if any(not item["available"] for item in bundle["reviews"]):
-        lines.append("- Some review history is unavailable. Its findings and counters were not reconstructed.")
-    return ("\n".join(lines) + "\n").encode()
-
-
 def contents(bundle):
     return {"audit.json": plan.encode(bundle), "AUDIT.md": render(bundle)}
 
@@ -293,6 +277,12 @@ def bundle_identity(files):
 
 def export(state, assignment, public):
     bundle = build(state, assignment, public)
+    pull = checked_pull(state, assignment, bundle)
+    repo, number = target(state, assignment)
+    bundle["publication"] = {
+        "title": plan.text(pull["title"]), "pr_url": f"https://github.com/{repo}/pull/{number}",
+        "head": pull["head"]["sha"], "date": datetime.now(timezone.utc).date().isoformat(),
+    }
     folder = directory(state, assignment)
     folder.parent.mkdir(exist_ok=True, mode=0o700)
     folder.mkdir(exist_ok=True, mode=0o700)
@@ -398,8 +388,19 @@ def prepared(state, assignment):
     folder = directory(state, assignment)
     files = {name: review.safe_path(folder, name).read_bytes() for name in FILES}
     bundle = json.loads(files["audit.json"])
+    plan.require(bundle.get("schema") == 2,
+                 "Audit export uses an older format; regenerate and review it before publishing")
+    publication = bundle["publication"]
+    plan.fields(publication, "title pr_url head date")
+    repo, number = target(state, assignment)
+    plan.require(publication["head"] == assignment["before"]["head"] and
+                 match_repository_url(publication["pr_url"], repo, f"pull/{number}") and
+                 re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", publication["date"]) and
+                 timestamp(publication["date"]) is not None,
+                 "Audit publication metadata changed; regenerate and review the export")
     expected = build(state, assignment, bundle["public"],
-                     model_snapshot=(bundle["models"], bundle["models_unavailable"]))
+                     model_snapshot=(bundle["models"], bundle["models_unavailable"]),
+                     publication_snapshot=bundle["publication"])
     plan.require(bundle == expected and files == contents(bundle),
                  "Audit evidence changed; regenerate and review a new export before publishing")
     return bundle, files
@@ -439,13 +440,32 @@ def target(state, assignment):
     return repo, match[1]
 
 
-def publication_links(state, assignment, exported):
+def default_publication(state, assignment):
+    try:
+        repo, number = target(state, assignment)
+        url = f"https://github.com/{repo}/pull/{number}"
+    except plan.ManifestError:
+        url = None
+    return {"title": "Development process audit", "pr_url": url, "head": None,
+            "date": datetime.now(timezone.utc).date().isoformat()}
+
+
+def page_name(number, title):
+    title = " ".join(plan.text(title).split())
+    word = re.match(r"[A-Za-z]+", title)
+    if word and not any(char.isupper() for char in word[0][1:]):
+        title = title[:1].lower() + title[1:]
+    title = re.sub(r'[\\/*?"<>|\x00-\x1f\x7f]', " ", title).replace("-", chr(0x2010))
+    title = "-".join(title.split())
+    title = title.encode("utf-8")[:180].decode("utf-8", errors="ignore").rstrip("-.")
+    plan.require(bool(title), "Use a PR title with readable text before exporting an audit")
+    return f"Audit:-PR-#{number},-{title}"
+
+
+def publication_links(state, assignment, title):
     repo, number = target(state, assignment)
-    plan.require(re.fullmatch(r"[a-f0-9]{32}", state["id"]), "Invalid development run ID")
-    plan.require(re.fullmatch(r"A[0-9]+", assignment["id"]) and
-                 re.fullmatch(r"[a-f0-9]{64}", exported), "Invalid audit publication identity")
-    page = f"Audit-PR-{number}-run-{state['id']}-{assignment['id']}-{exported}"
-    url = f"https://github.com/{repo}/wiki/{page}"
+    page = page_name(number, title)
+    url = f"https://github.com/{repo}/wiki/{quote(page, safe=':,')}"
     return {"page": page, "url": url, "data_url": url + ".json",
             "index_url": wiki_index(state), "pr_url": f"https://github.com/{repo}/pull/{number}"}
 
@@ -474,16 +494,16 @@ def index_table(text, publication):
     return lines, start, matches
 
 
-def index_entry(text, publication):
+def index_entry(text, publication, *, unchanged=False):
     lines, start, matches = index_table(text, publication)
-    if matches and all(f"]({publication[key]})" in lines[matches[0]] for key in ("url", "data_url")):
+    if matches and unchanged and all(f"]({publication[key]})" in lines[matches[0]] for key in ("url", "data_url")):
         return text
     if matches:
         del lines[matches[0]]
     title = html.escape(" ".join(publication["title"].split()), quote=False).replace("|", "&#124;")
     title = re.sub(r"([\\`*_\[\]])", r"\\\1", title)
     number = publication["pr_url"].rsplit("/", 1)[1]
-    date = datetime.now(timezone.utc).date().isoformat()
+    date = publication.get("date") or datetime.now(timezone.utc).date().isoformat()
     row = (f"| {date} | [#{number} {title}]({publication['pr_url']}) | "
            f"[Report]({publication['url']}) &#183; [Data (audit.json)]({publication['data_url']}) |\n")
     lines[start - 1] = lines[start - 1].rstrip("\r\n") + "\n"
@@ -598,31 +618,75 @@ def home_page(text, index_url):
 def wiki_pages(root, parent, publication):
     filenames = (publication["page"] + ".md", publication["page"] + ".json",
                  INDEX_PAGE + ".md", "Home.md", "Home.markdown")
-    entries = command(["git", "ls-tree", "-z", parent, "--", *filenames], cwd=root)
+    number = publication["pr_url"].rsplit("/", 1)[1]
+    pattern = rf"(?:Audit:-PR-\#{number},-.+|Audit-PR-{number}-run-[a-f0-9]{{32}}-A[0-9]+-[a-f0-9]{{64}})\.(?:md|json)"
+    entries = command(["git", "ls-tree", "-z", parent], cwd=root)
     pages = {}
     for entry in entries.split(b"\0")[:-1]:
         metadata, name = entry.split(b"\t", 1)
-        filename = name.decode()
-        plan.require(metadata.startswith(b"100644 blob ") and filename in filenames,
+        filename = name.decode("utf-8", "surrogateescape")
+        if filename not in filenames and not re.fullmatch(pattern, filename):
+            continue
+        plan.require(metadata.startswith(b"100644 blob "),
                      "Preserve the wiki and restore regular page files before retrying")
         pages[filename] = command(["git", "show", f"{parent}:{filename}"], cwd=root)
     return pages
 
 
-def wiki_files(pages, publication, files):
+def previous_pages(root, publication):
+    number = publication["pr_url"].rsplit("/", 1)[1]
+    pattern = rf"(?:Audit:-PR-\#{number},-.+|Audit-PR-{number}-run-[a-f0-9]{{32}}-A[0-9]+-[a-f0-9]{{64}})"
+    pages = {entry.stem for entry in root.iterdir()
+             if entry.suffix in (".md", ".json") and re.fullmatch(pattern, entry.stem)}
+    for page in sorted(pages):
+        data = review.safe_path(root, page + ".json")
+        report = review.safe_path(root, page + ".md")
+        plan.require(data.is_file() and report.is_file(),
+                     "Audit page lacks its matching report/data pair; restore the pair from wiki history before retrying")
+        try:
+            old = json.loads(data.read_bytes())
+        except (ValueError, OSError) as error:
+            raise plan.ManifestError("Existing audit data is unreadable; restore its JSON from wiki history "
+                                     "or preserve the pair under another page name before retrying") from error
+        plan.require(isinstance(old, dict) and old.get("schema") in (1, 2) and
+                     old.get("stage") in (*ROLES, "archive") and
+                     isinstance(old.get("run"), str) and re.fullmatch(r"[a-f0-9]{32}", old["run"]),
+                     "Existing page is not a recognized audit; preserve it under another page name before retrying")
+        if old["schema"] == 2:
+            metadata = old.get("publication")
+            plan.require(isinstance(metadata, dict) and isinstance(metadata.get("pr_url"), str) and
+                         metadata["pr_url"].casefold() ==
+                         publication["pr_url"].casefold(),
+                         "Existing audit belongs to another PR; preserve it under another page name before retrying")
+    return pages
+
+
+def approved_files_present(root, publication, files):
+    for extension, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
+        path = review.safe_path(root, publication["page"] + extension)
+        if not path.is_file() or path.read_bytes() != files[source]:
+            return False
+    return True
+
+
+def wiki_files(root, publication, files):
     expected = {publication["page"] + ".md": files["AUDIT.md"],
                 publication["page"] + ".json": files["audit.json"]}
-    for filename, data in expected.items():
-        plan.require(filename not in pages or pages[filename] == data,
-                     f"Published audit differs at {filename}; preserve it and inspect the export and wiki history")
-    index = INDEX_PAGE + ".md"
-    text = (pages[index].decode() if index in pages else
+    previous = previous_pages(root, publication)
+    unchanged = previous == {publication["page"]} and approved_files_present(root, publication, files)
+    for page in previous - {publication["page"]}:
+        expected[page + ".md"] = None
+        expected[page + ".json"] = None
+    path = review.safe_path(root, INDEX_PAGE + ".md")
+    text = (path.read_text() if path.exists() else
             "Development process audit records, one row per pull request. Newest first.\n\n"
             f"{INDEX_HEADER}\n{INDEX_SEPARATOR}\n")
-    expected[index] = index_entry(text, publication).encode()
-    homes = [name for name in ("Home.md", "Home.markdown") if name in pages] or ["Home.md"]
+    expected[path.name] = index_entry(text, publication, unchanged=unchanged).encode()
+    homes = [name for name in ("Home.md", "Home.markdown") if (root / name).exists()] or ["Home.md"]
     for name in homes:
-        expected[name] = home_page(pages.get(name, b"").decode(), publication["index_url"]).encode()
+        path = review.safe_path(root, name)
+        text = path.read_text() if path.exists() else ""
+        expected[name] = home_page(text, publication["index_url"]).encode()
     return expected
 
 
@@ -642,6 +706,9 @@ def verify_wiki_commit(root, parent, expected):
     plan.require(set(changed) <= set(expected), "Git changed unrelated wiki files; inspect commit hooks before retrying")
     for filename, data in expected.items():
         entry = command(["git", "ls-tree", commit, "--", filename], cwd=root)
+        if data is None:
+            plan.require(not entry, f"Git retained superseded audit {filename}; inspect hooks before retrying")
+            continue
         plan.require(entry.startswith(b"100644 blob ") and
                      command(["git", "show", f"{commit}:{filename}"], cwd=root) == data,
                      f"Git changed approved wiki bytes for {filename}; inspect filters/hooks before retrying")
@@ -662,11 +729,21 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
         for attempt in range(3):
             ref, parent = wiki_head(root, remote)
             pages = wiki_pages(root, parent, publication)
-            expected = wiki_files(pages, publication, files)
+            # Checkout filters must not change the source bytes used for publication.
+            for filename, data in pages.items():
+                review.atomic_write(review.safe_path(root, filename), data)
+            expected = wiki_files(root, publication, files)
             if recovery is not None:
                 archive_wiki_recovery(recovery, publication, pages, expected)
+            plan.require(approved_files_present(root, publication, files) or
+                         publication["date"] == datetime.now(timezone.utc).date().isoformat(),
+                         "Publication day changed; regenerate and review an export for today's UTC date")
             for filename, data in expected.items():
-                review.atomic_write(review.safe_path(root, filename), data)
+                path = review.safe_path(root, filename)
+                if data is None:
+                    path.unlink()
+                else:
+                    review.atomic_write(path, data)
             command(["git", "add", "--", *expected], cwd=root)
             if not command(["git", "diff", "--cached", "--name-only"], cwd=root).strip():
                 return verify_wiki_commit(root, parent, expected)
@@ -692,7 +769,8 @@ def pr_body(body, publication):
                      "Preserve PR text and restore one audit link block before retrying")
         start, end = body.index(LINK_START), body.index(LINK_END)
         previous = body[start + len(LINK_START):end].strip()
-        match = re.match(r"\[Report\]\((https://github\.com/[^)\s]+/wiki/Audit-PR-[^)\s]+)\)", previous)
+        match = re.match(r"\[Report\]\((https://github\.com/[^)\s]+/wiki/"
+                         r"(?:Audit-PR-|Audit:-PR-%23)[^)\s#]+)\)", previous)
         old = {**publication, "url": match[1], "data_url": match[1] + ".json"} if match else {}
         plan.require(end > start and match and previous == audit_links(old),
                      "Audit link block was edited; preserve manual text outside the block before retrying")
@@ -720,6 +798,9 @@ def checked_pull(state, assignment, bundle):
                  f"{bundle['code_commit']}. Do not relabel the archive or force-push. Reconcile the review "
                  "within approved allowances (rebase-review for an identical target rebase), then export "
                  "and inspect new evidence; otherwise retain the local archive")
+    if "publication" in bundle and bundle["publication"]["head"] is not None:
+        plan.require(pull["title"] == bundle["publication"]["title"],
+                     "PR title changed; regenerate and review the audit export before publishing")
     return pull
 
 
@@ -728,11 +809,12 @@ def publish_bundle(state, assignment, payload, *, storage=None, recovery=None):
     exported = bundle_identity(files)
     repo, number = target(state, assignment)
     pull = checked_pull(state, assignment, bundle)
-    publication = publication_links(state, assignment, exported)
+    publication = publication_links(state, assignment, bundle["publication"]["title"])
     pr_body(pull.get("body") or "", publication)
     if recovery is not None:
         archive_pr_recovery(recovery, publication, pull.get("body") or "")
-    commit = publish_files(state, {**publication, "title": plan.text(pull["title"])}, files,
+    commit = publish_files(state, {**publication, "title": bundle["publication"]["title"],
+                                   "date": bundle["publication"]["date"]}, files,
                            storage=storage, recovery=recovery)
     pull = checked_pull(state, assignment, bundle)
     original = pull.get("body") or ""
@@ -848,7 +930,7 @@ def validate_receipt(state, assignment, data):
     bundle, files = prepared(state, assignment)
     receipt = json.loads(review.safe_path(directory(state, assignment), "receipt.json").read_bytes())
     exported = bundle_identity(files)
-    publication = publication_links(state, assignment, exported)
+    publication = publication_links(state, assignment, bundle["publication"]["title"])
     plan.fields(receipt, "stage code_commit bundle wiki_commit url data_url index_url pr_url")
     plan.require(data == receipt and receipt["stage"] == assignment["role"] and
                  receipt["code_commit"] == bundle["code_commit"] and receipt["bundle"] == exported and
