@@ -262,7 +262,7 @@ def instructions(assignment, request, executor):
         authorization(assignment, role) +
         writing_guidance.job_guidance(assignment, request, executor) +
         report_contract(assignment, role) +
-        followups.instructions(assignment, executor) +
+        followups.instructions(assignment, role, executor) +
         "Write the development report to the assigned result file.\nAssignment data: " + json.dumps(assignment))
 
 

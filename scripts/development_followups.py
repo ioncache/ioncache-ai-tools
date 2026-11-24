@@ -75,8 +75,8 @@ def record(progress, data, manifest, settings):
         saved[key] = attempt
 
 
-def instructions(assignment, executor):
-    if assignment["role"] not in ("draft", "ready"):
+def instructions(assignment, role, executor):
+    if role not in ("draft", "ready"):
         return ""
     control = assignment.get("follow_ups", {"enabled": False, "reporting_enabled": True})
     publication = ("Create or reuse follow-up issues automatically under the approved run permission. "

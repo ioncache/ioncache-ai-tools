@@ -2222,6 +2222,7 @@ class DevelopmentRunTests(unittest.TestCase):
         for role, fields in expected.items():
             with self.subTest(role=role):
                 prompt = handoffs.jobs.instructions(assignment, {"role": role}, SCRIPTS.parent)
+                self.assertEqual("FOLLOW_UPS.md" in prompt, role in ("draft", "ready"))
                 self.assertIn("outcome must be exactly one of: complete, blocked, waiting", prompt)
                 schema = json.loads(prompt.split("Required data fields for outcome complete: ", 1)[1]
                                     .split(". text means", 1)[0])

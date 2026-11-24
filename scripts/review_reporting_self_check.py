@@ -127,15 +127,15 @@ class ReportingTests(unittest.TestCase):
         before = copy.deepcopy(self.manifest)
         self.assertFalse(followups.policy(self.manifest, self.settings)["enabled"])
         self.assertEqual(self.manifest, before)
-        assignment = {"role": "draft", "follow_ups": followups.policy(self.manifest, self.settings)}
-        prompt = followups.instructions(assignment, "/pinned")
+        assignment = {"follow_ups": followups.policy(self.manifest, self.settings)}
+        prompt = followups.instructions(assignment, "draft", "/pinned")
         self.assertIn("Do not create follow-up issues", prompt)
         self.assertIn("Known issues not fixed here", prompt)
         self.manifest["permissions"]["create_follow_up_issues"] = True
         assignment["follow_ups"] = followups.policy(self.manifest, self.settings)
         self.assertIn("Create or reuse follow-up issues automatically",
-                      followups.instructions(assignment, "/pinned"))
-        self.assertEqual(followups.instructions({"role": "reviewer"}, "/pinned"), "")
+                      followups.instructions(assignment, "draft", "/pinned"))
+        self.assertEqual(followups.instructions(assignment, "reviewer", "/pinned"), "")
 
     def test_failed_or_missing_ticket_receipts_do_not_hide_findings(self):
         progress = {}
