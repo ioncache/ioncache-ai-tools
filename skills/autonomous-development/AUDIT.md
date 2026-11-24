@@ -45,7 +45,8 @@ page if it is absent from an initialized wiki. Its table has `Date`,
 newest publication and replace that PR's previous row, leaving other rows and
 surrounding content intact. Use the UTC publication date, PR number/title/link,
 and links to the report and JSON. Repeating the same publication leaves its
-existing row in place rather than duplicating or reordering it.
+matching row in place rather than duplicating or reordering it. A missing or
+altered managed row is rebuilt on retry without changing other PR rows.
 
 Keep the index discoverable from the existing `Home.md` or `Home.markdown`.
 If both exist, preserve and update both rather than relying on GitHub's
@@ -312,9 +313,12 @@ Home bytes and removal of superseded audit pairs, and rejects unrelated changed
 files. Existing page bytes come from the fetched commit, not the checkout that
 smudge filters can transform. Filters or commit hooks cannot silently change the
 published bundle or navigation, or retain a superseded page.
-After pushing, the helper verifies both approved files at the fetched wiki head.
-A missing, changed or non-regular file prevents receipt creation; unrelated
-concurrent edits remain allowed. The receipt identifies that confirmed commit.
+After pushing, the helper verifies the approved pair, this PR's managed index
+row and the absence of scheduled superseded paths at the fetched wiki head.
+Missing, changed or non-regular publication files, a missing or changed PR row,
+or restored superseded paths prevent receipt creation. Other index rows,
+their order and surrounding text may change; the whole index need not match.
+The receipt identifies that confirmed commit.
 It respects Git signing configuration. Missing access or signing failures
 produce failure, not a fallback destination or a false successful receipt.
 

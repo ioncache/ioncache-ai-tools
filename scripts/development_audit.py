@@ -488,16 +488,16 @@ def index_table(text, publication):
 
 def index_entry(text, publication, *, unchanged=False):
     lines, start, matches = index_table(text, publication)
-    if matches and unchanged and all(f"]({publication[key]})" in lines[matches[0]] for key in ("url", "data_url")):
-        return text
-    if matches:
-        del lines[matches[0]]
     title = html.escape(" ".join(publication["title"].split()), quote=False).replace("|", "&#124;")
     title = re.sub(r"([\\`*_\[\]])", r"\\\1", title)
     number = publication["pr_url"].rsplit("/", 1)[1]
     date = publication.get("date") or datetime.now(timezone.utc).date().isoformat()
     row = (f"| {date} | [#{number} {title}]({publication['pr_url']}) | "
            f"[Report]({publication['url']}) &#183; [Data (audit.json)]({publication['data_url']}) |\n")
+    if matches and unchanged and lines[matches[0]].strip() == row.strip():
+        return text
+    if matches:
+        del lines[matches[0]]
     lines[start - 1] = lines[start - 1].rstrip("\r\n") + "\n"
     lines.insert(start, row)
     return "".join(lines)
@@ -711,15 +711,31 @@ def verify_wiki_commit(root, parent, expected):
     return commit
 
 
-def confirm_published_pair(root, publication, files):
+def published_index_matches(content, publication):
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return index_entry(text, publication, unchanged=True) == text
+
+
+def confirm_publication(root, publication, expected):
     commit = command(["git", "rev-parse", "FETCH_HEAD"], cwd=root).decode().strip()
-    for extension, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
-        filename = publication["page"] + extension
+    for filename, data in expected.items():
         entry = command(["git", "--literal-pathspecs", "ls-tree", commit, "--", filename], cwd=root)
-        plan.require(entry.startswith(b"100644 blob ") and
-                     command(["git", "show", f"{commit}:{filename}"], cwd=root) == files[source],
-                     "Published audit pair changed; restore the approved pair from wiki history or preserve "
-                     "conflicting pages, then retry the reviewed export")
+        if data is None:
+            plan.require(not entry, f"Superseded audit reappeared at {filename}; inspect the wiki and retry "
+                         "the reviewed export to remove superseded pages")
+            continue
+        is_index = filename == INDEX_PAGE + ".md"
+        message = ("Published audit index changed; restore an unreadable index from wiki history or retry "
+                   "the reviewed export to repair this PR's entry, preserving unrelated content" if is_index else
+                   "Published audit pair changed; restore the approved pair from wiki history or preserve "
+                   "conflicting pages, then retry the reviewed export")
+        plan.require(entry.startswith(b"100644 blob "), message)
+        content = command(["git", "show", f"{commit}:{filename}"], cwd=root)
+        matches = published_index_matches(content, publication) if is_index else content == data
+        plan.require(matches, message)
     return commit
 
 
@@ -772,7 +788,7 @@ def publish_files(state, publication, files, *, storage=None, recovery=None):
                 continue
             command(["git", "fetch", "-q", "--no-tags", remote, ref], cwd=root)
             command(["git", "merge-base", "--is-ancestor", commit, "FETCH_HEAD"], cwd=root)
-            return confirm_published_pair(root, publication, files)
+            return confirm_publication(root, publication, expected)
     raise plan.ManifestError("Wiki kept changing during publication; retry the same export without force-pushing")
 
 
