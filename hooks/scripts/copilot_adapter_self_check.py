@@ -13,6 +13,7 @@ import time
 import unittest
 from unittest import mock
 import uuid
+from contextlib import nullcontext
 
 import copilot_adapter
 import copilot_history
@@ -24,6 +25,10 @@ from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDE
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests"))
+import pytest
+from self_check_support import inprocess_hooks, run_main, uses_process
+
 EM_DASH = chr(0x2014)
 
 
@@ -61,11 +66,12 @@ class CopilotAdapterTests(unittest.TestCase):
         self.addCleanup(lambda: pending.unlink(missing_ok=True))
 
     def invoke(self, event, **fields):
-        result = subprocess.run(
-            [sys.executable, str(ROOT / 'hooks/scripts/copilot_adapter.py'), event],
-            input=json.dumps({**self.payload, **fields}), text=True,
-            capture_output=True, env=self.env, cwd=self.root, timeout=15,
-        )
+        process = uses_process(self)
+        with nullcontext() if process else inprocess_hooks():
+            result = run_main(
+                copilot_adapter, [event], input=json.dumps({**self.payload, **fields}),
+                env=self.env, cwd=self.root, process=process,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         outputs = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         self.progress.extend(item['message'] for item in outputs if item.get('type') == 'progress')
@@ -161,6 +167,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('task', {'prompt': 'Continue the assignment'}), {})
         self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
+    @pytest.mark.process
     def test_root_question_blocks_only_root_and_children_continue(self):
         self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {'features': {}})
         self.marker.write_text('')
@@ -237,6 +244,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
         self.assertEqual(self.tool('bash', {'command': 'npm install --package-lock-only --ignore-scripts'}), {})
 
+    @pytest.mark.process
     def test_lockfile_and_process_denials_have_executable_recovery(self):
         self.prompt('Update dependencies and clean up the test process')
         self.assertEqual(self.tool('create', {'path': 'package-lock.json', 'file_text': '{}'})['permissionDecision'], 'deny')
@@ -677,6 +685,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('postToolUse', **payload)[0], {})
         self.assertEqual(self.progress, [notice])
 
+    @pytest.mark.process
     def test_docs_cache_deduplication_survives_processes_and_user_turns(self):
         status = self.home / '.cache/ioncache-ai-tools/docs-cache/distill-status.json'
         status.parent.mkdir(parents=True)
@@ -913,6 +922,7 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('agentStop', transcriptPath=str(path), stop_hook_active=True)[0], {})
 
 
+    @pytest.mark.process
     def test_invalid_input_fails_visibly(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / 'hooks/scripts/copilot_adapter.py'), 'preToolUse'],

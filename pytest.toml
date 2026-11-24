@@ -1,0 +1,11 @@
+[pytest]
+minversion = "9.0"
+testpaths = ["hooks/scripts", "scripts", "tests"]
+python_files = ["*_self_check.py", "test_*.py"]
+pythonpath = ["hooks/scripts", "scripts", "tests"]
+addopts = ["-ra", "--strict-markers", "--dist=worksteal", "--durations=20"]
+markers = [
+    "process(helpers=True): real process boundary; helpers=False keeps only setup calls in-process",
+    "state_logic: transition scenarios with fixed HEAD, index and file membership",
+    "stable_storage: scenarios whose external directories retain Git affiliation",
+]

@@ -13,13 +13,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
 
       - name: Install contributor tooling
-        run: npm ci
+        run: |
+          npm ci
+          python -m pip install -r requirements-dev.txt
 
       - name: Validate JSON manifests
         run: |
@@ -33,7 +41,7 @@ jobs:
 
       - name: Check hook script syntax
         run: |
-          for f in hooks/scripts/*.py hooks/rules/*.py scripts/*.py; do
+          for f in conftest.py tests/*.py hooks/scripts/*.py hooks/rules/*.py scripts/*.py; do
             python3 -m py_compile "$f" || exit 1
             echo "$f OK"
           done
@@ -46,52 +54,14 @@ jobs:
             echo "$f OK"
           done
 
-      - name: Run rule-engine self-check
-        run: python3 hooks/scripts/rule_engine_self_check.py < /dev/null
-
-      - name: Run pending-question self-check
-        run: python3 hooks/scripts/pending_question_self_check.py < /dev/null
-
-      - name: Run turn-guard self-check
-        run: python3 hooks/scripts/turn_guard_self_check.py < /dev/null
-
-      - name: Run configuration and stateless guidance self-check
-        run: python3 hooks/scripts/plugin_config_self_check.py < /dev/null
-
-      - name: Run Copilot adapter self-check
-        run: python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
-
-      - name: Run docs cache self-check
-        run: python3 hooks/scripts/docs_cache_self_check.py < /dev/null
-
-      - name: Run Codex adapter self-check
-        run: python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
-
-      - name: Run claim-evidence self-check
-        run: python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
+      - name: Run Python tests in parallel
+        run: python -m pytest -n auto
 
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
 
-      - name: Run review-ledger self-check
-        run: python3 scripts/review_ledger_self_check.py
-
-      - name: Run review-options self-check
-        run: python3 scripts/review_options_self_check.py
-
-      - name: Run review-comments self-check
-        run: python3 scripts/review_comments_self_check.py
-
-      - name: Run review-assignment self-check
-        run: python3 scripts/review_assignments_self_check.py
-
-      - name: Run autonomous development offline self-checks
-        run: |
-          python3 scripts/development_run_self_check.py
-          node scripts/development_workflow_self_check.js
-
-      - name: Run release self-check
-        run: python3 scripts/release_self_check.py
+      - name: Run native workflow self-check
+        run: node scripts/development_workflow_self_check.js
 
       - name: Check release changelog
         run: npm run release:check
@@ -113,7 +83,7 @@ jobs:
           hits = []
           for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js'):
               for path in pathlib.Path('.').glob(pattern):
-                  if '.git' in path.parts or 'node_modules' in path.parts:
+                  if any(part in {'.git', 'node_modules', '.venv', '.pytest_cache'} for part in path.parts):
                       continue
                   text = path.read_text(errors='ignore')
                   if em_dash in text:

@@ -6,6 +6,10 @@ import subprocess
 import tempfile
 import unittest
 
+import pytest
+
+pytestmark = pytest.mark.process
+
 HELPER = Path(__file__).with_name('release.js')
 MANIFESTS = (
     '.claude-plugin/plugin.json',

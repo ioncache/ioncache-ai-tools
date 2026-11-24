@@ -15,6 +15,8 @@ import unittest
 from unittest import mock
 import uuid
 
+import pytest
+
 from classify_question import QUESTION_CONTRACT, marker_path
 import block_emdash_turn
 import docs_cache
@@ -656,11 +658,13 @@ class TurnGuardTests(unittest.TestCase):
             output = self.hook('Stop', _response_coverage='final-message', last_assistant_message='Done.')
         self.assertIn('incomplete', output['systemMessage'])
 
+    @pytest.mark.process
     def test_sigterm_reaps_the_reviewer(self):
         for reviewer in ('turn_review', 'scope_review'):
             with self.subTest(reviewer=reviewer):
                 self.assert_reviewer_cancelled(reviewer)
 
+    @pytest.mark.process
     def test_deferred_sigterm_reaps_the_reviewer(self):
         for reviewer in ('turn_review', 'scope_review'):
             with self.subTest(reviewer=reviewer):
@@ -709,6 +713,7 @@ class TurnGuardTests(unittest.TestCase):
             if child_pid and process_exists(child_pid):
                 os.kill(child_pid, signal.SIGKILL)
 
+    @pytest.mark.process
     def test_reviewer_wait_retries_preserve_stdin_and_partial_output(self):
         payload = 'review input\n' * 10_000
         code = (
@@ -721,6 +726,7 @@ class TurnGuardTests(unittest.TestCase):
             with self.subTest(reviewer=reviewer.__name__), mock.patch.object(reviewer, 'REVIEW_TIMEOUT', 3):
                 self.assertEqual(reviewer.run_command([sys.executable, '-c', code], payload), 'started\n' + payload)
 
+    @pytest.mark.process
     def test_timeout_cleans_children_after_reviewer_leader_exits(self):
         code = (
             'import subprocess,sys\n'

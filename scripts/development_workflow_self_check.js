@@ -13,6 +13,20 @@ const fixtureModels = Object.fromEntries(modelRoles.map(role => [role, {
   model: `fixture-${role}`, effort: role === 'development-control' ? 'low' : 'high', fallback: 'fail'
 }]))
 
+let pending = Buffer.alloc(0)
+function readMessage() {
+  while (!pending.includes(10)) {
+    const buffer = Buffer.alloc(65536)
+    const count = fs.readSync(0, buffer, 0, buffer.length, null)
+    assert(count > 0, 'Python fixture closed the helper transport')
+    pending = Buffer.concat([pending, buffer.subarray(0, count)])
+  }
+  const end = pending.indexOf(10)
+  const result = JSON.parse(pending.subarray(0, end).toString('utf8'))
+  pending = pending.subarray(end + 1)
+  return result
+}
+
 /**
  * Executes a generated batch with a fake native agent boundary.
  * @param {string} script - Complete workflow source
@@ -41,6 +55,20 @@ async function persistedScenario(fixture) {
   let review = null
   const modelFile = path.join(fixture.store, 'fixture-models.json')
   fs.writeFileSync(modelFile, JSON.stringify(fixtureModels))
+  function python(argv, options = {}) {
+    if (!fixture.bridge) return execFileSync(fixture.python, argv, options)
+    fs.writeSync(1, JSON.stringify({ call: {
+      argv, cwd: options.cwd || process.cwd(), input: options.input || ''
+    } }) + '\n')
+    const result = readMessage()
+    if (result.returncode !== 0) {
+      const error = new Error(result.stderr || result.stdout)
+      error.stdout = result.stdout
+      error.stderr = result.stderr
+      throw error
+    }
+    return result.stdout
+  }
   /**
    * Executes a deterministic helper with closed stdin and a bounded runtime.
    * @param {string} script - Helper filename
@@ -51,7 +79,7 @@ async function persistedScenario(fixture) {
    * const state = call('development_run.py', ['status', fixture.store])
    */
   function call(script, argv, input) {
-    return JSON.parse(execFileSync(fixture.python, [path.join(__dirname, script), ...argv], {
+    return JSON.parse(python([path.join(__dirname, script), ...argv], {
       input: input === undefined ? '' : JSON.stringify(input), encoding: 'utf8',
       stdio: 'pipe', maxBuffer: 16 * 1024 * 1024, timeout: 30000
     }))
@@ -73,7 +101,7 @@ async function persistedScenario(fixture) {
     const state = status()
     const accepted = state.prs[state.assignment.pr].review
     const ledger = JSON.parse(fs.readFileSync(accepted.ledger, 'utf8'))
-    execFileSync(fixture.python, [path.join(__dirname, 'review_ledger.py'), 'apply',
+    python([path.join(__dirname, 'review_ledger.py'), 'apply',
       accepted.ledger, '--revision', String(ledger.events.length)], {
       cwd: state.assignment.root, input: JSON.stringify({
         type: 'stop', outcome: 'failed', actor: 'fixture', reason: 'Closed at the dispatch boundary'
@@ -97,13 +125,13 @@ async function persistedScenario(fixture) {
       assert.equal(options.effort, expected.effort)
     }
     const start = JSON.parse(prompt.match(/^Start arguments: (.+)$/m)[1])
-    execFileSync(fixture.python, start.slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
+    python(start.slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
     const assignment = status().assignment
     const resultFile = JSON.parse(prompt.match(/^Assigned result file: (.+)$/m)[1])
     const submit = JSON.parse(prompt.match(/^Submit arguments: (.+)$/m)[1])
     assert.equal(submit[submit.indexOf('--candidate') + 1], `${resultFile}.candidate.json`)
     const modelArgs = JSON.parse(prompt.match(/^Model report arguments: (.+)$/m)[1])
-    const modelRecord = JSON.parse(execFileSync(fixture.python, [...modelArgs.slice(1),
+    const modelRecord = JSON.parse(python([...modelArgs.slice(1),
       '--actual-model', `observed-${options.label}`, '--source', 'native-context'],
     { input: '', encoding: 'utf8', stdio: 'pipe', timeout: 30000 }))
     let report, candidate
@@ -166,7 +194,7 @@ async function persistedScenario(fixture) {
     }
     const finish = JSON.parse(prompt.match(/^Finish arguments: (.+)$/m)[1])
     try {
-      execFileSync(fixture.python, (candidate ? submit : finish).slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
+      python((candidate ? submit : finish).slice(1), { input: '', stdio: 'pipe', timeout: 30000 })
     } catch (error) {
       throw new Error(String(error.stdout || error.stderr || error))
     }
@@ -213,6 +241,12 @@ async function persistedScenario(fixture) {
  * await main()
  */
 async function main() {
+  if (process.argv[2] === '--inprocess-controller') {
+    const fixture = readMessage()
+    const result = await persistedScenario({ ...fixture, bridge: true })
+    fs.writeSync(1, JSON.stringify({ result }) + '\n')
+    return
+  }
   if (process.argv[2] === '--persisted-controller') {
     process.stdout.write(JSON.stringify(await persistedScenario(JSON.parse(fs.readFileSync(0, 'utf8')))))
     return

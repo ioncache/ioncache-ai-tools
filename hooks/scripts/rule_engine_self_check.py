@@ -905,7 +905,11 @@ def main():
     print('All rule-engine self-checks passed.')
 
 
-if __name__ == '__main__':
+def test_rule_engine():
     with tempfile.TemporaryDirectory(prefix='rule-engine-copilot-config-') as copilot_home:
         with mock.patch.dict(os.environ, {'COPILOT_HOME': copilot_home}):
             main()
+
+
+if __name__ == '__main__':
+    test_rule_engine()

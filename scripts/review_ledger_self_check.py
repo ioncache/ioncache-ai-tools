@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the ledger CLI against isolated Git repositories, without host agents."""
+"""Exercise persisted ledger transitions, retaining explicit real-process boundary tests."""
 
 from contextlib import contextmanager
 import fcntl
@@ -22,6 +22,10 @@ import review_ownership
 import review_history
 import review_options
 import review_assignments
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+import pytest
+from self_check_support import run_main, uses_process
 
 
 HELPER = Path(__file__).with_name("review_ledger.py")
@@ -74,13 +78,16 @@ class ReviewLedgerTests(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         self.storage = review_ledger.storage(self.root)
-        self.git("init", "-q")
-        self.git("config", "user.name", "Ledger fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        (self.root / "app.txt").write_text("before\n")
-        (self.root / ".gitignore").write_text(".review-loop/\nignored.txt\n")
-        self.git("add", ".")
-        self.git("commit", "-qm", "fixture")
+        if hasattr(self, "repository_seed"):
+            shutil.copytree(self.repository_seed, self.root, dirs_exist_ok=True)
+        else:
+            self.git("init", "-q")
+            self.git("config", "user.name", "Ledger fixture")
+            self.git("config", "user.email", "fixture@example.invalid")
+            (self.root / "app.txt").write_text("before\n")
+            (self.root / ".gitignore").write_text(".review-loop/\nignored.txt\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "fixture")
         self.state = None
 
     def git(self, *args):
@@ -88,14 +95,13 @@ class ReviewLedgerTests(unittest.TestCase):
                               check=True, capture_output=True).stdout
 
     def cli(self, args, event=None, ok=True):
-        """Use a fresh process so assertions depend on persisted state, not memory.
+        """Reload persisted state through the entry point, or a marked real process.
 
         Successful calls return decoded JSON; expected failures return stderr
         only after checking exit 2 and an empty protocol stream.
         """
-        result = subprocess.run([sys.executable, str(HELPER), *args], cwd=self.cwd,
-                                env=self.env, text=True, input=json.dumps(event),
-                                capture_output=True)
+        result = run_main(review_ledger, args, cwd=self.cwd, env=self.env,
+                          input=json.dumps(event), process=uses_process(self))
         if not ok:
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "")
@@ -163,6 +169,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertIn("failed", review_ledger.cached_invalidation(self.root, self.ledger, accepted))
         self.assertEqual(accepted, before)
 
+    @pytest.mark.state_logic
     def test_reconcile_reconfirms_verified_fix_without_another_edit(self):
         self.init("--max-loops", "2", "--max-fix-cycles", "1")
         self.review()
@@ -204,6 +211,7 @@ class ReviewLedgerTests(unittest.TestCase):
             }
         return review_assignments.prepare(request)
 
+    @pytest.mark.state_logic
     def test_full_and_focused_phase_plans_resume_without_private_prompt_files(self):
         self.init()
         full = self.phase_plan("full")
@@ -248,6 +256,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(Path(focused["request"]["scratch_directory"]).exists())
         self.send("stop", outcome="stalled")
 
+    @pytest.mark.state_logic
     def test_pending_applied_outcome_is_settled_before_reconciliation(self):
         self.init("--max-loops", "2", "--max-fix-cycles", "1")
         self.review()
@@ -271,6 +280,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual((self.root / "app.txt").read_bytes(), before)
 
+    @pytest.mark.state_logic
     def test_unsettled_focused_outcome_does_not_prevent_drift_reconciliation(self):
         self.init()
         self.review()
@@ -291,6 +301,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.send("stop", outcome="stalled")
         self.assertEqual(self.cli(["status", self.ledger])["outcome"], "stalled")
 
+    @pytest.mark.state_logic
     def test_failed_outcome_settlement_keeps_reconciliation_available(self):
         self.init()
         self.review()
@@ -329,6 +340,7 @@ class ReviewLedgerTests(unittest.TestCase):
             severity="High", evidence=["Historical acceptance does not establish verification"]))
         self.send("stop", outcome="stalled")
 
+    @pytest.mark.state_logic
     def test_open_focused_plan_retirement_verifies_applied_fix_without_another_edit(self):
         for retirement in ("language", "schema"):
             with self.subTest(retirement=retirement):
@@ -382,6 +394,7 @@ class ReviewLedgerTests(unittest.TestCase):
             if self.state and self.state["outcome"] in ("running", "interrupted", "blocked"):
                 self.send("stop", outcome="stalled")
 
+    @pytest.mark.state_logic
     def test_interrupted_applied_verification_keeps_snapshot_checks_and_decision_guards(self):
         cases = ("failed-fix", "failed-fix-check", "failed-current-check", "drift", "newer-decision",
                  "outer-limit")
@@ -421,6 +434,7 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.assertEqual(Path(self.ledger).read_bytes(), before)
                 self.send("stop", outcome="stalled")
 
+    @pytest.mark.state_logic
     def test_reconfirmation_does_not_bless_unverified_or_reopened_findings(self):
         for case in ("never-fixed", "failed-checks", "recurrence"):
             with self.subTest(case=case):
@@ -495,6 +509,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertIn("Unsupported", self.cli(["fingerprint"], ok=False))
         self.assertFalse((self.root / ".review-loop").exists())
 
+    @pytest.mark.state_logic
     def test_coordinated_handbacks_preserve_schema_one_evidence(self):
         style_assessment = {
             "validator": "review-adjudicator", "report_action": "None",
@@ -564,6 +579,7 @@ class ReviewLedgerTests(unittest.TestCase):
                           report["findings"]["F002"]["decisions"][0]["evidence"][0])
             self.assertEqual(json.loads(Path(self.ledger).read_text())["schema"], 1)
 
+    @pytest.mark.state_logic
     def test_ledger_accepts_mapped_workers_and_preserves_original_reports(self):
         for observed in (True, False):
             with self.subTest(caller_observes_identity=observed):
@@ -604,6 +620,7 @@ class ReviewLedgerTests(unittest.TestCase):
                 self.send("advance")
                 self.assertEqual(self.state["outcome"], "completed")
 
+    @pytest.mark.state_logic
     def test_incomplete_handbacks_preserve_diagnostics_and_resumability(self):
         for outcome in ("blocked", "interrupted", "failed", "stalled"):
             self.init()
@@ -625,6 +642,7 @@ class ReviewLedgerTests(unittest.TestCase):
             else:
                 self.reject("resume")
 
+    @pytest.mark.state_logic
     def test_incomplete_focused_handback_resumes_the_same_fix_cycle(self):
         self.init()
         self.review()
@@ -916,6 +934,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertFalse(self.cli(["migrate", args.ledger, "--shutdown-evidence", "Stopped"])["migrated"])
         self.assertFalse((self.root / ".review-loop").exists())
 
+    @pytest.mark.process
     def test_migration_retry_after_guard_release_keeps_cleanup_successful(self):
         self.init()
         source = self.legacy_run()
@@ -1048,6 +1067,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertIn(".review-loop/source.txt", result["manifest"]["files"])
         self.assertFalse(self.storage.exists())
 
+    @pytest.mark.state_logic
     def test_verified_fix_then_final_full_review(self):
         """Completion needs both verified correction and a subsequent whole-scope review."""
         self.init()
@@ -1065,6 +1085,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"][0]["cycles"]), 1)
         self.assertEqual(self.state["findings"]["F001"]["disposition"], "fixed")
 
+    @pytest.mark.state_logic
     def test_inner_limit_stops_whole_run(self):
         """Unused outer allowance cannot bypass an exhausted correction sub-loop."""
         self.init("--max-fix-cycles", "1", "--max-loops", "5")
@@ -1079,6 +1100,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.reject("resume")
         self.assertEqual(self.state["findings"]["F001"]["disposition"], "fix_failed")
 
+    @pytest.mark.state_logic
     def test_inner_retries_do_not_start_an_outer_review(self):
         """Repeated correction attempts belong to the review that found the issue."""
         self.init()
@@ -1093,6 +1115,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"]), 1)
         self.assertEqual(len(self.state["loops"][0]["cycles"]), 2)
 
+    @pytest.mark.state_logic
     def test_outer_limit_cannot_claim_final_confirmation(self):
         """A focused review alone cannot certify the entire scope after the last loop."""
         self.init("--max-loops", "1")
@@ -1105,6 +1128,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["outcome"], "limit_reached")
         self.assertIn("Final full-scope", self.state["stop_reason"])
 
+    @pytest.mark.state_logic
     def test_no_fixes_and_accepted_uncertainty(self):
         """Accepting uncertainty leaves a reported exception, not a clean result."""
         self.init()
@@ -1116,6 +1140,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["outcome"], "completed_with_exceptions")
         self.assertEqual(self.state["loops"][0]["cycles"], [])
 
+    @pytest.mark.state_logic
     def test_duplicate_suppression_and_reopening(self):
         """Repeated observations preserve suppression until an explicit new decision."""
         self.init()
@@ -1130,6 +1155,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self.state["findings"]["F001"]["disposition"], "open")
         self.reject("advance")
 
+    @pytest.mark.state_logic
     def test_failed_review_and_unverified_fix_are_not_clean(self):
         """Worker failure or failed checks must not become successful review evidence."""
         self.init()
@@ -1149,6 +1175,7 @@ class ReviewLedgerTests(unittest.TestCase):
                     severity="High", evidence=["Checks did not pass"])
         self.reject("advance")
 
+    @pytest.mark.state_logic
     def test_new_regression_validated_within_inner_cycle(self):
         """A correction regression must be adjudicated before another fix begins."""
         self.init()
@@ -1165,6 +1192,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.state["loops"]), 1)
         self.assertEqual(len(self.state["loops"][0]["cycles"]), 2)
 
+    @pytest.mark.state_logic
     def test_resume_and_external_drift(self):
         """Resumption keeps allowance use; changed evidence requires a counted review."""
         self.init()
@@ -1179,6 +1207,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.review()
         self.assertEqual(len(self.state["loops"]), 2)
 
+    @pytest.mark.state_logic
     def test_interrupted_fix_resumes_without_refunding_cycle(self):
         """Declared partial edits remain recoverable without granting a free fix attempt."""
         self.init()
@@ -1457,6 +1486,7 @@ sys.exit(review_ledger.main())
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertEqual(result.stdout, b"")
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_initial_snapshot_allows_retry(self):
         self.interrupt_init("object")
         self.assertTrue(list(self.storage.glob("*/objects/*")))
@@ -1466,6 +1496,7 @@ sys.exit(review_ledger.main())
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual((self.root / "app.txt").read_text(), "before\n")
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_unpublished_ledger_allows_retry(self):
         self.interrupt_init("ledger")
         self.init()
@@ -1475,6 +1506,7 @@ sys.exit(review_ledger.main())
         self.send("resume")
         self.assertEqual(len(self.state["loops"]), 1)
 
+    @pytest.mark.process(helpers=False)
     def test_interruption_after_publication_preserves_the_run(self):
         self.interrupt_init("published")
         ledgers = list(self.storage.glob("*/REVIEW_LEDGER.json"))
@@ -1677,6 +1709,7 @@ sys.exit(review_ledger.main())
         self.assertEqual(result.returncode, 75, result.stderr)
         self.assertEqual(result.stdout, "")
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_witness_write_allows_one_counted_retry(self):
         self.init()
         before = Path(self.ledger).read_bytes()
@@ -1686,6 +1719,7 @@ sys.exit(review_ledger.main())
         self.send("start_review")
         self.assertEqual(len(self.state["loops"]), 1)
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_history_write_cannot_resume_old_counters(self):
         self.init()
         before = Path(self.ledger).read_bytes()
@@ -1704,6 +1738,7 @@ sys.exit(review_ledger.main())
         self.init()
         self.send("start_review")
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_failed_stop_revokes_cached_acceptance(self):
         self.init()
         self.review()
@@ -1715,6 +1750,7 @@ sys.exit(review_ledger.main())
         self.storage.rename(self.folder / "offline-history")
         self.assertIn("invalidated", review_ledger.cached_invalidation(self.root, Path(self.ledger), accepted))
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_abandonment_retains_revocation_and_can_finish(self):
         self.init()
         self.review()
@@ -1888,6 +1924,7 @@ sys.exit(review_ledger.main())
         self.init("--storage", str(target))
         self.assertEqual(self.state["outcome"], "running")
 
+    @pytest.mark.process(helpers=False)
     def test_interrupted_ownership_release_can_retry_without_lost_evidence(self):
         script = """
 import os
@@ -1933,6 +1970,7 @@ sys.exit(review_ledger.main())
                 self.send("start_review")
                 self.send("stop", outcome="failed")
 
+    @pytest.mark.process
     def test_ownership_lock_blocks_cross_store_initialization(self):
         self.init()
         other = self.folder / "another" / self.storage.name
@@ -2030,6 +2068,7 @@ sys.exit(review_ledger.main())
         self.cli(["init", "--objective", "Another run", "--scope", "repository"], ok=False)
         self.assertTrue(path.parent.is_dir())
 
+    @pytest.mark.state_logic
     def test_unrecoverable_history_can_be_closed_without_rewriting_evidence(self):
         for damage in ("missing-ledger", "truncated-ledger", "missing-object", "corrupt-object",
                        "file-map", "snapshot-map"):
@@ -2179,6 +2218,7 @@ sys.exit(review_ledger.main())
         self.send("advance")
         self.assertEqual(self.state["outcome"], "completed")
 
+    @pytest.mark.process(helpers=False)
     def test_closure_recovery_cannot_reopen_terminal_history_after_interruption(self):
         self.init()
         self.review()
@@ -2232,6 +2272,7 @@ sys.exit(review_ledger.main())
         self.assertIn("different run", self.cli(
             ["init", "--objective", "Another run", "--scope", "repository"], ok=False))
 
+    @pytest.mark.process
     def test_lock_blocks_concurrent_updates(self):
         """An overlapping writer must fail explicitly rather than race a ledger update."""
         self.init()
@@ -2260,6 +2301,7 @@ sys.exit(review_ledger.main())
         for command in ("status", "inspect"):
             self.assertIn("Worktree drift", self.cli([command, self.ledger], ok=False))
 
+    @pytest.mark.process
     def test_executable_regression_and_persistent_final_report(self):
         """A durable success report must survive a real failing-then-passing correction."""
         app = self.root / "boundary.py"
