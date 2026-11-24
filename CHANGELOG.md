@@ -4,6 +4,21 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.6 (2026-11-24)
+
+### New
+
+* None.
+
+### Updated
+
+* speed up python self-check suites ([#68](https://github.com/ioncache/ioncache-ai-tools/issues/68)) ([b868b2d](https://github.com/ioncache/ioncache-ai-tools/commit/b868b2ddf511fda6709b66c7846595bef5fd58f6))
+
+### Fixed
+
+* add writer standards and bounded development recovery ([#70](https://github.com/ioncache/ioncache-ai-tools/issues/70)) ([53330fe](https://github.com/ioncache/ioncache-ai-tools/commit/53330fead643491a9252f7840662b100972046f2))
+* preserve unresolved findings and track follow-up issues ([#74](https://github.com/ioncache/ioncache-ai-tools/issues/74)) ([6a34d6d](https://github.com/ioncache/ioncache-ai-tools/commit/6a34d6dbb37ff17adfd331ab8bc29581ec793c10))
+
 ## 1.13.5 (2026-11-23)
 
 ### New
