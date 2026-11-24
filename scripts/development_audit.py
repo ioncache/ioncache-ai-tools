@@ -32,6 +32,9 @@ LINK_START = "<!-- ioncache-audit:start -->"
 LINK_END = "<!-- ioncache-audit:end -->"
 HOME_START = "<!-- ioncache-audit-index:start -->"
 HOME_END = "<!-- ioncache-audit-index:end -->"
+HOME_REFERENCE = (r'^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]*)?'
+                  r'(?:<([^>\n]+)>|([^\s<>]+))'
+                  r'''(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$''')
 
 
 def repository(url):
@@ -307,10 +310,37 @@ def archive_assignment(state, pr):
     return {**saved, "role": "archive", "before": state["prs"][pr]["accepted"] or saved["before"]}
 
 
-def archive_bundle(state, pr, public, *, model_snapshot=None):
+def accepted_archive_commit(state, pr, *, required=False):
+    progress = state["prs"][pr]
+    snapshot = progress["accepted"]
+    if snapshot is None:
+        return None
+    for item in reversed(state["history"]):
+        if (item["pr"] == pr and item["role"] == "commit" and item["outcome"] == "complete" and
+                item["report"]["data"]["commit"] == snapshot["head"] and
+                item["before"]["files"] == snapshot["files"]):
+            return snapshot["head"]
+    snapshot_id = identity(snapshot)
+    rebased = next((item for item in reversed(progress.get("review_rebases", []))
+                    if item["new_head"] == snapshot["head"] and item["after"] == snapshot_id), None)
+    if rebased is not None:
+        try:
+            tree = command(["git", "--no-replace-objects", "rev-parse", "--verify", "--end-of-options",
+                            snapshot["head"] + "^{tree}"], cwd=Path(state["root"])).decode().strip()
+        except (plan.ManifestError, OSError, subprocess.TimeoutExpired) as error:
+            if required:
+                raise plan.ManifestError("Rebase commit evidence is unavailable; restore Git and the retained "
+                                         "commit objects, then retry the same archive") from error
+            return None
+        if tree == rebased["expected_tree"]:
+            return snapshot["head"]
+    return None
+
+
+def archive_bundle(state, pr, public, *, model_snapshot=None, require_commit_evidence=False):
     bundle = build(state, archive_assignment(state, pr), public, model_snapshot=model_snapshot)
     bundle["run_outcome"] = state["outcome"]
-    bundle["accepted_code_commit"] = (state["prs"][pr]["accepted"] or {}).get("head")
+    bundle["accepted_code_commit"] = accepted_archive_commit(state, pr, required=require_commit_evidence)
     bundle["limitations"].append(
         "Historical evidence: the worktree was not checked. Publication does not establish "
         "current PR review acceptance, readiness, or coverage of later changes.")
@@ -344,12 +374,14 @@ def prepared_archive(state, pr, approved):
                  "Publication approval must identify both exact exported files; export and inspect again")
     bundle = json.loads(files["audit.json"])
     expected = archive_bundle(state, pr, bundle["public"],
-                              model_snapshot=(bundle["models"], bundle["models_unavailable"]))
+                              model_snapshot=(bundle["models"], bundle["models_unavailable"]),
+                              require_commit_evidence=True)
     plan.require(bundle == expected and files == contents(bundle),
                  "Archive evidence changed; run archive again and inspect both new files before publishing")
     plan.require(bundle["accepted_code_commit"] == bundle["code_commit"],
-                 "No accepted code commit is recorded. Keep the local archive; reconcile the PR's review "
-                 "within its approved allowances before publishing")
+                 "No accepted code commit is established for this snapshot. Keep the local archive; "
+                 "complete the accepted commit handoff, restore retained Git objects for rebase evidence, "
+                 "or reconcile the PR's review within its approved allowances before publishing")
     return folder, bundle, files
 
 
@@ -445,16 +477,68 @@ def index_entry(text, publication):
     return "".join(lines)
 
 
+def home_visible_text(text):
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    hidden = (r"^ {0,3}(?P<backticks>`{3,})[^`\n]*\n.*?"
+              r"(?:(?P<backtick_end>^ {0,3}(?P=backticks)`*[ \t]*$)|\Z)|"
+              r"^ {0,3}(?P<tildes>~{3,})[^\n]*\n.*?"
+              r"(?:(?P<tilde_end>^ {0,3}(?P=tildes)~*[ \t]*$)|\Z)|"
+              r"(?P<comment><!--).*?(?:(?P<comment_end>-->)|\Z)|"
+              r"(?P<reference>" + HOME_REFERENCE + r")|"
+              r"(?<!`)(?P<inline>`+)(?!`).*?(?<!`)(?P=inline)(?!`)|"
+              r"^(?: {4}|\t)[^\n]*$")
+    closed = True
+
+    def mask(match):
+        nonlocal closed
+        if match["reference"] is not None:
+            return match[0]
+        if ((match["backticks"] and not match["backtick_end"]) or
+                (match["tildes"] and not match["tilde_end"]) or
+                (match["comment"] and not match["comment_end"])):
+            closed = False
+        return re.sub(r"[^\n]", " ", match[0])
+
+    visible = re.sub(hidden, mask, text, flags=re.MULTILINE | re.DOTALL)
+    return visible, closed
+
+
+def home_link_destinations(visible):
+    definitions = {}
+    definition_end = -1
+
+    def retain_definition(match):
+        nonlocal definition_end
+        previous_end = match.start() - 1
+        previous = visible[visible.rfind("\n", 0, previous_end) + 1:previous_end]
+        block_end = re.fullmatch(r" {0,3}(?:#{1,6}(?:[ \t]+.*)?|"
+                                r"(?P<rule>[-*_])(?:[ \t]*(?P=rule)){2,}|[=-]+)[ \t]*", previous)
+        if match.start() and previous.strip() and previous_end != definition_end and not block_end:
+            return match[0]
+        definition_end = match.end()
+        label = " ".join(match[1].split()).casefold()
+        definitions.setdefault(label, match[2] or match[3])
+        return "\n" * match[0].count("\n")
+
+    visible = re.sub(HOME_REFERENCE, retain_definition, visible, flags=re.MULTILINE)
+    link = (r'(!?)\[([^\]\n]+)\](?:'
+            r'\(\s*<?([^>\s)]+)>?(?:\s+"[^"\n]*")?\s*\)|'
+            r'\[([^\]\n]*)\])?')
+    for match in re.finditer(link, visible):
+        if match[1]:
+            continue
+        if match[3] is not None:
+            yield match[3]
+        else:
+            label = " ".join((match[4] or match[2]).split()).casefold()
+            if label in definitions:
+                yield definitions[label]
+
+
 def home_has_index_link(text, index_url):
-    visible = re.sub(r"<!--.*?(?:-->|\Z)", "", text, flags=re.DOTALL)
-    visible = re.sub(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[ \t]*$|\Z)",
-                     "", visible, flags=re.MULTILINE | re.DOTALL)
-    visible = re.sub(r"(`+).*?\1(?!`)", "", visible)
-    visible = re.sub(r"^(?: {4}|\t).*$", "", visible, flags=re.MULTILINE)
-    destinations = re.findall(r'(?<!!)\[[^\]\n]*\]\(\s*<?([^>\s)]+)>?(?:\s+"[^"\n]*")?\s*\)',
-                              visible)
+    visible, _ = home_visible_text(text)
     repo = repository(index_url.split("/wiki/")[0])
-    for destination in destinations:
+    for destination in home_link_destinations(visible):
         path = destination.split("#", 1)[0]
         if path in (INDEX_PAGE, "./" + INDEX_PAGE) or match_repository_url(path, repo, f"wiki/{INDEX_PAGE}"):
             return True
@@ -474,6 +558,8 @@ def home_page(text, index_url):
         return text
     if home_has_index_link(text, index_url):
         return text
+    _, closed = home_visible_text(text)
+    plan.require(closed, "Preserve Home content and close its unfinished code or comment block before retrying")
     separator = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
     updated = text + separator + f"{HOME_START}\n{link}\n{HOME_END}\n"
     plan.require(home_has_index_link(updated, index_url),
@@ -493,9 +579,10 @@ def wiki_files(root, publication, files):
             "Development process audit records, one row per pull request. Newest first.\n\n"
             f"{INDEX_HEADER}\n{INDEX_SEPARATOR}\n")
     expected[path.name] = index_entry(text, publication).encode()
-    path = review.safe_path(root, "Home.md")
-    text = path.read_bytes().decode() if path.exists() else ""
-    expected[path.name] = home_page(text, publication["index_url"]).encode()
+    homes = [review.safe_path(root, name) for name in ("Home.md", "Home.markdown")]
+    for path in [path for path in homes if path.exists()] or homes[:1]:
+        text = path.read_bytes().decode() if path.exists() else ""
+        expected[path.name] = home_page(text, publication["index_url"]).encode()
     return expected
 
 

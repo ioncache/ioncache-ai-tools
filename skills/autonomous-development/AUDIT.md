@@ -32,12 +32,15 @@ surrounding content intact. Use the UTC publication date, PR number/title/link,
 and links to the report and JSON. Repeating the same publication leaves its
 existing row in place rather than duplicating or reordering it.
 
-Keep the index discoverable from `Home.md`. If Home has no index link, append
+Keep the index discoverable from the existing `Home.md` or `Home.markdown`.
+If both exist, preserve and update both rather than relying on GitHub's
+same-title selection. If Home has no index link, append
 one between `ioncache-audit-index:start` and `ioncache-audit-index:end` HTML
-comments. Create `Home.md` only if absent. Preserve all other Home content and
-an existing handwritten index link instead of duplicating it. An edited or
-malformed managed block requires preserving its human notes outside the block
-before repair and retry. Home bytes are verified along with the audit and index.
+comments. Create `Home.md` only if neither exists. Preserve all other Home content
+and existing handwritten inline, reference-style or wiki index links instead of
+duplicating them. An edited or malformed managed block requires preserving its
+human notes outside the block before repair and retry. Home bytes are verified
+along with the audit and index.
 
 Update an `Audit` section in the PR body with `Report`, `Data (audit.json)`, and
 `Automated Pull Request Audits` links, as in the wiki index. Preserve the rest of
@@ -219,8 +222,14 @@ audit feature and workflow, and native permission. It does not infer new human
 authorization or waive an opt-out. Use an intact current helper when an older
 pinned executor lacks this command; do not replace the run's executor pin.
 
-The run must have a saved accepted commit. The PR must be open in the approved
-repository on its owned branch, and its head must equal that exact commit.
+The saved accepted file snapshot must match a successful commit handoff.
+Review acceptance alone does not establish that its fixes were committed.
+For supported rebases, the retained snapshot-to-tree evidence must match the
+Git commit object in the main repository; retain those objects after worktree
+cleanup. Missing evidence leaves local export available. Complete the accepted
+commit handoff or restore the retained objects before publishing.
+The PR must be open in the approved repository on its owned branch, and its head
+must equal that exact commit.
 Even a patch-identical rebase with a different commit is refused. Reconcile
 the review within existing allowances, or use `rebase-review` for a supported
 unchanged target rebase, then regenerate and inspect the archive. If that
