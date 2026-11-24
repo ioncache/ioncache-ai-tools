@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from types import SimpleNamespace
 import sys
@@ -24,6 +25,7 @@ import development_progress as monitoring
 import development_models as models
 import development_dispatch as dispatches
 import development_jobs as jobs
+import development_rebase as rebases
 import review_assignments as assignments
 import review_ledger as review
 
@@ -262,6 +264,12 @@ def cached_review_identity(reviewed):
     return plan.digest(plan.encode({key: reviewed[key] for key in ("ledger", "history", "snapshot")}))
 
 
+def effective_review_base(progress):
+    identity = cached_review_identity(progress["review"])
+    matches = [item for item in progress.get("review_rebases", []) if item["review"] == identity]
+    return matches[-1]["new_base"] if matches else progress["review"]["base"]
+
+
 def cached_revocation(state, reviewed, reason=None):
     identity = cached_review_identity(reviewed)
     folder = review.safe_path(Path(state["store"]), "review-revocations")
@@ -367,9 +375,10 @@ def reserve(state, settings, launch_models=None):
         reviewed = progress["review"]
         files = reviewed["coverage"].get("files")
         plan.require(isinstance(files, list) and
-                     set(review_files(root, reviewed["base"])) <= set(files),
+                     set(review_files(root, effective_review_base(progress))) <= set(files),
                      "Review lacks complete file coverage; reconcile this PR for a counted review "
-                     "before continuing, preserving existing work and allowances")
+                     "before continuing, or use rebase-review for an unchanged patch rebased onto its target, "
+                     "preserving existing work and allowances")
         plan.require(before["files"] == accepted["files"], "Reviewed content changed")
         unchanged(accepted, before)
         if role == "ready":
@@ -582,12 +591,14 @@ def complete(state, report, settings):
     plan.strings(report["evidence"])
     expected = {item["id"]: item["sha256"] for item in state["manifest"]["artifacts"]}
     plan.require(report["artifacts"] == expected, "Approved artifact identity or freshness is missing")
-    plan.require(report["outcome"] in ("complete", "blocked", "waiting"), "Unknown worker outcome")
+    plan.require(report["outcome"] in jobs.REPORT_OUTCOMES,
+                 f"Unknown worker outcome {report['outcome']!r}; allowed: {', '.join(jobs.REPORT_OUTCOMES)}")
     plan.require(isinstance(report["data"], dict), "Result data must be an object")
     if "model_report" in report:
         models.report_reference(state, active, report["model_report"])
     with ExitStack() as guards:
         if report["outcome"] == "complete":
+            jobs.validate_data(request(state, settings), active["role"], report["data"])
             if active["role"] in REVIEW_DEPENDENT_ROLES:
                 from review_ownership import locked as review_locked
 
@@ -702,6 +713,8 @@ def request(state, settings):
             "audit": {"enabled": audit_enabled(state, settings),
                       "index_url": audit.wiki_index(state) if audit_enabled(state, settings) else None},
             "monitoring": {"enabled": monitoring.enabled(settings)},
+            "report_contract_enabled": "autonomous-development-report-contract" in settings.catalog and
+                                       "autonomous-development-report-contract" not in settings.disabled,
             "model_selection": assignment.get("model_selection", model_policy(state, settings)),
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
@@ -761,9 +774,64 @@ def reconcile(state, args, settings):
     plan.require(bool(reviews) and progress["accepted"] is not None,
                  "No accepted review to reconcile; resume the unfinished assignment instead")
     index, task = reviews[-1]
+    key = f"{args.pr}:review:{task or 'pr'}"
+    plan.require(state["attempts"].get(key, 0) < state["manifest"]["limits"]["attempts"],
+                 "No review attempts remain; acceptance was preserved. For an unchanged target rebase use "
+                 "rebase-review; otherwise retain the incomplete work without resetting allowances.")
+    plan.require(len(state["history"]) < state["manifest"]["limits"]["assignments"],
+                 "No assignment allowance remains; acceptance was preserved. Do not reset the run.")
     check_worktree(state, args.pr)
     progress.update(position=index, accepted=None, waiting=False, reconciliation=args.reason)
     state["outcome"] = "running"
+
+
+def rebase_review(state, args, settings):
+    feature(Path(state["root"]), settings)
+    name = "autonomous-development-rebase-review"
+    plan.require(name in settings.catalog and name not in settings.disabled,
+                 "Clean-rebase review recovery is disabled; existing review and inspection remain available")
+    plan.require(state["active"] is None and state["outcome"] in ("running", "blocked", "waiting"),
+                 "Collect the outstanding report or retire its worker after native shutdown before rebase recovery")
+    plan.text(args.reason)
+    plan.require(args.pr in state["prs"], "Unknown PR")
+    progress = state["prs"][args.pr]
+    plan.require(progress["accepted"] is not None and progress.get("review", {}).get("coverage", {}).get(
+        "structurally_complete"), "A completed accepted review with category coverage is required")
+    plan.require(progress["position"] < len(steps(state["manifest"], args.pr)), "PR is already delivered")
+    root = check_worktree(state, args.pr)
+    require_cached_review_usable(state, args.pr, root)
+    plan.require(re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", args.new_base) is not None,
+                 "new-base must be a full commit ID from the target branch")
+    pr = plan.indexed(state["manifest"]["prs"])[args.pr]
+    refs = [f"refs/remotes/{state['manifest']['repository']['remote']}/{pr['target']}",
+            f"refs/heads/{pr['target']}"]
+    available = git(root, "for-each-ref", "--format=%(refname)", *refs).splitlines()
+    target_ref = next((ref for ref in refs if ref in available), None)
+    plan.require(target_ref is not None, "Target branch is unavailable; fetch its approved remote and retry")
+    target = git(root, "rev-parse", target_ref)
+    plan.require(git(root, "merge-base", args.new_base, target) == args.new_base,
+                 "New base is not reachable from the PR target branch; fetch the target and use its commit")
+    old_base = effective_review_base(progress)
+    for ancestor in (pr["base"], old_base):
+        plan.require(git(root, "merge-base", ancestor, args.new_base) == ancestor,
+                     "New base must descend from the approved and previously accepted bases")
+    plan.require(git(root, "merge-base", args.new_base, "HEAD") == args.new_base,
+                 "Branch does not descend from new-base; finish the authorized rebase before recovery")
+    current, evidence = rebases.verify(root, progress["review"], args.new_base)
+    plan.require(git(root, "rev-parse", target_ref) == target, "Target moved during verification; retry")
+    unchanged(current, capture(root))
+    if old_base != args.new_base or current != progress["accepted"]:
+        progress.setdefault("review_rebases", []).append({
+            "review": cached_review_identity(progress["review"]), "old_base": old_base,
+            "new_base": args.new_base, "target_ref": target_ref, "target_commit": target,
+            "old_head": progress["accepted"]["head"], "new_head": current["head"],
+            "before": plan.digest(plan.encode(progress["accepted"])),
+            "after": plan.digest(plan.encode(current)), "reason": args.reason, **evidence,
+        })
+    progress.update(base=args.new_base, accepted=current)
+    if progress.get("commit"):
+        progress["commit"] = current["head"]
+    state["outcome"], state["reason"] = "running", args.reason
 
 
 def mutate(args, folder):
@@ -811,6 +879,12 @@ def mutate(args, folder):
             state["outcome"] = "blocked"
         elif args.command == "reconcile":
             reconcile(state, args, settings)
+        elif args.command == "rebase-review":
+            from review_ownership import locked as review_locked
+
+            plan.require(args.pr in state["prs"], "Unknown PR")
+            guards.enter_context(review_locked(check_worktree(state, args.pr)))
+            rebase_review(state, args, settings)
         elif args.command in ("recover-review-storage", "resume-review", "claim-review"):
             from review_ownership import locked as review_locked
 
@@ -850,7 +924,7 @@ def parser():
     initialize.add_argument("--provider", help="Refuse incompatible packaged execution before creating state")
     for name in ("approved", "root", "store"):
         initialize.add_argument("--" + name, required=True)
-    for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile",
+    for name in ("status", "next", "record", "interrupt", "resume", "retire", "reconcile", "rebase-review",
                  "model-fallback", "recover-review-storage", "resume-review", "claim-review", "review-checkpoint",
                  "claim-dispatch"):
         command = commands.add_parser(name)
@@ -866,7 +940,8 @@ def parser():
                                  help="Complete JSON launch choices, retained without changing the manifest")
         if name == "record":
             command.add_argument("--report", required=True)
-        if name in ("interrupt", "resume", "retire", "reconcile", "model-fallback", "recover-review-storage", "resume-review"):
+        if name in ("interrupt", "resume", "retire", "reconcile", "rebase-review", "model-fallback",
+                    "recover-review-storage", "resume-review"):
             command.add_argument("--reason", required=True)
         if name in ("retire", "model-fallback", "recover-review-storage", "resume-review"):
             command.add_argument("--shutdown-evidence", required=True)
@@ -878,8 +953,10 @@ def parser():
         if name == "model-fallback":
             command.add_argument("--key", required=True)
             command.add_argument("--role", choices=models.ROLES, required=True)
-        if name == "reconcile":
+        if name in ("reconcile", "rebase-review"):
             command.add_argument("--pr", required=True)
+        if name == "rebase-review":
+            command.add_argument("--new-base", required=True)
     return cli
 
 

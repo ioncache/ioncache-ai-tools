@@ -362,6 +362,77 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(handoffs.jobs.authorization(granted, "implement"), "")
         self.assertIn("Disclose ambient instructions", handoffs.jobs.authorization(granted, "preflight"))
 
+    @pytest.mark.stable_storage
+    def test_writer_prompts_reach_native_workers_without_readonly_contamination(self):
+        root, batch, owner_path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        phase = json.loads(Path(data["plan"]).read_text())
+        assignment = self.state["assignment"]
+        reference = {"path": data["plan"], "identity": phase["identity"]}
+        requests = [
+            {"role": role, "prompt": "Correct only validated F001", "result_file": f"/private/{role}.json",
+             **({"writing_plan": reference} if role == "fixer" else {})}
+            for role in ("implement", "fixer", "adjudicator", "validator")
+        ]
+        packet = next(iter(phase["packets"].values()))
+        requests.append({"role": "reviewer", "prompt": "", "result_file": packet["result_file"], "packet": packet})
+        jobs = [handoffs.jobs.job(assignment, request, self.store / "executor") for request in requests]
+        for job in jobs:
+            writer = job["role"] in ("implement", "fixer")
+            self.assertEqual("# Writing quality" in job["prompt"], writer)
+            self.assertEqual("Before reporting, self-check your actual diff" in job["prompt"], writer)
+            if writer:
+                self.assertIn("read and reconcile the surrounding context", job["prompt"])
+                standards = json.loads(job["prompt"].split("\nWriting standards: ", 1)[1].split("\n", 1)[0])
+                for key, entry in standards["standards"].items():
+                    self.assertEqual(entry["sources"][0]["content"], phase["registry"][key]["sources"][0]["content"])
+                self.assertNotIn("jsdoc", standards["standards"])
+                self.assertNotIn("PROTOCOL.md", job["prompt"])
+        result = subprocess.run(["node", str(SCRIPTS / "development_workflow_self_check.js"), "--writer-prompts"],
+                                input=json.dumps(jobs), capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @pytest.mark.stable_storage
+    def test_fixer_plan_reference_can_be_corrected_without_repeating_review(self):
+        root, batch, owner_path = self.review_handoff_fixture()
+        data = self.review(root, record=False)
+        phase = json.loads(Path(data["plan"]).read_text())
+        request = {"role": "fixer", "prompt": "Correct only validated F001",
+                   "result_file": str(self.store / "reports" / self.state["assignment"]["id"] / "fixer.json")}
+        response = {"outcome": "dispatch", "requests": [request], "result_file": ""}
+        owner_path.write_text(json.dumps(response))
+        rejected = self.handoff("finish", "--batch", batch["batch"], "--job", 1, ok=False)
+        self.assertIn("writing_plan needs", rejected["error"])
+        consumed = self.cli("status", self.store)["consumed_assignments"]
+        request["writing_plan"] = {"path": data["plan"], "identity": phase["identity"]}
+        owner_path.write_text(json.dumps(response))
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        fixer = self.handoff("prepare")
+        self.assertLessEqual(Path(fixer["script"]).stat().st_size, handoffs.SCRIPT_BYTES)
+        job = self.claim_handoff(fixer)[0]
+        self.assertIn("# Writing quality", job["prompt"])
+        self.assertEqual(self.cli("status", self.store)["consumed_assignments"], consumed)
+        self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["failures"]["1"], 1)
+
+    def test_writer_optout_and_unavailable_settings_do_not_change_other_roles(self):
+        assignment = {"root": str(self.root)}
+        request = {"role": "fixer", "prompt": "Validated F001 only"}
+        config = self.root / ".codex/ioncache-ai-tools.local.json"
+        config.parent.mkdir()
+        config.write_text(json.dumps({"features": {"writer-quality-guidance": False}}))
+        before = config.read_bytes()
+        self.assertEqual(handoffs.jobs.writing_guidance.job_guidance(assignment, request, SCRIPTS.parent), "")
+        self.assertEqual(config.read_bytes(), before)
+        config.write_text("{")
+        message = handoffs.jobs.writing_guidance.job_guidance(assignment, request, SCRIPTS.parent)
+        self.assertIn("Writing guidance unavailable", message)
+        self.assertIn("Continue the bounded assignment", message)
+        self.assertEqual(config.read_text(), "{")
+        for role in ("reviewer", "validator", "adjudicator"):
+            self.assertEqual(handoffs.jobs.writing_guidance.job_guidance(
+                assignment, {"role": role}, SCRIPTS.parent), "")
+
     def prepare(self):
         assignment = self.next()
         self.assertEqual(assignment["role"], "prepare")
@@ -1092,7 +1163,7 @@ class DevelopmentRunTests(unittest.TestCase):
         with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
             receipt = audit.publish(state, active, exported["identity"])
         before = (self.store / "RUN.json").read_bytes()
-        with self.assertRaisesRegex(manifest.ManifestError, "receipt does not match"):
+        with self.assertRaisesRegex(manifest.ManifestError, "Missing audit-initial data fields"):
             self.mutation_during_settings_failure("record", "--report", self.report({"disabled": True}))
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
@@ -1162,7 +1233,7 @@ class DevelopmentRunTests(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "Unknown regression"):
             audit.export(state, active, public)
         before = (self.store / "RUN.json").read_bytes()
-        self.assertIn("receipt.json", self.finish({}, ok=False))
+        self.assertIn("Missing audit-initial data fields", self.finish({}, ok=False))
         self.assertEqual(before, (self.store / "RUN.json").read_bytes())
         stale = {"state": "open", "head": {"sha": "0" * 40, "ref": "fixture-feature",
                                            "repo": {"full_name": "fixture/project"}}}
@@ -2007,6 +2078,186 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(development.load(self.store)["preflight"])
         self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
 
+    def test_report_diagnostics_identify_only_missing_or_mistyped_fields(self):
+        self.init()
+        assignment = self.next()
+        report = json.loads(self.report({
+            "commit": "fixture", "url": "https://example.invalid/pull/1", "state": "draft",
+        }).read_text())
+        with self.assertRaisesRegex(ValueError, r"Missing draft data fields: evidence$"):
+            handoffs.jobs.validate(assignment, {"role": "draft"}, report)
+        report["data"]["evidence"] = ["Observed the existing PR"]
+        with self.assertRaisesRegex(ValueError, r"data\.evidence.*text"):
+            handoffs.jobs.validate(assignment, {"role": "draft"}, report)
+        report["data"]["evidence"] = "Observed the existing PR"
+        report["worker"] = ""
+        with self.assertRaisesRegex(ValueError, "worker must be nonempty text or null"):
+            handoffs.jobs.validate(assignment, {"role": "draft"}, report)
+        report["worker"] = None
+        report["outcome"] = "completed"
+        with self.assertRaisesRegex(ValueError, "completed.*complete, blocked, waiting"):
+            handoffs.jobs.validate(assignment, {"role": "draft"}, report)
+
+    def test_development_prompts_carry_the_role_report_contract(self):
+        assignment = {"root": str(self.root), "audit": {"enabled": True}}
+        expected = {
+            "preflight": ("artifact_access", "audit_publication"),
+            "prepare": ("base", "merged_dependencies"), "implement": (),
+            "commit": ("commit",), "draft": ("commit", "url", "evidence", "state"),
+            "ready": ("commit", "url", "evidence", "state"), "evidence": ("commit", "artifacts"),
+            "audit-initial": ("stage", "code_commit", "bundle", "wiki_commit", "url", "data_url", "index_url", "pr_url"),
+            "audit-final": ("stage", "code_commit", "bundle", "wiki_commit", "url", "data_url", "index_url", "pr_url"),
+            "review-owner": ("ledger", "plan", "handoff"),
+        }
+        for role, fields in expected.items():
+            with self.subTest(role=role):
+                prompt = handoffs.jobs.instructions(assignment, {"role": role}, SCRIPTS.parent)
+                self.assertIn("outcome must be exactly one of: complete, blocked, waiting", prompt)
+                schema = json.loads(prompt.split("Required data fields for outcome complete: ", 1)[1]
+                                    .split(". text means", 1)[0])
+                self.assertTrue(set(fields) <= schema.keys())
+                if role in ("draft", "ready"):
+                    self.assertEqual(schema["evidence"]["type"], "text")
+                    self.assertEqual(schema["state"]["type"], role)
+        disabled = {**assignment, "report_contract_enabled": False}
+        self.assertNotIn("Development report contract", handoffs.jobs.instructions(
+            disabled, {"role": "draft"}, SCRIPTS.parent))
+        self.assertEqual(handoffs.jobs.data_contract(disabled, "draft"),
+                         handoffs.jobs.data_contract(assignment, "draft"))
+
+    @pytest.mark.stable_storage
+    def test_relative_report_candidate_stays_inside_store_without_spending_corrections(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        candidate.write_text(json.dumps({
+            "outcome": "blocked", "summary": "Observed missing capability",
+            "evidence": ["Existing observations"], "data": {},
+        }))
+        self.handoff("submit", "--batch", batch["batch"], "--job", 1, "--candidate", "candidate.json")
+        record = development.load(self.store)["handoffs"][batch["batch"]]
+        self.assertEqual(record["failures"], {})
+
+    @pytest.mark.stable_storage
+    def test_report_precheck_and_recovery_keep_invalid_paths_and_reports_rejected(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        candidate.write_text('{"invalid":')
+        base = ("--batch", batch["batch"], "--job", 1)
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{"features": {"retired-fixture-feature": false}}')
+        configuration = config.read_bytes()
+        original = (self.store / "RUN.json").read_bytes()
+        self.handoff("check-report", *base, "--candidate", candidate, ok=False)
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        self.assertEqual(config.read_bytes(), configuration)
+        outside = self.folder / "outside.json"
+        outside.write_text("{}")
+        link = self.store / "linked.json"
+        link.symlink_to(outside)
+        for path in (outside, "../outside.json", link):
+            self.handoff("check-report", *base, "--candidate", path, ok=False)
+            self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        for _ in range(3):
+            self.handoff("submit", *base, "--candidate", candidate, ok=False)
+        exhausted = development.load(self.store)
+        recovery = (*base, "--candidate", candidate, "--evidence", "Preserved evidence",
+                    "--shutdown-evidence", "No native worker remains")
+        config.write_text('{"features": {"autonomous-development-report-recovery": false}}')
+        self.assertIn("disabled", self.handoff("recover-report", *recovery, ok=False)["error"])
+        self.assertNotIn("report_recoveries", development.load(self.store)["handoffs"][batch["batch"]])
+        config.write_text('{"features": {}}')
+        self.assertIn("recovery was consumed", self.handoff("recover-report", *recovery, ok=False)["error"])
+        candidate.write_text(json.dumps({
+            "outcome": "blocked", "summary": "Corrected schema", "evidence": ["Observed failure"], "data": {},
+        }))
+        self.assertTrue(self.handoff("check-report", *base, "--candidate", candidate)["valid"])
+        self.assertIn("already used", self.handoff("recover-report", *recovery, ok=False)["error"])
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"], exhausted["attempts"])
+        self.assertEqual(saved["handoffs"][batch["batch"]]["failures"]["1"], 3)
+        self.assertNotIn("1", saved["handoffs"][batch["batch"]]["submitted"])
+
+    @pytest.mark.stable_storage
+    def test_interrupted_report_recovery_remains_consumed(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        candidate.write_text("{}")
+        arguments = ("--batch", batch["batch"], "--job", 1, "--candidate", candidate)
+        for _ in range(3):
+            self.handoff("submit", *arguments, ok=False)
+        candidate.write_text(json.dumps({
+            "outcome": "blocked", "summary": "Existing failure",
+            "evidence": ["Retained observation"], "data": {},
+        }))
+        recovery = (*arguments, "--evidence", "Inspected preserved candidate",
+                    "--shutdown-evidence", "Original worker exited")
+        with patch.object(handoffs, "write_candidate", side_effect=OSError("Fixture storage interruption")):
+            self.assertIn("Fixture storage interruption",
+                          self.handoff("recover-report", *recovery, ok=False)["error"])
+        self.assertTrue(self.handoff("check-report", *arguments)["valid"])
+        self.assertIn("already used", self.handoff("recover-report", *recovery, ok=False)["error"])
+        record = development.load(self.store)["handoffs"][batch["batch"]]
+        self.assertEqual(record["report_recoveries"]["1"]["outcome"], "attempted")
+        self.assertEqual(record["failures"]["1"], 3)
+        self.assertNotIn("1", record["submitted"])
+
+    @pytest.mark.stable_storage
+    def test_exhausted_report_can_be_recovered_once_without_repeating_effects(self):
+        self.init()
+        self.preflight()
+        root = self.prepare()
+        self.next()
+        (root / "app.txt").write_text("after\n")
+        self.finish()
+        self.next()
+        self.review(root)
+        self.execute_fixture(self.next())
+        batch = self.handoff("prepare")
+        job = self.claim_handoff(batch)[0]
+        self.assertEqual(job["role"], "draft")
+        candidate = self.store / "draft-candidate.json"
+        candidate.write_text(json.dumps({
+            "outcome": "completed", "summary": "Existing draft found",
+            "evidence": ["PR already exists; no push or creation repeated"], "data": {},
+        }))
+        for _ in range(3):
+            self.handoff("submit", "--batch", batch["batch"], "--job", 1, "--candidate", candidate, ok=False)
+        candidate.write_text(json.dumps({
+            "outcome": "complete", "summary": "Existing draft found",
+            "evidence": ["PR already exists; no push or creation repeated"],
+            "data": {"commit": self.git("rev-parse", "HEAD", root=root),
+                     "url": "https://example.invalid/pull/1", "state": "draft",
+                     "evidence": "Observed existing draft at the current head"},
+        }))
+        rejected = self.handoff("submit", "--batch", batch["batch"], "--job", 1,
+                                "--candidate", candidate, ok=False)
+        self.assertIn("allowance exhausted", rejected["error"])
+        before = development.load(self.store)
+        head = self.git("rev-parse", "HEAD", root=root)
+        arguments = ("--batch", batch["batch"], "--job", 1, "--candidate", candidate,
+                     "--evidence", "Inspected existing PR and preserved candidate",
+                     "--shutdown-evidence", "Offline worker has exited")
+        checked = self.handoff("check-report", *arguments[:6])
+        self.assertFalse(checked["accepted"])
+        recovered = self.handoff("recover-report", *arguments)
+        self.assertTrue(recovered["valid"])
+        self.assertEqual(self.handoff("recover-report", *arguments), recovered)
+        self.handoff("collect", "--batch", batch["batch"])
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"], before["attempts"])
+        self.assertEqual(len(saved["history"]), len(before["history"]))
+        self.assertEqual(saved["history"][-1]["outcome"], "complete")
+        self.assertEqual(saved["handoffs"][batch["batch"]]["failures"]["1"], 3)
+        self.assertEqual(len(saved["handoffs"][batch["batch"]]["report_recoveries"]), 1)
+        self.assertEqual(self.git("rev-parse", "HEAD", root=root), head)
+
     @pytest.mark.stable_storage
     def test_handoff_missing_report_cannot_become_success_or_repeat_dispatch(self):
         self.init()
@@ -2115,6 +2366,9 @@ class DevelopmentRunTests(unittest.TestCase):
         requests = [{"role": role, "prompt": "Bounded fixture purpose",
                      "result_file": str(self.store / "reports" / assignment / f"leaf-{index}.json")}
                     for index, role in enumerate(("validator", "validator", "fixer", "validator"))]
+        self.state = self.cli("status", self.store)
+        records, phase = self.review_records(root, "fixture-snapshot")
+        requests[2]["writing_plan"] = {"path": records["plan"], "identity": phase["identity"]}
 
         def finish_batch(batch, reports):
             self.handoff("claim", "--batch", batch["batch"])
@@ -2942,6 +3196,109 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(assignment)
             assignment = self.next()
         return root, reviewed
+
+    def accepted_rebase_fixture(self):
+        root = self.start_review_fixture()
+        (root / "app.txt").write_text("after\n")
+        self.review(root)
+        self.execute_fixture(self.next())
+        self.execute_fixture(self.next())
+        self.next()
+        (root / "untracked.txt").write_text("reviewed untracked content\n")
+        (root / "binary.dat").write_bytes(b"\x00reviewed\xff")
+        (root / "link").symlink_to("app.txt")
+        (root / "tool.sh").write_text("#!/bin/sh\nexit 0\n")
+        (root / "tool.sh").chmod(0o755)
+        self.review(root)
+        self.mutate("reconcile", "--pr", "first", "--reason", "Exercise the last counted review")
+        self.next()
+        self.review(root)
+        before = development.load(self.store)
+        (self.root / "upstream.txt").write_text("Target branch change\n")
+        self.git("add", "upstream.txt")
+        self.git("commit", "-qm", "Fixture target update")
+        new_base = self.git("rev-parse", "HEAD")
+        self.git("rebase", "main", root=root)
+        return root, before, new_base
+
+    @pytest.mark.stable_storage
+    def test_clean_target_rebase_preserves_review_and_continues_at_exhausted_review_limit(self):
+        root, before, new_base = self.accepted_rebase_fixture()
+        denied = self.mutate("next", ok=False)
+        self.assertIn("Review lacks complete file coverage", denied)
+        ledger = Path(before["prs"]["first"]["review"]["ledger"])
+        history = ledger.read_bytes()
+        index = self.git("ls-files", "--stage", root=root)
+        object_store = (root / self.git("rev-parse", "--git-path", "objects", root=root)).resolve()
+        objects = {str(path.relative_to(object_store)) for path in object_store.rglob("*") if path.is_file()}
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{"features": {"autonomous-development-rebase-review": false}}')
+        self.assertIn("disabled", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", new_base, "--reason", "Disabled", ok=False))
+        self.assertEqual(development.load(self.store)["attempts"], before["attempts"])
+        config.write_text('{"features": {}}')
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Clean target rebase with unchanged reviewed patch")
+        saved = development.load(self.store)
+        self.assertEqual(saved["attempts"], before["attempts"])
+        self.assertEqual(len(saved["history"]), len(before["history"]))
+        self.assertEqual(ledger.read_bytes(), history)
+        self.assertEqual(saved["prs"]["first"]["review"], before["prs"]["first"]["review"])
+        self.assertEqual(saved["prs"]["first"]["base"], new_base)
+        self.assertEqual(self.git("ls-files", "--stage", root=root), index)
+        self.assertEqual({str(path.relative_to(object_store))
+                          for path in object_store.rglob("*") if path.is_file()}, objects)
+        self.assertIn("previously accepted bases", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", before["prs"]["first"]["base"],
+            "--reason", "Cannot roll back accepted target ancestry", ok=False))
+        self.assertEqual(self.next()["role"], "commit")
+        self.git("add", "untracked.txt", "binary.dat", "link", "tool.sh", root=root)
+        self.git("commit", "-qm", "Commit already reviewed fixture artifacts", root=root)
+        self.finish({"commit": self.git("rev-parse", "HEAD", root=root)})
+        self.assertEqual(self.next()["role"], "ready")
+        self.execute_fixture(self.state["assignment"])
+        self.assertIsNone(self.next())
+        self.assertEqual(self.state["outcome"], "completed")
+
+    @pytest.mark.stable_storage
+    def test_rebase_recovery_rejects_changed_patch_foreign_base_and_closed_ledger(self):
+        root, before, new_base = self.accepted_rebase_fixture()
+        arguments = ("--pr", "first", "--new-base", new_base, "--reason", "Verify unchanged patch")
+        original = (self.store / "RUN.json").read_bytes()
+        for name, changed in (("app.txt", b"after \n"), ("binary.dat", b"\x00different\xff"),
+                              ("untracked.txt", b"unreviewed content\n")):
+            path = root / name
+            content = path.read_bytes()
+            path.write_bytes(changed)
+            self.assertIn("patch differs", self.mutate("rebase-review", *arguments, ok=False))
+            self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+            path.write_bytes(content)
+        (root / "tool.sh").chmod(0o644)
+        self.assertIn("patch differs", self.mutate("rebase-review", *arguments, ok=False))
+        (root / "tool.sh").chmod(0o755)
+        (root / "link").unlink()
+        (root / "link").symlink_to("untracked.txt")
+        self.assertIn("patch differs", self.mutate("rebase-review", *arguments, ok=False))
+        (root / "link").unlink()
+        (root / "link").symlink_to("app.txt")
+        foreign = self.git("rev-parse", "HEAD", root=root)
+        self.assertIn("target branch", self.mutate(
+            "rebase-review", "--pr", "first", "--new-base", foreign, "--reason", "Not a target base", ok=False))
+        self.close_accepted_review(root)
+        self.assertIn("Cached review cannot", self.mutate("rebase-review", *arguments, ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+
+    @pytest.mark.stable_storage
+    def test_reconcile_exhaustion_preserves_acceptance_for_clean_rebase_recovery(self):
+        root, before, new_base = self.accepted_rebase_fixture()
+        original = (self.store / "RUN.json").read_bytes()
+        self.assertIn("No review attempts remain", self.mutate(
+            "reconcile", "--pr", "first", "--reason", "No counted review remains", ok=False))
+        self.assertEqual((self.store / "RUN.json").read_bytes(), original)
+        self.mutate("rebase-review", "--pr", "first", "--new-base", new_base,
+                    "--reason", "Use the unchanged-patch recovery instead")
+        self.assertEqual(development.load(self.store)["attempts"], before["attempts"])
 
     def test_ready_handback_serializes_acceptance_through_save(self):
         root, reviewed = self.ready_fixture()

@@ -6,7 +6,10 @@
     "autonomous-development-explicit-only": true,
     "autonomous-development-model-selection": true,
     "autonomous-development-progress": true,
+    "autonomous-development-rebase-review": true,
+    "autonomous-development-report-contract": true,
     "autonomous-development-report-correction": true,
+    "autonomous-development-report-recovery": true,
     "block_raw_worktree_add": true,
     "docs-cache": true,
     "documentation-first": true,
@@ -49,6 +52,7 @@
     "skill:triage-errors": true,
     "skill:unit-tests": true,
     "skill:verify-unresolved-pr-comments": true,
-    "skill:write-pr-descriptions": true
+    "skill:write-pr-descriptions": true,
+    "writer-quality-guidance": true
   }
 }

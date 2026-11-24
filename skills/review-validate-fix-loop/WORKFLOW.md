@@ -126,6 +126,28 @@ or a ledger disposition alone. This records intent and consumes one inner cycle.
 Use one writer and do not stage or commit changes. Preserve pre-existing edits
 in those files.
 
+Before correction, use the shared writing-guidance helper with the saved phase
+that supplied the validated findings. Resolve its path relative to this installed
+skill, and use the phase's unchanged `identity`:
+
+```sh
+python3 -B "/absolute/plugin/scripts/writing_guidance.py" \
+  --root "/absolute/worktree" --plan "/absolute/private/phase.json" \
+  --identity "<saved phase identity>"
+```
+
+Give the writer the returned contract and standards, plus only the validated
+fix batch, constraints and checks. The writer reconciles surrounding context
+and duplicate statements, resolves language applicability from inspected source,
+and self-checks its actual diff before reporting the standards and check evidence.
+The helper's context-refresh command retains the frozen phase's standards.
+Do not pass this writing bundle to reviewers, adjudicators or validators.
+It is guidance for the corrections, not another review or authority to adjudicate.
+The independent `writer-quality-guidance` setting can disable the bundle;
+writing-skill opt-outs do not disable their review categories. A helper failure
+reports unavailable guidance: repair its input and retry without resetting
+allowances, or disclose the gap while continuing other authorized work.
+
 Run the smallest relevant checks, then record `fix_done` with a per-finding
 applied/failed result and check evidence. This saves the after snapshot needed by
 `diff`. Prepare the complete focused plan from the actual saved correction delta.

@@ -136,6 +136,13 @@ Keep compatibility and flag-disabled behavior intact. Return empty `data`;
 the controller independently fingerprints the actual change. Legacy `paths`
 are not an edit allowlist. Preserve unrelated user work and explicit scope limits.
 
+The generated implementer prompt includes the shared writing contract and
+canonical category standards from the pinned executor. Resolve actual language,
+framework and scoped project evidence before writing. Reconcile surrounding
+contracts and duplicate statements, then self-check the actual diff and record
+the applied standards, context and checks in report evidence. This does not
+replace independent review or enlarge the approved task.
+
 ### Flat review
 
 The workflow script launches every owner, reviewer, adjudicator, validator, and
@@ -228,6 +235,22 @@ Adjudicators and validators receive the frozen assessment policies and required
 original reports, not additional discovery tasks. Fixers receive the validated
 fix batch, any known file hints and relevant checks, not permission to adjudicate.
 Do not tell any leaf to read the generic workflow or full criteria catalog.
+
+For each fixer, include `writing_plan: {"path": "/absolute/private/phase.json",
+"identity": "<saved phase identity>"}` in the request. Use the phase that supplied
+the validated findings. The generator verifies that reference and supplies its
+frozen category sources and scoped project standards, without reviewer protocols
+or assessment instructions. Keep that plan available and unchanged through
+dispatch. A missing, changed or wrong-worktree reference is a correctable owner
+request: restore the saved plan or correct the reference and resubmit within the
+existing report allowance, without repeating discovery or refunding work.
+The writer resolves language applicability with the same review helper rules,
+including newly discovered dependencies, and records its diff self-check.
+`writer-quality-guidance: false` omits this added guidance and the required
+reference, not scope boundaries, relevant checks or independent review.
+Writing-skill opt-outs omit their writing guidance without removing review coverage.
+Reviewer, adjudicator and validator requests never receive `writing_plan` or
+the writing contract.
 
 The Python collector reads validated leaf files; the next owner reads their original
 files. A separate adjudicator assesses reviewer findings. Adjudicator-originated

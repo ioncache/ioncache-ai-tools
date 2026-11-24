@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import review_assignments as assignments
+import writing_guidance
 
 
 HELPER = Path(__file__).with_name("review_assignments.py")
@@ -107,6 +108,35 @@ class ReviewAssignmentTests(unittest.TestCase):
         self.request["project_sources"][0]["category"] = "not-registered"
         with self.assertRaisesRegex(ValueError, "unregistered"):
             assignments.prepare(self.request)
+
+    def test_writing_standards_reuse_frozen_sources_and_resolve_discovered_languages(self):
+        self.request["project_sources"] = [{
+            "category": "unit-tests", "source": "testing.md", "source_identity": "approved-source",
+            "content": "Use unittest fixtures.", "applicability": "**/*.py", "exceptions": [],
+        }]
+        phase = assignments.prepare(self.request)
+        settings = {"enabled": True, "disabled_skills": [], "review_features": {}}
+        inputs = {"root": str(self.root), "phase": phase}
+        with patch.object(assignments, "resource", side_effect=AssertionError("Must use frozen sources")):
+            bundle = writing_guidance.prepare(inputs, settings)
+        self.assertNotIn("jsdoc", bundle["standards"])
+        self.assertEqual(bundle["standards"]["unit-tests"]["project_sources"],
+                         phase["packets"]["unit-tests"]["instruction_set"]["project_sources"])
+        for key, standard in bundle["standards"].items():
+            self.assertEqual(standard["sources"], phase["registry"][key]["sources"])
+        context = {"files": ["view.component"], "language_inventory": {
+            "view.component": {"languages": ["html", "javascript"], "evidence": "Inspected embedded script"},
+        }}
+        expanded = writing_guidance.prepare({**inputs, "context": context}, settings)
+        self.assertEqual(expanded["standards"]["jsdoc"]["sources"], phase["registry"]["jsdoc"]["sources"])
+        context["language_inventory"]["view.component"]["languages"] = ["typescript"]
+        self.assertNotIn("jsdoc", writing_guidance.prepare({**inputs, "context": context}, settings)["standards"])
+        settings["disabled_skills"] = ["skill:comments"]
+        opted_out = writing_guidance.prepare(inputs, settings)
+        self.assertNotIn("comments", opted_out["standards"])
+        self.assertIn("comments", phase["required"])
+        with self.assertRaisesRegex(ValueError, "cannot replace its frozen project standards"):
+            writing_guidance.prepare({**inputs, "context": {**context, "project_sources": []}}, settings)
 
     def test_ambient_instructions_are_ignored_without_invalidating_coverage(self):
         plan = assignments.prepare(self.request)

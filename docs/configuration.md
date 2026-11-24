@@ -55,6 +55,7 @@ remain after synchronization finishes.
 | `review-<category>` | Independent coverage for a shipped review category; all enabled by default |
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |
+| `writer-quality-guidance` | Shared writing standards, context reconciliation and diff self-check guidance for autonomous implementers and both workflows' fixers |
 
 Scope settings control instructions, not permission gates. Disabling
 `answer-questions` removes the question contract and releases any pending
@@ -110,6 +111,17 @@ Startup engineering guidance excludes already assigned reviewers and validators
 from generic composing skills. That reminder remains stateless and advisory;
 native instruction delivery and model compliance require separate verification.
 
+Writing guidance uses the review registry's enabled categories and applicability
+rules. Fixers use the saved phase's frozen sources and scoped project standards;
+implementers start with shipped sources and add inspected project requirements.
+Disabling a corresponding writing skill omits that writing guidance, not its
+independent review obligation. `writer-quality-guidance: false` removes the added
+bundle and fixer plan-reference requirement without disabling implementation,
+fixing, checks or reviews. Settings are read without writes when generating a
+new writer prompt; already prepared batches retain their original instructions.
+An unreadable setting reports unavailable guidance rather than a permission
+decision or a completed standards check.
+
 ## Synchronization and recovery
 
 Autonomous development has independent `autonomous-development-progress` and
@@ -125,6 +137,19 @@ the initial validation fails, in the same assigned worker. Disabling it keeps
 validation mandatory but removes automatic correction attempts. Failed candidates
 and counters stay in the private run store. This is not an allowance to repeat
 implementation or publication, and it never launches extra correction models.
+
+`autonomous-development-report-contract` adds the validator-generated per-role
+JSON contract to worker prompts. Disabling it does not relax validation.
+`autonomous-development-report-recovery` permits one recorded recovery submission
+per exhausted started job, using existing evidence after native shutdown.
+It does not repeat the worker, reset counters or bypass acceptance.
+The read-only `check-report` precheck remains available without spending attempts.
+See [../skills/autonomous-development/RECOVERY.md](../skills/autonomous-development/RECOVERY.md).
+
+`autonomous-development-rebase-review` enables verified clean-rebase recovery for
+an accepted review. It preserves the original review and all consumed allowances;
+changed patches still require a counted review. Disabling it does not change
+normal acceptance, review or read-only inspection.
 
 Do not mix old and new catalog writers while using the new review controls.
 An older cached plugin removes keys it does not recognize; a newer copy then
