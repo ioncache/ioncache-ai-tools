@@ -152,8 +152,11 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Known issues not fixed here", prompt)
         self.manifest["permissions"]["create_follow_up_issues"] = True
         assignment["follow_ups"] = followups.policy(self.manifest, self.settings)
-        self.assertIn("Create or reuse follow-up issues automatically",
-                      followups.instructions(assignment, "draft", "/pinned"))
+        approved = followups.instructions(assignment, "draft", "/pinned")
+        self.assertIn("Create or reuse follow-up issues automatically", approved)
+        # Confirmed defects are classified with the repository's own bug type and label.
+        self.assertIn("existing bug issue type and bug label", approved)
+        self.assertNotIn("bug issue type", prompt)
         self.assertEqual(followups.instructions(assignment, "reviewer", "/pinned"), "")
 
     def test_failed_or_missing_ticket_receipts_do_not_hide_findings(self):

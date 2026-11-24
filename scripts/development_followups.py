@@ -84,6 +84,8 @@ def instructions(assignment, role, executor):
         return ""
     control = assignment.get("follow_ups", {"enabled": False, "reporting_enabled": True})
     publication = ("Create or reuse follow-up issues automatically under the approved run permission. "
+                   "Give each new confirmed-defect issue the repository's existing bug issue type and bug "
+                   "label when they exist; never create a type or label. "
                    if control["enabled"] else
                    "Do not create follow-up issues: publication is unapproved or independently disabled. "
                    "Existing issue links may be reused after read-only verification. ")
