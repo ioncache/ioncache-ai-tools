@@ -30,6 +30,8 @@ INDEX_HEADER = "| Date | Pull request | Audit records |"
 INDEX_SEPARATOR = "| --- | --- | --- |"
 LINK_START = "<!-- ioncache-audit:start -->"
 LINK_END = "<!-- ioncache-audit:end -->"
+HOME_START = "<!-- ioncache-audit-index:start -->"
+HOME_END = "<!-- ioncache-audit-index:end -->"
 
 
 def repository(url):
@@ -251,9 +253,12 @@ def render(bundle):
     public = bundle["public"]
     lines = ["# Development process audit", "", public["summary"], "",
              f"Stage: `{bundle['stage']}`. Code commit: `{bundle['code_commit']}`.",
-             f"Run: `{bundle['run']}`. Assignment: `{bundle['assignment']}`.", "",
-             "## Review method", "", public["method"], "", "## Verification", "", public["verification"],
-             "", "## Findings and decisions", ""]
+             f"Run: `{bundle['run']}`. Assignment: `{bundle['assignment']}`.", ""]
+    if bundle["stage"] == "archive":
+        lines.extend([f"Historical run outcome: `{bundle['run_outcome']}`.",
+                      "This publication does not establish current PR review acceptance.", ""])
+    lines.extend(["## Review method", "", public["method"], "", "## Verification", "", public["verification"],
+                  "", "## Findings and decisions", ""])
     for item in public["findings"]:
         lines.extend([f"### {item['review']}/{item['id']}", "", item["summary"], "", item["rationale"], ""])
     if not public["findings"]:
@@ -294,22 +299,58 @@ def export(state, assignment, public):
             "index_url": wiki_index(state), "files": list(FILES)}
 
 
-def archive(state, pr, public):
+def archive_assignment(state, pr):
     plan.require(pr in state["prs"], "Archive requires a known --pr")
     saved = next((item for item in reversed(state["history"])
                   if item["pr"] == pr and item.get("before") is not None), None)
     plan.require(saved is not None, "No saved PR snapshot is available")
-    bundle = build(state, {**saved, "role": "archive"}, public)
+    return {**saved, "role": "archive", "before": state["prs"][pr]["accepted"] or saved["before"]}
+
+
+def archive_bundle(state, pr, public, *, model_snapshot=None):
+    bundle = build(state, archive_assignment(state, pr), public, model_snapshot=model_snapshot)
+    bundle["run_outcome"] = state["outcome"]
+    bundle["accepted_code_commit"] = (state["prs"][pr]["accepted"] or {}).get("head")
     bundle["limitations"].append(
-        "Historical export only: the worktree was not checked and this does not authorize publication.")
+        "Historical evidence: the worktree was not checked. Publication does not establish "
+        "current PR review acceptance, readiness, or coverage of later changes.")
+    return bundle
+
+
+def archive_directory(state, pr, key):
+    plan.require(pr in state["prs"], "Archive requires a known --pr")
+    plan.require(isinstance(key, str) and re.fullmatch(r"[a-f0-9]{64}", key),
+                 "Publication approval must identify both exact exported files")
+    storage = review.external_run_directory(Path(state["store"]), state["id"], Path(state["root"]))
+    return review.external_directory(review.safe_path(storage, f"archives/{pr}/{key}"))
+
+
+def archive(state, pr, public):
+    bundle = archive_bundle(state, pr, public)
     files = contents(bundle)
     key = bundle_identity(files)
-    storage = review.external_run_directory(Path(state["store"]), state["id"], Path(state["root"]))
-    folder = review.external_directory(storage / "archives" / pr / key)
+    folder = archive_directory(state, pr, key)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name, data in files.items():
         review.atomic_write(review.safe_path(folder, name), data)
     return {"directory": str(folder), "identity": key, "files": list(FILES), "historical": True}
+
+
+def prepared_archive(state, pr, approved):
+    folder = archive_directory(state, pr, approved)
+    plan.require(folder.is_dir(), "Archive unavailable; run archive --pr with the reviewed narrative first")
+    files = {name: review.safe_path(folder, name).read_bytes() for name in FILES}
+    plan.require(bundle_identity(files) == approved,
+                 "Publication approval must identify both exact exported files; export and inspect again")
+    bundle = json.loads(files["audit.json"])
+    expected = archive_bundle(state, pr, bundle["public"],
+                              model_snapshot=(bundle["models"], bundle["models_unavailable"]))
+    plan.require(bundle == expected and files == contents(bundle),
+                 "Archive evidence changed; run archive again and inspect both new files before publishing")
+    plan.require(bundle["accepted_code_commit"] == bundle["code_commit"],
+                 "No accepted code commit is recorded. Keep the local archive; reconcile the PR's review "
+                 "within its approved allowances before publishing")
+    return folder, bundle, files
 
 
 def prepared(state, assignment):
@@ -346,9 +387,14 @@ def match_repository_url(value, repo, resource):
 
 def target(state, assignment):
     repo = repository(state["manifest"]["repository"]["url"])
-    url = state["prs"][assignment["pr"]]["url"]
+    recorded = state["prs"][assignment["pr"]]["url"]
+    url = assignment.get("pr_url") or recorded
     match = match_repository_url(url, repo, r"pull/([1-9][0-9]*)")
-    plan.require(match is not None, "Audit must attach to this run's PR in the approved repository")
+    plan.require(match is not None, "Audit must attach to this run's PR in the approved repository; "
+                 "if its URL was not recorded, supply --pull-request https://github.com/OWNER/REPO/pull/NUMBER")
+    previous = match_repository_url(recorded, repo, r"pull/([1-9][0-9]*)") if recorded else None
+    plan.require(not recorded or (previous is not None and previous[1] == match[1]),
+                 "Preserve the recorded PR target; --pull-request cannot replace this run's PR")
     return repo, match[1]
 
 
@@ -399,6 +445,42 @@ def index_entry(text, publication):
     return "".join(lines)
 
 
+def home_has_index_link(text, index_url):
+    visible = re.sub(r"<!--.*?(?:-->|\Z)", "", text, flags=re.DOTALL)
+    visible = re.sub(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[ \t]*$|\Z)",
+                     "", visible, flags=re.MULTILINE | re.DOTALL)
+    visible = re.sub(r"(`+).*?\1(?!`)", "", visible)
+    visible = re.sub(r"^(?: {4}|\t).*$", "", visible, flags=re.MULTILINE)
+    destinations = re.findall(r'(?<!!)\[[^\]\n]*\]\(\s*<?([^>\s)]+)>?(?:\s+"[^"\n]*")?\s*\)',
+                              visible)
+    repo = repository(index_url.split("/wiki/")[0])
+    for destination in destinations:
+        path = destination.split("#", 1)[0]
+        if path in (INDEX_PAGE, "./" + INDEX_PAGE) or match_repository_url(path, repo, f"wiki/{INDEX_PAGE}"):
+            return True
+    return re.search(r"\[\[" + re.escape(INDEX_PAGE) + r"(?:\|[^|\]\n]+)?\]\]", visible) is not None
+
+
+def home_page(text, index_url):
+    link = f"[Automated Pull Request Audits]({index_url})"
+    if HOME_START in text or HOME_END in text:
+        plan.require(text.count(HOME_START) == text.count(HOME_END) == 1,
+                     "Preserve Home content and restore one managed audit-index link block before retrying")
+        start, end = text.index(HOME_START), text.index(HOME_END)
+        plan.require(end > start and text[start + len(HOME_START):end].strip() == link,
+                     "Home audit-index block was edited; preserve manual text outside the block before retrying")
+        plan.require(home_has_index_link(text, index_url),
+                     "Move the Home audit-index block outside code or comments before retrying")
+        return text
+    if home_has_index_link(text, index_url):
+        return text
+    separator = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
+    updated = text + separator + f"{HOME_START}\n{link}\n{HOME_END}\n"
+    plan.require(home_has_index_link(updated, index_url),
+                 "Preserve Home content and close its unfinished code or comment block before retrying")
+    return updated
+
+
 def wiki_files(root, publication, files):
     expected = {publication["page"] + ".md": files["AUDIT.md"],
                 publication["page"] + ".json": files["audit.json"]}
@@ -407,10 +489,13 @@ def wiki_files(root, publication, files):
         plan.require(not path.exists() or path.read_bytes() == data,
                      f"Published audit differs at {filename}; preserve it and inspect the export and wiki history")
     path = review.safe_path(root, INDEX_PAGE + ".md")
-    text = (path.read_text() if path.exists() else
+    text = (path.read_bytes().decode() if path.exists() else
             "Development process audit records, one row per pull request. Newest first.\n\n"
             f"{INDEX_HEADER}\n{INDEX_SEPARATOR}\n")
     expected[path.name] = index_entry(text, publication).encode()
+    path = review.safe_path(root, "Home.md")
+    text = path.read_bytes().decode() if path.exists() else ""
+    expected[path.name] = home_page(text, publication["index_url"]).encode()
     return expected
 
 
@@ -436,10 +521,10 @@ def verify_wiki_commit(root, parent, expected):
     return commit
 
 
-def publish_files(state, publication, files):
+def publish_files(state, publication, files, *, storage=None):
     url = state["manifest"]["repository"]["url"]
     remote = url.removesuffix(".git") + ".wiki.git"
-    with tempfile.TemporaryDirectory(prefix="audit-publish-", dir=state["store"]) as temporary:
+    with tempfile.TemporaryDirectory(prefix="audit-publish-", dir=storage or state["store"]) as temporary:
         root = Path(temporary)
         command(["git", "init", "-q", "-b", "wiki"], cwd=root)
         command(["git", "config", "user.name", "Autonomous development audit"], cwd=root)
@@ -494,22 +579,28 @@ def checked_pull(state, assignment, bundle):
     repo, number = target(state, assignment)
     pull = api(f"repos/{repo}/pulls/{number}")
     pr = plan.indexed(state["manifest"]["prs"])[assignment["pr"]]
-    plan.require(pull["state"] == "open" and pull["head"]["sha"] == bundle["code_commit"] and
-                 pull["head"]["ref"] == pr["branch"] and
-                 pull["head"]["repo"]["full_name"].casefold() == repo.casefold(),
-                 "Push the accepted implementation commit to its existing PR before audit publication")
+    plan.require(pull["state"] == "open", "Audit publication requires an open PR; keep the local archive")
+    plan.require(pull["head"]["ref"] == pr["branch"] and
+                 (pull["head"]["repo"] or {}).get("full_name", "").casefold() == repo.casefold() and
+                 (pull["base"]["repo"] or {}).get("full_name", "").casefold() == repo.casefold() and
+                 match_repository_url(pull.get("html_url"), repo, rf"pull/{number}"),
+                 "Publish the accepted implementation commit only to the run's owned branch and repository")
+    plan.require(pull["head"]["sha"] == bundle["code_commit"],
+                 f"PR head {pull['head']['sha']} differs from the accepted implementation commit "
+                 f"{bundle['code_commit']}. Do not relabel the archive or force-push. Reconcile the review "
+                 "within approved allowances (rebase-review for an identical target rebase), then export "
+                 "and inspect new evidence; otherwise retain the local archive")
     return pull
 
 
-def publish(state, assignment, approved):
-    bundle, files = prepared(state, assignment)
+def publish_bundle(state, assignment, payload, *, storage=None):
+    bundle, files = payload
     exported = bundle_identity(files)
-    plan.require(approved == exported, "Publication approval must identify both exact exported files")
     repo, number = target(state, assignment)
     pull = checked_pull(state, assignment, bundle)
     publication = publication_links(state, assignment, exported)
     pr_body(pull.get("body") or "", publication)
-    commit = publish_files(state, {**publication, "title": plan.text(pull["title"])}, files)
+    commit = publish_files(state, {**publication, "title": plan.text(pull["title"])}, files, storage=storage)
     pull = checked_pull(state, assignment, bundle)
     original = pull.get("body") or ""
     body = pr_body(original, publication)
@@ -517,10 +608,27 @@ def publish(state, assignment, approved):
         api(f"repos/{repo}/pulls/{number}", method="PATCH", data={"body": body})
     observed = checked_pull(state, assignment, bundle)
     plan.require(observed.get("body") == body, "PR audit links were not confirmed; reread the PR and retry")
-    result = {"stage": assignment["role"], "code_commit": bundle["code_commit"],
-              "bundle": exported, "wiki_commit": commit,
-              **{key: value for key, value in publication.items() if key != "page"}}
+    return {"stage": assignment["role"], "code_commit": bundle["code_commit"],
+            "bundle": exported, "wiki_commit": commit,
+            **{key: value for key, value in publication.items() if key != "page"}}
+
+
+def publish(state, assignment, approved):
+    payload = prepared(state, assignment)
+    plan.require(approved == bundle_identity(payload[1]),
+                 "Publication approval must identify both exact exported files")
+    result = publish_bundle(state, assignment, payload)
     review.atomic_write(directory(state, assignment) / "receipt.json", plan.encode(result))
+    return result
+
+
+def publish_archive(state, pr, approved, *, pull_request=None):
+    folder, bundle, files = prepared_archive(state, pr, approved)
+    receipt = review.safe_path(folder, "receipt.json")
+    assignment = {**archive_assignment(state, pr), "pr_url": pull_request}
+    result = publish_bundle(state, assignment, (bundle, files), storage=folder)
+    result["authorization"] = {"approval": state["approval"], "permission": "publish_audit"}
+    review.atomic_write(receipt, plan.encode(result))
     return result
 
 
@@ -542,13 +650,16 @@ def main():
     import development_run as development
 
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("operation", choices=("export", "publish", "archive"))
+    cli.add_argument("operation", choices=("export", "publish", "archive", "publish-archive"))
     cli.add_argument("store")
-    cli.add_argument("--public", help="Publication-reviewed narrative JSON, required for export")
-    cli.add_argument("--approved", help="Exact exported bundle identity, required for publish")
-    cli.add_argument("--pr", help="PR plan ID for a historical archive; never publishes")
+    cli.add_argument("--public", help="Publication-reviewed narrative JSON, required for export and archive")
+    cli.add_argument("--approved", help="Exact bundle identity, required for publish and publish-archive")
+    cli.add_argument("--pr", help="PR plan ID, required for archive and publish-archive")
+    cli.add_argument("--pull-request", help="Existing PR URL for publish-archive when the run did not record it")
     args = cli.parse_args()
     try:
+        plan.require(args.pull_request is None or args.operation == "publish-archive",
+                     "--pull-request is supported only by publish-archive")
         folder = Path(args.store).resolve()
         with development.locked(folder):
             state = development.load(folder)
@@ -560,6 +671,11 @@ def main():
             settings = development.feature(Path(state["root"]))
             plan.require(development.audit_enabled(state, settings), "Audit publication is disabled or not approved")
             plan.validate(state["manifest"], folder / "inputs")
+            if args.operation == "publish-archive":
+                development.permission(state["manifest"], "audit-initial")
+                result = publish_archive(state, args.pr, args.approved, pull_request=args.pull_request)
+                print(json.dumps(result, indent=2))
+                return 0
             assignment = state["active"]
             plan.require(assignment is not None and assignment["role"] in ROLES,
                          "Reserve an audit assignment before exporting or publishing")

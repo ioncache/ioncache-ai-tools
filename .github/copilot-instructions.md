@@ -159,10 +159,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   concurrently with exclusive fixer barriers; never treat a selected model as
   an observed identity or hardcode a model ranking.
 - `scripts/development_audit.py` exports selected process evidence and an explicitly
-  reviewed public narrative. Its publisher runs only as an approved audit worker,
-  not as controller bookkeeping. Publish to the modified repository's wiki,
+  reviewed public narrative. Live publication runs as an approved audit worker,
+  not as controller bookkeeping. `publish-archive` uses the same guarded
+  publisher independently of run state under the existing manifest permissions.
+  Its receipt stays beside the archive, never advancing `RUN.json` or readiness.
+  Publish to the modified repository's wiki,
   prepend one current row per PR to `Automated-Pull-Request-Audits`, preserve
-  other wiki content and PR-body text, and exclude raw private
+  other wiki content and PR-body text, keep one index link on Home, and exclude raw private
   inputs, prompts and reports. Extend the development self-check's isolated Git
   wiki remotes and fake-API publication fixtures; never publish to GitHub during
   offline checks. Wiki access and initialization are preflight prerequisites;
