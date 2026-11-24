@@ -16,6 +16,8 @@ import unittest
 from unittest import mock
 import uuid
 
+import pytest
+
 import plugin_config as config
 import block_pending_question
 import guidance
@@ -175,6 +177,7 @@ class ConfigurationTests(unittest.TestCase):
                 config.sync_file(path, config.defaults())
             self.assertEqual(path.read_text(), text)
 
+    @pytest.mark.process
     def test_sync_preserves_symlinks_and_serializes_concurrent_writers(self):
         target = self.root / 'main.json'
         self.write(target, {'features': {'fix_emdash': False, 'removed': True}})
@@ -270,6 +273,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(config.sync_file(path, catalog), stored)
         lock.assert_not_called()
 
+    @pytest.mark.process
     def test_contended_configuration_lock_is_bounded_and_preserves_preferences(self):
         path = self.root / 'settings.json'
         self.write(path, {'features': {'fix_emdash': False}})

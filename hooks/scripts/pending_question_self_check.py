@@ -14,12 +14,18 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import pytest
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from classify_question import QUESTION_CONTRACT, has_question  # noqa: E402
 from block_pending_question import WORK_CONTROL_TOOLS, is_mutating, is_question_blocked  # noqa: E402
+import block_pending_question
+import guidance
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tests"))
+from self_check_support import run_main
 
 RECORDED_CLAUDE = json.loads(
     (pathlib.Path(SCRIPT_DIR).parent / 'fixtures/claude-batched-prompts.json').read_text()
@@ -511,24 +517,22 @@ def main():
             settings.write_text(json.dumps({'features': {}}))
 
             def classify(**fields):
-                result = subprocess.run(
-                    [sys.executable, os.path.join(SCRIPT_DIR, 'guidance.py'), 'UserPromptSubmit'],
+                result = run_main(
+                    guidance, ['UserPromptSubmit'],
                     input=json.dumps({'session_id': session_id, 'cwd': home, **fields}),
                     env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
-                    capture_output=True,
-                    text=True,
-                    check=True,
                 )
+                result.check_returncode()
                 return result.stdout
 
             def guard(tool_name, **fields):
-                result = subprocess.run(
-                    [sys.executable, os.path.join(SCRIPT_DIR, 'block_pending_question.py')],
+                result = run_main(
+                    block_pending_question,
                     input=json.dumps({'session_id': session_id, 'cwd': home,
                                       'tool_name': tool_name, 'tool_input': {}, **fields}),
                     env={**os.environ, 'HOME': home, 'CODEX_HOME': home, 'COPILOT_HOME': home},
-                    capture_output=True, text=True, check=True,
                 )
+                result.check_returncode()
                 return json.loads(result.stdout) if result.stdout.strip() else {}
 
             fixtures = json.loads((pathlib.Path(SCRIPT_DIR).parent / 'fixtures/prompt-origins.json').read_text())
@@ -624,5 +628,36 @@ def main():
     print('All pending-question self-checks passed.')
 
 
-if __name__ == '__main__':
+def test_pending_question():
     main()
+
+
+@pytest.mark.process
+def test_question_process_recovery(tmp_path):
+    session = f"self-check-{uuid.uuid4()}"
+    payload = {"cwd": str(tmp_path), "session_id": session, "_ioncache_prompt_origin": "user"}
+    marker = pathlib.Path(f"/tmp/.ioncache-pending-question-{session}")
+    try:
+        prompt = run_main(guidance, ["UserPromptSubmit"], process=True,
+                          input=json.dumps({**payload, "prompt": "Why did it fail?"}))
+        prompt.check_returncode()
+        assert QUESTION_CONTRACT in prompt.stdout
+        write = {**payload, "tool_name": "Write", "tool_input": {"file_path": "continued.txt"}}
+        denied = run_main(block_pending_question, input=json.dumps(write), process=True)
+        denied.check_returncode()
+        assert json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        read = run_main(block_pending_question, process=True,
+                        input=json.dumps({**payload, "tool_name": "Read", "tool_input": {}}))
+        assert read.returncode == 0 and read.stdout == ""
+        resumed = run_main(guidance, ["UserPromptSubmit"], process=True,
+                           input=json.dumps({**payload, "prompt": "Continue the assignment"}))
+        resumed.check_returncode()
+        assert not marker.exists()
+        allowed = run_main(block_pending_question, input=json.dumps(write), process=True)
+        assert allowed.returncode == 0 and allowed.stdout == ""
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+if __name__ == '__main__':
+    test_pending_question()

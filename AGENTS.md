@@ -59,5 +59,14 @@ cached denials, approval or evidence eviction, compaction, resume, and subagent
 handoffs. Exercise interactions through affected host adapters, not just isolated
 denial functions. Follow the existing isolated-reviewer test conventions.
 
+Use pytest with process-level parallelism. Build ordinary scenarios with shared
+immutable fixtures and in-process entry points, not repeated interpreter launches.
+Keep real processes for CLI protocols, locking, crash durability, pinned executors
+and native workflow boundaries. Whole-sequence coverage does not require every
+setup step to start a process. Keep each test's files and environment isolated.
+Aim for a full local run near one minute; inspect the duration report when adding
+coverage. Fixture preconditions must be explicit and checked, never inferred from
+a test name. See [docs/development.md#python-tests](docs/development.md#python-tests).
+
 Passing one regression is not proof that every recovery path works. Report
 remaining verification gaps rather than claiming a guarantee.

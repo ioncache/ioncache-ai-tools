@@ -25,6 +25,10 @@ from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDE
 from turn_guard_self_check import install_reviewers
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests"))
+import pytest
+from self_check_support import inprocess_hooks, run_main, uses_process
+
 EM_DASH = chr(0x2014)
 CLEAN_PATCH = '*** Begin Patch\n*** Add File: safe.txt\n+clean\n*** End Patch'
 
@@ -71,15 +75,24 @@ class CodexAdapterTests(unittest.TestCase):
             arg.replace('${CLAUDE_PLUGIN_ROOT}', str(ROOT)).replace('${PLUGIN_ROOT}', str(ROOT))
             for arg in shlex.split(entry['command'])
         ]
-        result = subprocess.run(
-            command, input=json.dumps(payload), text=True, capture_output=True,
-            env=self.env, cwd=self.root, timeout=entry.get('timeout', 15),
-        )
+        process = uses_process(self)
+        if process:
+            result = subprocess.run(
+                command, input=json.dumps(payload), text=True, capture_output=True,
+                env=self.env, cwd=self.root, timeout=entry.get('timeout', 15),
+            )
+        else:
+            self.assertEqual(Path(command[1]).resolve(), Path(codex_adapter.__file__).resolve())
+            with inprocess_hooks():
+                result = run_main(codex_adapter, command[2:], input=json.dumps(payload),
+                                  env=self.env, cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
     def invoke(self, event, **fields):
         payload = {**self.payload, 'hook_event_name': event, **fields}
+        if not uses_process(self):
+            return [self.run_entry(entry, payload) for entry in self.entries(event)]
         with ThreadPoolExecutor() as executor:
             futures = [executor.submit(self.run_entry, entry, payload) for entry in self.entries(event)]
             return [future.result() for future in futures]
@@ -178,6 +191,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('spawn_agent', {'message': 'Continue the assignment'}), {})
         self.assertEqual(self.tool('Bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
+    @pytest.mark.process
     def test_root_question_blocks_only_root_and_children_continue(self):
         (self.home / '.claude/ioncache-ai-tools.local.json').write_text('{"features": {}}')
         self.marker.write_text('')
@@ -271,6 +285,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.prompt('Implement the revised change')
         self.assertEqual(self.tool('apply_patch', {'command': CLEAN_PATCH}), {})
 
+    @pytest.mark.process
     def test_session_end_reports_deadline_before_host_timeout_and_recovers(self):
         settings = Path(self.env['CODEX_HOME']) / 'ioncache-ai-tools.local.json'
         settings.parent.mkdir(parents=True, exist_ok=True)
@@ -384,6 +399,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.invoke('PostToolUse', tool_name='Bash', tool_input={'command': 'true'},
                                      tool_response=''), [{}])
 
+    @pytest.mark.process
     def test_prompt_order_survives_concurrent_host_dispatch(self):
         self.verified_question('Why is this different?')
         self.assertTrue(self.marker.exists())
@@ -731,6 +747,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('Bash', {'command': original})['permissionDecision'], 'deny')
         self.assertIn('chr(0x2014)', denied['permissionDecisionReason'])
 
+    @pytest.mark.process
     def test_process_denial_recovers_with_owned_pid_and_continued_work(self):
         self.prompt('Stop the disposable worker and continue writing the report')
         for prefix in ('', 'exec '):
@@ -799,6 +816,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outputs, [{}])
         self.assertEqual(self.invoke('Stop', last_assistant_message='corrected', stop_hook_active=True), [{}])
 
+    @pytest.mark.process
     def test_invalid_payloads_report_unavailability_without_granting_permission(self):
         valid = {**self.payload, 'tool_name': 'apply_patch', 'tool_input': {'command': CLEAN_PATCH}}
         cases = (

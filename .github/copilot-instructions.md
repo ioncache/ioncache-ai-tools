@@ -176,50 +176,43 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
 
 ## Validation commands
 
-Run from the repository root after installing contributor tooling with `npm ci`:
+Run from the repository root with Python 3.15 (the CI test runtime) after
+installing contributor tooling. Installed plugin runtime support remains 3.11+:
 
 ```sh
-python3 hooks/scripts/rule_engine_self_check.py < /dev/null
-python3 hooks/scripts/pending_question_self_check.py < /dev/null
-python3 hooks/scripts/turn_guard_self_check.py < /dev/null
-python3 hooks/scripts/plugin_config_self_check.py < /dev/null
-python3 hooks/scripts/copilot_adapter_self_check.py < /dev/null
-python3 hooks/scripts/codex_adapter_self_check.py < /dev/null
-python3 hooks/scripts/docs_cache_self_check.py < /dev/null
-python3 hooks/scripts/claim_evidence_self_check.py < /dev/null
+npm ci
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -n auto
 node scripts/create-worktree.js --self-test
-python3 scripts/review_ledger_self_check.py
-python3 scripts/review_options_self_check.py
-python3 scripts/review_comments_self_check.py
-python3 scripts/review_assignments_self_check.py
-python3 scripts/development_run_self_check.py
 node scripts/development_workflow_self_check.js
-python3 scripts/release_self_check.py
 npm run release:check
 ```
 
 These checks run in CI; the Node self-test exercises worktree setup and path
 containment. The Codex adapter self-check covers the shared worktree launcher's
 missing-runtime recovery and the installed skill's invocation.
-Extend the existing assertion-based self-checks for changes to their respective
-behavior. The ledger self-check also exercises standalone
+Extend the pytest-collected self-checks for changes to their respective behavior.
+Use in-process calls and shared immutable starting fixtures by default. Reserve
+subprocesses for the boundaries they verify, not ordinary fixture progression.
+Never parallelize environment-changing tests with threads. Keep test dependencies
+out of runtime imports. Inspect pytest's duration report and keep the full local
+run near one minute. Fixture tiers and their preconditions are documented in
+[../docs/development.md#python-tests](../docs/development.md#python-tests).
+The ledger self-check also exercises standalone
 fingerprints, review-handback event fixtures, and packaged review references.
 
 Run one Copilot adapter test with:
 
 ```sh
-python3 hooks/scripts/copilot_adapter_self_check.py CopilotAdapterTests.test_native_shell_rules
+.venv/bin/python -m pytest hooks/scripts/copilot_adapter_self_check.py::CopilotAdapterTests::test_native_shell_rules
 ```
 
-For a single existing question-classifier test, select one zero-based fixture
-index instead of running the complete self-check:
+Run one file, or the explicit real-process tier:
 
 ```sh
-PYTHONPATH=hooks/scripts python3 - <<'PY'
-from pending_question_self_check import QUESTION_FIXTURES, has_question
-message, expected, note = QUESTION_FIXTURES[1]
-assert has_question(message) is expected, note
-PY
+.venv/bin/python -m pytest -n auto scripts/development_run_self_check.py
+.venv/bin/python -m pytest -n auto -m process
 ```
 
 Syntax and manifest checks used by CI:

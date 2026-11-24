@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,12 @@ import development_progress as monitoring
 import development_models as models
 import development_handoff as handoffs
 import review_assignments as assignments
+import review_options
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+import pytest
+from self_check_support import run_main, uses_process
+from workflow_support import run_workflow
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -51,15 +58,18 @@ class DevelopmentRunTests(unittest.TestCase):
         environment = patch.dict(os.environ, self.env, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
-        self.git("init", "-q", "-b", "main")
-        self.git("config", "user.name", "Development fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
-        self.git("remote", "add", "origin", "https://example.invalid/project.git")
-        (self.root / "app.txt").write_text("before\n")
-        (self.root / ".gitignore").write_text(".review-loop/\n.worktrees/\n")
-        self.git("add", ".")
-        self.git("commit", "-qm", "fixture")
+        if hasattr(self, "repository_seed"):
+            shutil.copytree(self.repository_seed, self.root, dirs_exist_ok=True)
+        else:
+            self.git("init", "-q", "-b", "main")
+            self.git("config", "user.name", "Development fixture")
+            self.git("config", "user.email", "fixture@example.invalid")
+            self.git("config", "commit.gpgsign", "false")
+            self.git("remote", "add", "origin", "https://example.invalid/project.git")
+            (self.root / "app.txt").write_text("before\n")
+            (self.root / ".gitignore").write_text(".review-loop/\n.worktrees/\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "fixture")
         artifacts = []
         for role in ("requirements", "design", "plan"):
             content = f"Approved {role} fixture\n".encode()
@@ -95,9 +105,8 @@ class DevelopmentRunTests(unittest.TestCase):
                               check=True, capture_output=True, text=True).stdout.strip()
 
     def cli(self, *args, ok=True, stdin=None):
-        result = subprocess.run([sys.executable, str(SCRIPTS / "development_run.py"), *map(str, args)],
-                                env=self.env, capture_output=True, text=True,
-                                input=None if stdin is None else json.dumps(stdin))
+        result = run_main(development, args, env=self.env, process=uses_process(self),
+                          input=None if stdin is None else json.dumps(stdin))
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         if not ok:
             self.assertEqual(result.stdout, "")
@@ -166,6 +175,7 @@ class DevelopmentRunTests(unittest.TestCase):
         records.update(overrides)
         return {name: {"status": status, "evidence": evidence} for name, (status, evidence) in records.items()}
 
+    @pytest.mark.stable_storage
     def test_honest_preflight_completes_and_helper_records_launch_evidence(self):
         self.init()
         launch = self.folder / "launch"
@@ -261,6 +271,7 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_text(json.dumps(choices))
         self.assertEqual(self.handoff("prepare", "--models-file", path)["action"], "launch")
 
+    @pytest.mark.stable_storage
     def test_missing_capability_blocks_with_recovery_and_retry_proceeds(self):
         self.init()
         batch = self.handoff("prepare")
@@ -365,9 +376,10 @@ class DevelopmentRunTests(unittest.TestCase):
         assignment = self.state["assignment"]
         scratch = self.store / "reports" / assignment["id"]
         scratch.mkdir(exist_ok=True)
-        options = subprocess.run(
-            [sys.executable, str(SCRIPTS / "review_options.py"), "review-validate-fix-loop"],
-            cwd=root, env=self.env, capture_output=True, text=True, check=True)
+        options = run_main(
+            review_options, ["review-validate-fix-loop"],
+            cwd=root, env=self.env, process=uses_process(self))
+        self.assertEqual(options.returncode, 0, options.stderr)
         if files is None:
             files = development.review_files(root, assignment["comparison_base"])
         phase = assignments.prepare({
@@ -442,9 +454,8 @@ class DevelopmentRunTests(unittest.TestCase):
         return data
 
     def review_cli(self, root, args, event=None):
-        result = subprocess.run([sys.executable, str(SCRIPTS / "review_ledger.py"), *args],
-                                input=json.dumps(event), env=self.env, cwd=root,
-                                capture_output=True, text=True)
+        result = run_main(development.review, args, input=json.dumps(event),
+                          env=self.env, cwd=root, process=uses_process(self))
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -528,9 +539,8 @@ class DevelopmentRunTests(unittest.TestCase):
         return state, active, exported
 
     def audit_cli(self, operation, *args, ok=True):
-        result = subprocess.run([sys.executable, str(SCRIPTS / "development_audit.py"),
-                                 operation, str(self.store), *args],
-                                env=self.env, capture_output=True, text=True)
+        result = run_main(audit, [operation, str(self.store), *args],
+                          env=self.env, process=uses_process(self))
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         return json.loads(result.stdout) if ok else result.stderr
 
@@ -563,6 +573,7 @@ class DevelopmentRunTests(unittest.TestCase):
             self.execute_fixture(self.state["assignment"])
         return root
 
+    @pytest.mark.stable_storage
     def test_audit_publication_preserves_code_and_recovers_lost_response(self):
         root = self.start_audit_fixture()
         before = self.review_cli(root, ["fingerprint"])
@@ -616,6 +627,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.git("push", "origin", "--delete", "fixture-feature")
         self.assertIn(final["wiki_commit"], self.git("ls-remote", str(self.wiki_remote), "HEAD"))
 
+    @pytest.mark.stable_storage
     def test_failed_audit_retries_without_refunding_or_consuming_the_final_audit_attempt(self):
         root = self.start_audit_fixture()
         before = self.review_cli(root, ["fingerprint"])
@@ -634,6 +646,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["outcome"], "completed")
         self.assertEqual(before, self.review_cli(root, ["fingerprint"]))
 
+    @pytest.mark.stable_storage
     def test_published_audit_survives_later_worker_and_control_model_observations(self):
         self.start_audit_fixture()
         active = self.state["assignment"]
@@ -827,6 +840,7 @@ class DevelopmentRunTests(unittest.TestCase):
     def test_legacy_archive_uses_only_recorded_review_ids(self):
         self.archive_with_reused_worktree(legacy=True)
 
+    @pytest.mark.stable_storage
     def test_audit_repository_identity_accepts_casing_but_rejects_other_targets(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -878,6 +892,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 with self.assertRaisesRegex(manifest.ManifestError, "receipt does not match"):
                     audit.validate_receipt(state, active, changed)
 
+    @pytest.mark.stable_storage
     def test_unavailable_wiki_recovers_without_changing_the_pr_or_consuming_an_assignment(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -921,6 +936,7 @@ class DevelopmentRunTests(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "restore one"):
             audit.index_entry("Human notes without an audit table", publication)
 
+    @pytest.mark.stable_storage
     def test_wiki_concurrent_update_is_preserved_and_pr_body_is_reread(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -959,6 +975,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent wiki edit")
         self.finish(receipt)
 
+    @pytest.mark.stable_storage
     def test_wiki_contention_stops_after_three_attempts_and_can_resume(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -990,6 +1007,7 @@ class DevelopmentRunTests(unittest.TestCase):
                              f"Concurrent edit {number}")
         self.finish(receipt)
 
+    @pytest.mark.stable_storage
     def test_lost_wiki_push_response_does_not_duplicate_the_publication(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -1067,6 +1085,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.mutate("resume", "--reason", "Repaired settings")
         self.assertEqual(self.next()["attempt"], 2)
 
+    @pytest.mark.stable_storage
     def test_settings_failure_cannot_waive_audit_completion(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -1080,6 +1099,7 @@ class DevelopmentRunTests(unittest.TestCase):
         config.write_text('{"features": {}}')
         self.finish(receipt)
 
+    @pytest.mark.stable_storage
     def test_settings_failure_cannot_waive_final_audit_at_reservation_or_delivery(self):
         root = self.start_audit_fixture()
         self.execute_fixture(self.state["assignment"])
@@ -1127,6 +1147,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
                 self.assertEqual(self.audit_body_updates, [])
 
+    @pytest.mark.stable_storage
     def test_audit_export_requires_complete_narrative_and_exact_publication_approval(self):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
@@ -1156,6 +1177,7 @@ class DevelopmentRunTests(unittest.TestCase):
             with self.assertRaisesRegex(manifest.ManifestError, "evidence changed"):
                 audit.publish(state, active, exported["identity"])
 
+    @pytest.mark.stable_storage
     def test_audit_opt_out_keeps_development_available_without_publication(self):
         self.configure_audit()
         config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
@@ -1175,6 +1197,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.git("ls-remote", "origin"), "")
         self.assertIn(self.wiki_initial, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
 
+    @pytest.mark.stable_storage
     def test_reenabled_audit_requires_counted_reconciliation_before_readiness(self):
         self.start_audit_fixture()
         self.execute_fixture(self.state["assignment"])
@@ -1198,14 +1221,40 @@ class DevelopmentRunTests(unittest.TestCase):
     def workflow(self, scenario, expected_models=None):
         fixture = {"python": sys.executable, "store": str(self.store), "scenario": scenario,
                    "invocation": f"offline-{self.state['revision']}", "expected_models": expected_models}
-        result = subprocess.run(
-            ["node", str(SCRIPTS / "development_workflow_self_check.js"), "--persisted-controller"],
-            input=json.dumps(fixture), cwd=self.root, env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        observed = json.loads(result.stdout)
+        command = ["node", str(SCRIPTS / "development_workflow_self_check.js")]
+        if uses_process(self):
+            result = subprocess.run(
+                [*command, "--persisted-controller"], input=json.dumps(fixture),
+                cwd=self.root, env=self.env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = json.loads(result.stdout)
+        else:
+            observed = run_workflow(
+                [*command, "--inprocess-controller"], fixture, self.workflow_command,
+                cwd=self.root, env=self.env,
+            )
         self.state = observed["result"]
         self.assertEqual(self.state, self.cli("status", self.store))
         return observed["roles"]
+
+    def workflow_command(self, request):
+        script, *args = request["argv"]
+        path = Path(script)
+        modules = {Path(module.__file__).name: module for module in
+                   (development, handoffs, development.review)}
+        module = modules.get(path.name)
+        if path == SCRIPTS / "development_run_self_check.py":
+            self.assertEqual(args, ["--workflow-review-fixture"])
+            module = SimpleNamespace(
+                __file__=str(path),
+                main=lambda: print(json.dumps(workflow_review_fixture(json.load(sys.stdin)))),
+            )
+        if module is None or not path.is_file() or path.read_bytes() != Path(module.__file__).read_bytes():
+            return subprocess.run(
+                [sys.executable, script, *args], cwd=request["cwd"], env=self.env,
+                input=request["input"], capture_output=True, text=True, timeout=30,
+            )
+        return run_main(module, args, cwd=request["cwd"], env=self.env, input=request["input"])
 
     def retire_fixture(self):
         self.mutate("retire", "--reason", "Reconciled the local fixture's partial effects",
@@ -1215,12 +1264,12 @@ class DevelopmentRunTests(unittest.TestCase):
     def handoff(self, command, *args, ok=True):
         if command == "prepare" and "--models-file" not in args:
             args = (*args, "--configured-models")
-        result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "development_handoff.py"), command, str(self.store),
-             *map(str, args)], env=self.env, capture_output=True, text=True, timeout=30)
+        result = run_main(handoffs, [command, str(self.store), *args],
+                          env=self.env, process=uses_process(self))
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
+    @pytest.mark.stable_storage
     def test_handoff_lost_prepare_reply_reuses_unlaunched_reservation(self):
         self.init()
         first = self.handoff("prepare")
@@ -1390,6 +1439,7 @@ class DevelopmentRunTests(unittest.TestCase):
         batch, path = self.dispatch_review_fixture(batch, path, data)
         return root, batch, path, data
 
+    @pytest.mark.stable_storage
     def test_handoff_final_acceptance_binds_collected_category_contents(self):
         _, batch, _, data = self.completed_review_handoff_fixture()
         self.handoff("finish", "--batch", batch["batch"], "--job", 1)
@@ -1414,6 +1464,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(saved["attempts"], before["attempts"])
         self.assertTrue(saved["prs"]["first"]["review"]["coverage"]["structurally_complete"])
 
+    @pytest.mark.stable_storage
     def test_handoff_uncollected_category_requires_existing_report_collection(self):
         root, batch, path = self.review_handoff_fixture()
         data = self.review(root, record=False)
@@ -1477,6 +1528,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual({path.name: path.read_bytes() for path in archives.iterdir()}, original)
         self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["status"], "collected")
 
+    @pytest.mark.stable_storage
     def test_handoff_nested_json_returns_correction_and_retains_candidate(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1520,6 +1572,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("submit", "--batch", batch["batch"], "--job", 1, "--candidate", candidate)
         self.handoff("collect", "--batch", batch["batch"])
 
+    @pytest.mark.stable_storage
     def test_handoff_reviewer_category_is_required_before_dispatch(self):
         root, batch, path = self.review_handoff_fixture()
         data = self.review(root, record=False)
@@ -1548,6 +1601,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("collect", "--batch", batch["batch"])
         self.assertEqual(len(development.load(self.store)["active"]["pending_requests"]), 1)
 
+    @pytest.mark.stable_storage
     def test_handoff_owner_paths_cannot_overwrite_reserved_leaf_evidence(self):
         root, owner, owner_path = self.review_handoff_fixture()
         leaf = self.store / "reports" / self.state["assignment"]["id"] / "owner-3.json"
@@ -1596,6 +1650,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(state["handoffs"][batch["batch"]]["status"], "reconciled")
         self.assertEqual(state["active"]["review_dispatch"]["calls"], 2)
 
+    @pytest.mark.stable_storage
     def test_handoff_owner_outcomes_must_match_on_finish(self):
         _, batch, path, data = self.completed_review_handoff_fixture()
         for outer, inner in (("blocked", "complete"), ("complete", "blocked")):
@@ -1609,6 +1664,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.state = self.cli("status", self.store)
         self.assertEqual(self.next()["role"], "commit")
 
+    @pytest.mark.stable_storage
     def test_handoff_owner_receipt_binds_referenced_report_and_legacy_rebind(self):
         _, batch, path, data = self.completed_review_handoff_fixture()
         report = self.report(data)
@@ -1632,6 +1688,7 @@ class DevelopmentRunTests(unittest.TestCase):
         receipt = self.handoff("collect", "--batch", batch["batch"])
         self.assertEqual(self.handoff("collect", "--batch", batch["batch"]), receipt)
 
+    @pytest.mark.stable_storage
     def test_handoff_missing_report_does_not_spend_disabled_correction(self):
         self.init()
         config = Path(self.env["HOME"]) / ".claude/ioncache-ai-tools.local.json"
@@ -1669,6 +1726,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("collect", "--batch", batch["batch"])
         self.assertEqual(development.load(self.store)["history"][-1]["report"]["summary"], "Original candidate")
 
+    @pytest.mark.process
     def test_handoff_fifo_candidate_returns_without_blocking_and_recovers(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1700,6 +1758,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("collect", "--batch", batch["batch"])
         self.assertEqual(len(development.load(self.store)["active"]["pending_requests"]), 1)
 
+    @pytest.mark.stable_storage
     def test_handoff_semantic_rejection_allows_report_correction_without_another_commit(self):
         root = self.start_review_fixture()
         (root / "app.txt").write_text("after\n")
@@ -1780,6 +1839,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(state["outcome"], "running")
         self.assertEqual(state["history"][-1]["report"], original)
 
+    @pytest.mark.stable_storage
     def test_handoff_late_controller_failure_rolls_back_state_and_rechecks_same_receipt(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1807,6 +1867,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(development.load(self.store)["preflight"])
         self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["failures"]["1"], 1)
 
+    @pytest.mark.stable_storage
     def test_handoff_controller_corrections_share_the_bound_and_respect_optout(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1835,6 +1896,7 @@ class DevelopmentRunTests(unittest.TestCase):
                     self.handoff("finish", "--batch", batch["batch"], "--job", 1)
         self.assertFalse(development.load(self.store)["preflight"])
 
+    @pytest.mark.stable_storage
     def test_handoff_invalid_legacy_owner_binding_can_be_corrected_without_relaunch(self):
         _, batch, path, data = self.completed_review_handoff_fixture()
         reference = self.report(data)
@@ -1873,6 +1935,7 @@ class DevelopmentRunTests(unittest.TestCase):
         batch = self.handoff("prepare")
         self.claim_handoff(batch)
 
+    @pytest.mark.process
     def test_workflow_collects_persisted_report_after_losing_native_reply(self):
         self.init()
         self.preflight()
@@ -1884,6 +1947,7 @@ class DevelopmentRunTests(unittest.TestCase):
         implementations = [item for item in development.load(self.store)["history"] if item["role"] == "implement"]
         self.assertEqual([item["outcome"] for item in implementations], ["complete"])
 
+    @pytest.mark.stable_storage
     def test_workflow_restart_collects_saved_submission_without_relaunch(self):
         self.init()
         self.preflight()
@@ -1902,6 +1966,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(saved["started"], started)
         self.assertEqual((root / "app.txt").read_text(), "after\n")
 
+    @pytest.mark.stable_storage
     def test_workflow_restart_without_submission_still_requires_recovery(self):
         self.init()
         self.preflight()
@@ -1913,6 +1978,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("missing_report", self.state["reason"])
         self.assertEqual(development.load(self.store)["handoffs"][batch["batch"]]["status"], "claimed")
 
+    @pytest.mark.stable_storage
     def test_handoff_generates_identity_and_corrects_report_without_repeating_work(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1941,6 +2007,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(development.load(self.store)["preflight"])
         self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
 
+    @pytest.mark.stable_storage
     def test_handoff_missing_report_cannot_become_success_or_repeat_dispatch(self):
         self.init()
         batch = self.handoff("prepare")
@@ -1952,6 +2019,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.handoff("prepare")["action"], "collect")
         self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 1)
 
+    @pytest.mark.stable_storage
     def test_handoff_correction_allowance_persists_and_optout_is_independent(self):
         for enabled in (True, False):
             with self.subTest(enabled=enabled):
@@ -1978,6 +2046,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertEqual([item.read_text() for item in archives], ['{"invalid":'])
                 self.assertFalse(development.load(self.store)["preflight"])
 
+    @pytest.mark.process
     def test_handoff_script_and_executor_repairs_preserve_reservations(self):
         self.init()
         batch = self.handoff("prepare")
@@ -2007,6 +2076,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("provably unclaimed", self.handoff(
             "resume-prepared", "--batch", batch["batch"], "--reason", "Cannot infer no launch", ok=False)["error"])
 
+    @pytest.mark.stable_storage
     def test_handoff_rejects_unstarted_and_changed_reports(self):
         self.init()
         batch = self.handoff("prepare")
@@ -2032,6 +2102,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.handoff("claim", "--batch", batch["batch"])
         self.assertEqual(self.cli("status", self.store)["consumed_assignments"], 1)
 
+    @pytest.mark.stable_storage
     def test_handoff_fixers_run_alone_and_return_to_owner_without_refunding_reservations(self):
         self.init()
         self.preflight()
@@ -2078,6 +2149,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(latest["calls"], checkpoint["calls"] + 1)
         self.assertEqual(latest["reservations"][requests[-1]["result_file"]], reserved)
 
+    @pytest.mark.stable_storage
     def test_workflow_accepts_required_files_absent_from_legacy_hints(self):
         self.init()
         self.preflight()
@@ -2092,6 +2164,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual((root / "app.txt").read_text(), "before\n")
         self.assertEqual(saved["manifest"]["tasks"][0]["paths"], ["app.txt"])
 
+    @pytest.mark.stable_storage
     def test_tasks_without_predicted_paths_review_all_discovered_changes(self):
         del self.plan["tasks"][0]["paths"]
         self.init()
@@ -2543,6 +2616,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.finish(data)
         self.assertEqual(conflicting.read_bytes(), b"Retained conflicting evidence\n")
 
+    @pytest.mark.stable_storage
     def test_workflow_native_failures_preserve_workers_effects_and_allowance(self):
         self.plan["limits"]["attempts"] = 3
         self.init()
@@ -2562,6 +2636,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.state["prs"]["first"]["position"], 2)
         self.assertEqual(self.state["consumed_assignments"], 6)
 
+    @pytest.mark.stable_storage
     def test_workflow_input_loss_keeps_shutdown_and_corrected_work_reachable(self):
         self.init()
         self.preflight()
@@ -2620,15 +2695,19 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(all(loop["invalidated"] for loop in status["loops"][:2]))
         self.assertEqual((root / "app.txt").read_text(), "after\n")
 
+    @pytest.mark.stable_storage
     def test_workflow_review_path_denial_recovers_with_persisted_history(self):
         self.assert_workflow_review_recovers("review-path", "outside the assigned private directory")
 
+    @pytest.mark.stable_storage
     def test_workflow_review_packet_denial_recovers_with_persisted_history(self):
         self.assert_workflow_review_recovers("review-missing-packet", "frozen single-purpose packet")
 
+    @pytest.mark.stable_storage
     def test_workflow_review_budget_denial_recovers_without_refunding_limits(self):
         self.assert_workflow_review_recovers("review-budget", "allowance cannot cover")
 
+    @pytest.mark.stable_storage
     def test_workflow_review_native_failure_requires_shutdown_before_retry(self):
         self.assert_workflow_review_recovers("review-throw", "Fixture review native call failed")
 
@@ -2774,9 +2853,11 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(saved["prs"]["first"]["task_bases"], original["prs"]["first"]["task_bases"])
         self.assertEqual(saved["manifest"]["limits"], original["manifest"]["limits"])
 
+    @pytest.mark.stable_storage
     def test_stopped_cached_review_requires_counted_reconciliation(self):
         self.assert_closed_cached_review_recovers()
 
+    @pytest.mark.stable_storage
     def test_observed_revocation_survives_unavailable_history(self):
         root = self.start_review_fixture()
         data = self.review(root)
@@ -2792,6 +2873,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.review(root)
         self.assertEqual(self.next()["role"], "commit")
 
+    @pytest.mark.stable_storage
     def test_workflow_rejects_closure_between_reservation_and_launch(self):
         root = self.start_review_fixture()
         self.review(root)
@@ -2897,6 +2979,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 replayed = self.mutate("record", "--report", report)
         self.assertEqual(replayed["outcome"], "completed")
 
+    @pytest.mark.stable_storage
     def test_closure_before_ready_handback_requires_counted_reconciliation(self):
         root, _ = self.ready_fixture()
         prior = [item for item in development.load(self.store)["history"] if item["role"] == "review"]
@@ -2947,18 +3030,23 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIsNone(self.next())
         self.assertEqual(self.state["outcome"], "completed")
 
+    @pytest.mark.stable_storage
     def test_abandoned_cached_review_requires_counted_reconciliation(self):
         self.assert_closed_cached_review_recovers("abandon")
 
+    @pytest.mark.stable_storage
     def test_recovered_closure_invalidates_cached_review(self):
         self.assert_closed_cached_review_recovers("recover-closure")
 
+    @pytest.mark.stable_storage
     def test_missing_blob_does_not_hide_cached_review_invalidation(self):
         self.assert_closed_cached_review_recovers(missing_blob=True)
 
+    @pytest.mark.stable_storage
     def test_recovered_cached_review_closure_survives_later_ownership_change(self):
         self.assert_closed_cached_review_recovers(recovered=True)
 
+    @pytest.mark.stable_storage
     def test_recovered_cached_review_release_survives_later_ownership_change(self):
         self.assert_closed_cached_review_recovers("release", recovered=True)
 
@@ -2984,9 +3072,11 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(after["manifest"]["limits"], before["manifest"]["limits"])
         self.assertEqual((root / "app.txt").read_text(), "reviewed change\n")
 
+    @pytest.mark.stable_storage
     def test_workflow_rechecks_cached_release_before_commit_and_recovers(self):
         self.assert_workflow_rechecks_cached_invalidation(self.release_accepted_review)
 
+    @pytest.mark.stable_storage
     def test_workflow_rechecks_cached_closure_before_commit_and_recovers(self):
         self.assert_workflow_rechecks_cached_invalidation(self.close_accepted_review)
 
@@ -3259,6 +3349,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.assertEqual(self.audit_body_updates, [])
 
+    @pytest.mark.process
     def test_sequential_run_requires_task_and_full_pr_reviews(self):
         self.init()
         self.preflight()
@@ -3536,6 +3627,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertTrue(line, process.stderr.read() if process.poll() is not None else "Monitor closed stdout")
         return json.loads(line)
 
+    @pytest.mark.process(helpers=False)
     def test_watch_reports_changes_and_stalls_without_state_or_config_writes(self):
         self.init()
         before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns)
@@ -3571,6 +3663,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.next()
         return root
 
+    @pytest.mark.process(helpers=False)
     def test_watch_hides_private_rejection_diagnostics_but_retains_recovery_reference(self):
         root = self.start_review_fixture()
         data = self.review(root, record=False)
@@ -3590,6 +3683,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(process.wait(timeout=5), 1)
         self.assertIn("PRIVATE-REVIEW-DIAGNOSTIC", self.cli("status", self.store)["reason"])
 
+    @pytest.mark.process(helpers=False)
     def test_watch_reconnect_uses_persisted_age_and_legacy_uses_observer_age(self):
         self.init()
         args = SimpleNamespace(interval=1, stale_after=5)
@@ -3614,6 +3708,7 @@ class DevelopmentRunTests(unittest.TestCase):
         return self.cli("progress", self.store, "--assignment", self.state["assignment"]["id"],
                         "--dispatch", dispatch, "--role", role, "--event", event, *args, ok=ok)
 
+    @pytest.mark.process(helpers=False)
     def test_watch_reports_review_dispatches_cycles_and_unavailable_progress(self):
         self.start_review_fixture()
         watcher = self.watch_process()
@@ -3661,6 +3756,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.mutate("resume", "--reason", "Continue without optional progress")
         self.assertEqual(self.next()["attempt"], 2)
 
+    @pytest.mark.process(helpers=False)
     def test_watch_classifies_all_terminal_outcomes_and_unreadable_state(self):
         self.init()
         initial = development.load(self.store)
@@ -3681,6 +3777,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.watch_line(process)["event"], "unavailable")
         self.assertEqual(process.wait(timeout=5), 2)
 
+    @pytest.mark.stable_storage
     def test_workflow_writes_private_progress_for_actual_flat_dispatches(self):
         self.init()
         self.preflight()
@@ -3822,9 +3919,11 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("reviewer", observed)
         self.assertEqual(observed[-1:], ["commit"])
 
+    @pytest.mark.stable_storage
     def test_review_model_optout_preserves_implementation_and_explicit_review_choices(self):
         self.model_optout_dispatch("review-auto-model-selection")
 
+    @pytest.mark.stable_storage
     def test_development_model_optout_preserves_explicit_review_choices(self):
         self.model_optout_dispatch("autonomous-development-model-selection")
 
@@ -3945,6 +4044,7 @@ class DevelopmentRunTests(unittest.TestCase):
         path.write_bytes(manifest.encode(original))
         self.finish(data)
 
+    @pytest.mark.stable_storage
     def test_named_acceptance_checks_cannot_be_skipped_or_substituted(self):
         root = self.start_review_fixture()
         for scope in ("task", "pr"):
