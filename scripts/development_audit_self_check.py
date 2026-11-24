@@ -567,6 +567,43 @@ class AuditFormatTests(unittest.TestCase):
             self.assertLess(expected.index("/pull/69)"), expected.index("/pull/2)"))
             self.assertEqual(expected.count("[#69 "), 1)
 
+    def test_index_rejects_fenced_and_indented_tables_before_update_or_confirmation(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
+        prefixes = ("```\n", "~~~markdown\n", "   ````python\n",
+                    "````\n```\n", "```\n~~~\n", "```\n```not-a-close\n",
+                    "```\n    ```\n")
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                text = prefix + table + "````\n"
+                for unchanged in (False, True):
+                    with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                        audit.index_entry(text, publication, unchanged=unchanged)
+                with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                    audit.published_index_matches(text.encode(), publication)
+        for indent in (" ", "    ", "\t"):
+            with self.subTest(indent=indent):
+                text = "".join(indent + line for line in table.splitlines(keepends=True))
+                with self.assertRaisesRegex(plan.ManifestError, "unindented"):
+                    audit.index_entry(text, publication)
+
+    def test_index_preserves_closed_code_examples_when_updating_the_real_table(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        empty = f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n"
+        for opening, closing in (("```markdown", "```"), ("  ~~~~", "   ~~~~~\t"),
+                                 ("```", "````")):
+            with self.subTest(opening=opening):
+                example = f"{opening}\n{empty}{closing}\n\nHuman notes\n\n"
+                updated = audit.index_entry(example + empty, publication)
+                self.assertEqual(updated, example + audit.index_entry(empty, publication))
+                self.assertTrue(audit.published_index_matches(updated.encode(), publication))
+        invalid_fence = "```not`a`fence\n\n"
+        updated = audit.index_entry(invalid_fence + empty, publication)
+        self.assertTrue(updated.startswith(invalid_fence))
+        self.assertTrue(audit.published_index_matches(updated.encode(), publication))
+
 
 if __name__ == "__main__":
     unittest.main()

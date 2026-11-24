@@ -467,11 +467,29 @@ def audit_links(publication):
             f" &#183; [Automated Pull Request Audits]({publication['index_url']})")
 
 
+def index_table_headers(lines):
+    headers = []
+    fence = None
+    for index, line in enumerate(lines):
+        marker = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line.expandtabs(4).rstrip("\r\n"))
+        if fence is not None:
+            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
+                    and not marker[2].strip(" ")):
+                fence = None
+            continue
+        if marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            fence = marker[1]
+            continue
+        if re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.rstrip()):
+            headers.append(index)
+    return headers
+
+
 def index_table(text, publication):
     lines = text.splitlines(keepends=True)
-    headers = [i for i, line in enumerate(lines)
-               if re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.strip())]
-    plan.require(len(headers) == 1, "Preserve the wiki index and restore one Date / Pull request / Audit records table")
+    headers = index_table_headers(lines)
+    plan.require(len(headers) == 1, "Preserve the wiki index and restore one unindented Date / Pull request / "
+                 "Audit records table outside fenced code blocks before retrying")
     start = headers[0] + 1
     plan.require(start < len(lines) and re.fullmatch(r"\|(?:\s*:?-{3,}:?\s*\|){3}", lines[start].strip()),
                  "Preserve the wiki index and repair its audit table separator before retrying")
