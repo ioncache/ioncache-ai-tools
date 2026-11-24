@@ -675,6 +675,79 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.next()["attempt"], 2)
 
     @pytest.mark.stable_storage
+    def test_resumed_review_retains_new_findings_without_a_reported_ledger(self):
+        root, data = self.stopped_review_with_finding()
+        self.finish({}, outcome="blocked")
+        self.mutate("resume", "--reason", "Retry the retained review")
+        self.assertEqual(self.next()["attempt"], 2)
+        self.mutate("resume-review", "--ledger", data["ledger"], "--reason", "Resume retained evidence",
+                    "--shutdown-evidence", "Synchronous fixture workers exited")
+        self.mutate("claim-review", "--provider", "claude-workflows")
+        status = self.review_cli(root, ["status", data["ledger"]])
+        events = [
+            {"type": "resume"},
+            {"type": "finding", "key": "retry-finding", "summary": "Finding discovered during retry",
+             "locations": ["app.txt:1"], "severity": "Low", "evidence": ["New retry evidence"]},
+            {"type": "decision", "id": "F002", "validation": "valid", "disposition": "out_of_scope",
+             "severity": "Low", "evidence": ["Confirmed another pre-existing issue"]},
+            {"type": "stop", "outcome": "blocked"},
+        ]
+        for event in events:
+            event.update(actor="fixture-owner", reason="Retained retry evidence")
+            status = self.review_cli(root, ["apply", data["ledger"], "--revision", str(status["revision"])], event)
+        before = development.load(self.store)
+        self.assertEqual(before["active"]["resume_ledger"], before["history"][-2]["finding_ledger"])
+        for action in ("record", "retire"):
+            with self.subTest(action=action):
+                development.save(self.store, copy.deepcopy(before))
+                self.state = self.cli("status", self.store)
+                self.assertNotIn("Finding discovered during retry", self.state["prs"]["first"]["known_issues_report"])
+                if action == "record":
+                    self.finish({}, outcome="blocked")
+                else:
+                    self.mutate("retire", "--reason", "Retry worker stopped",
+                                "--shutdown-evidence", "Synchronous fixture workers exited")
+                saved = development.load(self.store)
+                self.assertIsNone(saved["active"])
+                self.assertIsNone(saved["prs"]["first"]["accepted"])
+                self.assertNotIn("finding_reporting_error", saved["prs"]["first"])
+                self.assertIn("Finding discovered during retry", self.state["prs"]["first"]["known_issues_report"])
+                self.assertEqual(saved["history"][-1]["finding_ledger"], data["ledger"])
+
+    @pytest.mark.process(helpers=False)
+    def test_fifo_review_ledger_does_not_block_collection_or_retirement(self):
+        root, data = self.stopped_review_with_finding()
+        path = Path(data["ledger"])
+        path.unlink()
+        os.mkfifo(path)
+        before = development.load(self.store)
+        for action in ("record", "retire"):
+            with self.subTest(action=action):
+                development.save(self.store, copy.deepcopy(before))
+                self.state = self.cli("status", self.store)
+                arguments = (["--report", str(self.report({}, outcome="blocked"))] if action == "record" else
+                             ["--reason", "Unreadable review evidence", "--shutdown-evidence",
+                              "Synchronous fixture workers exited"])
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "development_run.py"), action, str(self.store),
+                     "--revision", str(self.state["revision"]), *arguments],
+                    env=self.env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.state = json.loads(result.stdout)
+                self.assertIn("Inventory gap:", self.state["prs"]["first"]["known_issues_report"])
+                saved = development.load(self.store)
+                self.assertIsNone(saved["active"])
+                self.assertIsNone(saved["prs"]["first"]["accepted"])
+                self.mutate("resume", "--reason", "Continue with unavailable evidence recorded")
+                self.assertEqual(self.next()["attempt"], 2)
+                if action == "retire":
+                    self.review_cli(root, ["abandon", data["ledger"], "--reason", "Ledger is a FIFO",
+                                          "--evidence", "Inspected the non-regular ledger entry",
+                                          "--shutdown-evidence", "Synchronous fixture workers exited"])
+                    self.review(root)
+                    self.assertIsNotNone(development.load(self.store)["prs"]["first"]["accepted"])
+
+    @pytest.mark.stable_storage
     def test_retired_review_retains_findings_without_acceptance_and_retry_keeps_them(self):
         root, data = self.stopped_review_with_finding("failed")
         before = development.load(self.store)

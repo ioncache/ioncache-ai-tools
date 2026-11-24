@@ -881,6 +881,7 @@ def rebase_review(state, args, settings):
 def incomplete_review_path(state, reference):
     active = state["active"]
     root = Path(active["root"])
+    reference = reference or active.get("resume_ledger")
     if reference:
         path = review.ledger_path(root, reference, allow_unavailable=True)
     else:
