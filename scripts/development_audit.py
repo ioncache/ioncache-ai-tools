@@ -32,9 +32,10 @@ LINK_START = "<!-- ioncache-audit:start -->"
 LINK_END = "<!-- ioncache-audit:end -->"
 HOME_START = "<!-- ioncache-audit-index:start -->"
 HOME_END = "<!-- ioncache-audit-index:end -->"
+HOME_TITLE = r'''(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^()\\\n])*\))'''
 HOME_REFERENCE = (r'^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]*)?'
                   r'(?:<([^>\n]+)>|([^\s<>]+))'
-                  r'''(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$''')
+                  r'(?:[ \t]+' + HOME_TITLE + r')?[ \t]*$')
 
 
 def repository(url):
@@ -366,13 +367,21 @@ def archive(state, pr, public):
     return {"directory": str(folder), "identity": key, "files": list(FILES), "historical": True}
 
 
-def prepared_archive(state, pr, approved):
+def read_archive(state, pr, approved):
     folder = archive_directory(state, pr, approved)
     plan.require(folder.is_dir(), "Archive unavailable; run archive --pr with the reviewed narrative first")
     files = {name: review.safe_path(folder, name).read_bytes() for name in FILES}
     plan.require(bundle_identity(files) == approved,
                  "Publication approval must identify both exact exported files; export and inspect again")
     bundle = json.loads(files["audit.json"])
+    plan.require(bundle["stage"] == "archive" and bundle["run"] == state["id"] and
+                 bundle["pr"] == pr and bundle["approval"] == state["approval"] and files == contents(bundle),
+                 "Archive does not match this run's approved historical export; export and inspect again")
+    return folder, bundle, files
+
+
+def prepared_archive(state, pr, approved):
+    folder, bundle, files = read_archive(state, pr, approved)
     expected = archive_bundle(state, pr, bundle["public"],
                               model_snapshot=(bundle["models"], bundle["models_unavailable"]),
                               require_commit_evidence=True)
@@ -446,7 +455,7 @@ def audit_links(publication):
             f" &#183; [Automated Pull Request Audits]({publication['index_url']})")
 
 
-def index_entry(text, publication):
+def index_table(text, publication):
     lines = text.splitlines(keepends=True)
     headers = [i for i, line in enumerate(lines)
                if re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.strip())]
@@ -462,6 +471,11 @@ def index_entry(text, publication):
                + re.escape(publication["pr_url"]) + r"\)\s*\|")
     matches = [i for i in range(start, end) if re.match(pr_cell, lines[i], re.IGNORECASE)]
     plan.require(len(matches) <= 1, "Preserve duplicate wiki audit records and consolidate this PR's row before retrying")
+    return lines, start, matches
+
+
+def index_entry(text, publication):
+    lines, start, matches = index_table(text, publication)
     if matches and all(f"]({publication[key]})" in lines[matches[0]] for key in ("url", "data_url")):
         return text
     if matches:
@@ -477,7 +491,7 @@ def index_entry(text, publication):
     return "".join(lines)
 
 
-def home_visible_text(text):
+def home_visible_text(text, *, markers=False):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     hidden = (r"^ {0,3}(?P<backticks>`{3,})[^`\n]*\n.*?"
               r"(?:(?P<backtick_end>^ {0,3}(?P=backticks)`*[ \t]*$)|\Z)|"
@@ -491,7 +505,9 @@ def home_visible_text(text):
 
     def mask(match):
         nonlocal closed
-        if match["reference"] is not None:
+        if match["reference"] is not None and not markers:
+            return match[0]
+        if markers and match["comment"] and match[0] in (HOME_START, HOME_END):
             return match[0]
         if ((match["backticks"] and not match["backtick_end"]) or
                 (match["tildes"] and not match["tilde_end"]) or
@@ -501,6 +517,10 @@ def home_visible_text(text):
 
     visible = re.sub(hidden, mask, text, flags=re.MULTILINE | re.DOTALL)
     return visible, closed
+
+
+def markdown_escaped(text, offset):
+    return (offset - len(text[:offset].rstrip("\\"))) % 2 == 1
 
 
 def home_link_destinations(visible):
@@ -522,10 +542,12 @@ def home_link_destinations(visible):
 
     visible = re.sub(HOME_REFERENCE, retain_definition, visible, flags=re.MULTILINE)
     link = (r'(!?)\[([^\]\n]+)\](?:'
-            r'\(\s*<?([^>\s)]+)>?(?:\s+"[^"\n]*")?\s*\)|'
+            r'\(\s*<?([^>\s)]+)>?(?:\s+' + HOME_TITLE + r')?\s*\)|'
             r'\[([^\]\n]*)\])?')
     for match in re.finditer(link, visible):
-        if match[1]:
+        if markdown_escaped(visible, match.start() + len(match[1])):
+            continue
+        if match[1] and not markdown_escaped(visible, match.start()):
             continue
         if match[3] is not None:
             yield match[3]
@@ -542,16 +564,19 @@ def home_has_index_link(text, index_url):
         path = destination.split("#", 1)[0]
         if path in (INDEX_PAGE, "./" + INDEX_PAGE) or match_repository_url(path, repo, f"wiki/{INDEX_PAGE}"):
             return True
-    return re.search(r"\[\[" + re.escape(INDEX_PAGE) + r"(?:\|[^|\]\n]+)?\]\]", visible) is not None
+    wiki_links = re.finditer(r"\[\[" + re.escape(INDEX_PAGE) + r"(?:\|[^|\]\n]+)?\]\]", visible)
+    return any(not markdown_escaped(visible, match.start()) for match in wiki_links)
 
 
 def home_page(text, index_url):
     link = f"[Automated Pull Request Audits]({index_url})"
-    if HOME_START in text or HOME_END in text:
-        plan.require(text.count(HOME_START) == text.count(HOME_END) == 1,
+    markers, _ = home_visible_text(text, markers=True)
+    if HOME_START in markers or HOME_END in markers:
+        plan.require(markers.count(HOME_START) == markers.count(HOME_END) == 1,
                      "Preserve Home content and restore one managed audit-index link block before retrying")
-        start, end = text.index(HOME_START), text.index(HOME_END)
-        plan.require(end > start and text[start + len(HOME_START):end].strip() == link,
+        start, end = markers.index(HOME_START), markers.index(HOME_END)
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        plan.require(end > start and normalized[start + len(HOME_START):end].strip() == link,
                      "Home audit-index block was edited; preserve manual text outside the block before retrying")
         plan.require(home_has_index_link(text, index_url),
                      "Move the Home audit-index block outside code or comments before retrying")
@@ -567,22 +592,34 @@ def home_page(text, index_url):
     return updated
 
 
-def wiki_files(root, publication, files):
+def wiki_pages(root, parent, publication):
+    filenames = (publication["page"] + ".md", publication["page"] + ".json",
+                 INDEX_PAGE + ".md", "Home.md", "Home.markdown")
+    entries = command(["git", "ls-tree", "-z", parent, "--", *filenames], cwd=root)
+    pages = {}
+    for entry in entries.split(b"\0")[:-1]:
+        metadata, name = entry.split(b"\t", 1)
+        filename = name.decode()
+        plan.require(metadata.startswith(b"100644 blob ") and filename in filenames,
+                     "Preserve the wiki and restore regular page files before retrying")
+        pages[filename] = command(["git", "show", f"{parent}:{filename}"], cwd=root)
+    return pages
+
+
+def wiki_files(pages, publication, files):
     expected = {publication["page"] + ".md": files["AUDIT.md"],
                 publication["page"] + ".json": files["audit.json"]}
     for filename, data in expected.items():
-        path = review.safe_path(root, filename)
-        plan.require(not path.exists() or path.read_bytes() == data,
+        plan.require(filename not in pages or pages[filename] == data,
                      f"Published audit differs at {filename}; preserve it and inspect the export and wiki history")
-    path = review.safe_path(root, INDEX_PAGE + ".md")
-    text = (path.read_bytes().decode() if path.exists() else
+    index = INDEX_PAGE + ".md"
+    text = (pages[index].decode() if index in pages else
             "Development process audit records, one row per pull request. Newest first.\n\n"
             f"{INDEX_HEADER}\n{INDEX_SEPARATOR}\n")
-    expected[path.name] = index_entry(text, publication).encode()
-    homes = [review.safe_path(root, name) for name in ("Home.md", "Home.markdown")]
-    for path in [path for path in homes if path.exists()] or homes[:1]:
-        text = path.read_bytes().decode() if path.exists() else ""
-        expected[path.name] = home_page(text, publication["index_url"]).encode()
+    expected[index] = index_entry(text, publication).encode()
+    homes = [name for name in ("Home.md", "Home.markdown") if name in pages] or ["Home.md"]
+    for name in homes:
+        expected[name] = home_page(pages.get(name, b"").decode(), publication["index_url"]).encode()
     return expected
 
 
@@ -608,7 +645,7 @@ def verify_wiki_commit(root, parent, expected):
     return commit
 
 
-def publish_files(state, publication, files, *, storage=None):
+def publish_files(state, publication, files, *, storage=None, recovery=None):
     url = state["manifest"]["repository"]["url"]
     remote = url.removesuffix(".git") + ".wiki.git"
     with tempfile.TemporaryDirectory(prefix="audit-publish-", dir=storage or state["store"]) as temporary:
@@ -621,7 +658,10 @@ def publish_files(state, publication, files, *, storage=None):
                  "!gh auth git-credential"], cwd=root)
         for attempt in range(3):
             ref, parent = wiki_head(root, remote)
-            expected = wiki_files(root, publication, files)
+            pages = wiki_pages(root, parent, publication)
+            expected = wiki_files(pages, publication, files)
+            if recovery is not None:
+                archive_wiki_recovery(recovery, publication, pages, expected)
             for filename, data in expected.items():
                 review.atomic_write(review.safe_path(root, filename), data)
             command(["git", "add", "--", *expected], cwd=root)
@@ -680,17 +720,22 @@ def checked_pull(state, assignment, bundle):
     return pull
 
 
-def publish_bundle(state, assignment, payload, *, storage=None):
+def publish_bundle(state, assignment, payload, *, storage=None, recovery=None):
     bundle, files = payload
     exported = bundle_identity(files)
     repo, number = target(state, assignment)
     pull = checked_pull(state, assignment, bundle)
     publication = publication_links(state, assignment, exported)
     pr_body(pull.get("body") or "", publication)
-    commit = publish_files(state, {**publication, "title": plan.text(pull["title"])}, files, storage=storage)
+    if recovery is not None:
+        archive_pr_recovery(recovery, publication, pull.get("body") or "")
+    commit = publish_files(state, {**publication, "title": plan.text(pull["title"])}, files,
+                           storage=storage, recovery=recovery)
     pull = checked_pull(state, assignment, bundle)
     original = pull.get("body") or ""
     body = pr_body(original, publication)
+    if recovery is not None:
+        archive_pr_recovery(recovery, publication, original)
     if body != original:
         api(f"repos/{repo}/pulls/{number}", method="PATCH", data={"body": body})
     observed = checked_pull(state, assignment, bundle)
@@ -709,11 +754,88 @@ def publish(state, assignment, approved):
     return result
 
 
-def publish_archive(state, pr, approved, *, pull_request=None):
-    folder, bundle, files = prepared_archive(state, pr, approved)
+def archive_receipt(state, publication, payload):
+    bundle, receipt = payload
+    plan.fields(receipt, "stage code_commit bundle wiki_commit url data_url index_url pr_url authorization")
+    expected = {key: value for key, value in publication.items() if key != "page"}
+    expected.update(stage="archive", code_commit=bundle["code_commit"],
+                    authorization={"approval": state["approval"], "permission": "publish_audit"})
+    plan.require(all(receipt[key] == value for key, value in expected.items()) and
+                 bundle["accepted_code_commit"] == receipt["code_commit"] and
+                 isinstance(receipt["code_commit"], str) and
+                 re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", receipt["code_commit"]) and
+                 isinstance(receipt["wiki_commit"], str) and
+                 re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", receipt["wiki_commit"]),
+                 "Archive receipt does not match the approved bundle, target and authorization. "
+                 "Preserve it; use --republish only when intentionally restoring this archive")
+    return receipt
+
+
+def archive_recovery(folder, binding, *, republish):
+    path = review.safe_path(folder, "publication-attempt.json")
+    record = None
+    if path.exists() and not republish:
+        record = json.loads(path.read_bytes())
+        plan.fields(record, "bundle pr_url approval before")
+        plan.fields(record["before"], "pr wiki")
+        plan.require(all(record[key] == value for key, value in binding.items()) and
+                     all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
+                         for value in record["before"].values()),
+                     "Archive attempt does not match the approved publication; preserve it and use "
+                     "--republish only when intentionally restoring this archive")
+    return {"path": path, "binding": binding, "record": record, "republish": republish}
+
+
+def require_archive_navigation(allowed):
+    plan.require(allowed, "Archive publication is partial or superseded; newer wiki or PR navigation was "
+                 "preserved. Inspect both remote effects and retain the archive. Use --republish only "
+                 "when intentionally restoring this exact approved archive; otherwise keep the newer audit")
+
+
+def archive_pr_recovery(recovery, publication, body):
+    matches = pr_body(body, publication) == body
+    block = (body[body.index(LINK_START):body.index(LINK_END) + len(LINK_END)]
+             if LINK_START in body else "")
+    current = review.digest(block.encode())
+    if recovery["record"] is not None:
+        require_archive_navigation(matches or current == recovery["record"]["before"]["pr"])
+    recovery["pr"] = current
+    recovery["pr_matches"] = matches
+
+
+def archive_wiki_recovery(recovery, publication, pages, expected):
+    index = INDEX_PAGE + ".md"
+    text = pages.get(index, b"").decode()
+    row = ""
+    if text:
+        lines, _, matches = index_table(text, publication)
+        row = lines[matches[0]] if matches else ""
+    current = review.digest(row.encode())
+    matches = pages.get(index) == expected[index]
+    if recovery["record"] is None:
+        existing = any(publication["page"] + suffix in pages for suffix in (".md", ".json"))
+        require_archive_navigation(recovery["republish"] or not existing or
+                                   (matches and recovery["pr_matches"]))
+        record = {**recovery["binding"], "before": {"pr": recovery["pr"], "wiki": current}}
+        review.atomic_write(recovery["path"], plan.encode(record))
+        recovery["record"] = record
+    require_archive_navigation(matches or current == recovery["record"]["before"]["wiki"])
+
+
+def publish_archive(state, pr, approved, *, pull_request=None, republish=False):
+    folder = archive_directory(state, pr, approved)
     receipt = review.safe_path(folder, "receipt.json")
-    assignment = {**archive_assignment(state, pr), "pr_url": pull_request}
-    result = publish_bundle(state, assignment, (bundle, files), storage=folder)
+    acknowledge = receipt.exists() and not republish
+    loader = read_archive if acknowledge else prepared_archive
+    folder, bundle, files = loader(state, pr, approved)
+    assignment = {"id": bundle["assignment"], "role": "archive", "pr": pr, "pr_url": pull_request}
+    publication = publication_links(state, assignment, approved)
+    if acknowledge:
+        return archive_receipt(state, {**publication, "bundle": approved},
+                               (bundle, json.loads(receipt.read_bytes())))
+    recovery = archive_recovery(folder, {"bundle": approved, "pr_url": publication["pr_url"],
+                                        "approval": state["approval"]}, republish=republish)
+    result = publish_bundle(state, assignment, (bundle, files), storage=folder, recovery=recovery)
     result["authorization"] = {"approval": state["approval"], "permission": "publish_audit"}
     review.atomic_write(receipt, plan.encode(result))
     return result
@@ -743,10 +865,14 @@ def main():
     cli.add_argument("--approved", help="Exact bundle identity, required for publish and publish-archive")
     cli.add_argument("--pr", help="PR plan ID, required for archive and publish-archive")
     cli.add_argument("--pull-request", help="Existing PR URL for publish-archive when the run did not record it")
+    cli.add_argument("--republish", action="store_true",
+                     help="Intentionally restore an approved archive's navigation, rather than acknowledge a retry")
     args = cli.parse_args()
     try:
         plan.require(args.pull_request is None or args.operation == "publish-archive",
                      "--pull-request is supported only by publish-archive")
+        plan.require(not args.republish or args.operation == "publish-archive",
+                     "--republish is supported only by publish-archive")
         folder = Path(args.store).resolve()
         with development.locked(folder):
             state = development.load(folder)
@@ -760,7 +886,8 @@ def main():
             plan.validate(state["manifest"], folder / "inputs")
             if args.operation == "publish-archive":
                 development.permission(state["manifest"], "audit-initial")
-                result = publish_archive(state, args.pr, args.approved, pull_request=args.pull_request)
+                result = publish_archive(state, args.pr, args.approved,
+                                         pull_request=args.pull_request, republish=args.republish)
                 print(json.dumps(result, indent=2))
                 return 0
             assignment = state["active"]

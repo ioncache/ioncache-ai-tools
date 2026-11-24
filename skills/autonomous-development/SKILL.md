@@ -235,3 +235,6 @@ work or changing outcomes, history or allowances. Follow [AUDIT.md](AUDIT.md)
 for exact-byte approval, existing permissions, open-PR ownership, accepted-commit
 binding and the durable receipt. A historical publication never substitutes for
 final review, a pending audit assignment or readiness.
+Archive retries acknowledge validated receipts without replacing newer audit
+links. Missing receipts require reconciliation of existing effects. Use
+`--republish` only for intentional restoration, with the same publication checks.

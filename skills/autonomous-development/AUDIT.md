@@ -39,7 +39,8 @@ one between `ioncache-audit-index:start` and `ioncache-audit-index:end` HTML
 comments. Create `Home.md` only if neither exists. Preserve all other Home content
 and existing handwritten inline, reference-style or wiki index links instead of
 duplicating them. An edited or malformed managed block requires preserving its
-human notes outside the block before repair and retry. Home bytes are verified
+human notes outside the block before repair and retry. Marker examples inside
+code are literal content, not managed blocks. Home bytes are verified
 along with the audit and index.
 
 Update an `Audit` section in the PR body with `Report`, `Data (audit.json)`, and
@@ -200,7 +201,8 @@ SSH URLs retain Git's SSH authentication. Verify the chosen credential's actual
 wiki access rather than inferring it from access to the implementation repository.
 Before pushing, the helper verifies the two approved files, generated index and
 Home bytes, and rejects any unrelated changed files. Other wiki files remain
-untouched. Filters or commit hooks cannot silently change the published bundle
+untouched. Existing page bytes come from the fetched commit, not the checkout
+that smudge filters can transform. Filters or commit hooks cannot silently change the published bundle
 or navigation.
 It respects Git signing configuration. Missing access or signing failures
 produce failure, not a fallback destination or a false successful receipt.
@@ -247,15 +249,40 @@ The URL is retained in the receipt, not written into workflow state.
 The command uses the same guarded wiki push, index and Home updates, PR link
 block and confirmed PR reread as normal publication. After confirmation, it
 atomically saves `receipt.json` beside the archive's two files, including the
-manifest approval identity and `publish_audit` authorization basis. A receipt
-write failure remains incomplete; retrying the same archive confirms the remote
-effects and records the receipt without duplicating the publication.
+manifest approval identity and `publish_audit` authorization basis.
+
+A normal retry with a valid receipt acknowledges that historical publication.
+It verifies the approved archive bytes, receipt, PR target and authorization,
+then returns the saved receipt without contacting the remote or rewriting it.
+Later run history does not invalidate that acknowledgement. It does not confirm
+current PR acceptance, current navigation or continued remote availability.
+Permissions, feature opt-outs and approved-input checks still apply.
+
+Without a receipt, publication still requires fresh matching run evidence and
+the exact current PR head. Before remote writes, the helper saves
+`publication-attempt.json` with the original managed PR block and wiki-row
+digests. Retries can finish effects that still match those originals or this
+archive. Unrelated PR text and other PRs' rows do not prevent recovery.
+If either audit pointer has changed to another record, report the publication
+as partial or superseded and preserve the newer navigation. A receipt write
+failure remains incomplete; matching effects can be confirmed and receipted
+without another wiki commit or PR update. For older publications without an
+attempt record, existing archive pages require matching index and PR links
+before automatic recovery.
+
+To intentionally make the same approved archive current again, use
+`publish-archive STORE --pr ID --approved IDENTITY --republish`. This starts
+a new attempt against the current navigation and replaces the receipt only
+after successful confirmation. It is not an automatic retry fallback.
+Fresh-evidence, ownership, permission and exact-head checks still apply;
+if run evidence changed, export and inspect a new archive instead.
+
 `RUN.json`, outcomes, history, assignments and allowances remain byte-for-byte
 unchanged. When archive storage uses the external recovery location, its receipt
 and temporary wiki checkout stay there too, never in a repository.
 
-Changed history, outcome, acceptance or review evidence requires a fresh archive
-and inspection. Later model observations alone do not revoke approval of a
+New remote publication after changed history, outcome, acceptance or review
+evidence requires a fresh archive and inspection. Later model observations alone do not revoke approval of a
 frozen archive. If an old archive is incompatible or unavailable, regenerate it
 from the retained evidence rather than editing its files. A historical receipt
 does not complete a pending audit assignment or mark a PR ready.
@@ -263,8 +290,9 @@ does not complete a pending audit assignment or mark a PR ready.
 ## Recovery and limitations
 
 If a response is lost, inspect the existing export, wiki files and PR body.
-Repeating the same publication reuses matching files and links without creating
-another row, commit or PR update. Page names include the run, assignment and
+Live publication retries reuse matching files and links without creating
+another row, commit or PR update. Archive retries follow the acknowledgement
+and supersession rules above. Page names include the run, assignment and
 export identities. Different assignments retain distinct publication records.
 Concurrent wiki pushes are retried at most three times by fetching the new head
 and rebuilding the table edit; never force-push or discard another writer's rows.
