@@ -2617,6 +2617,8 @@ class DevelopmentRunTests(unittest.TestCase):
         publication = audit.publication_links(state, active, self.audit_title)
         index_name = audit.INDEX_PAGE + ".md"
         other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
+        human_notes = "Human notes for the audit index.\n\n"
+        error = ("consolidate this PR's row" if change == "duplicate-row" else "Published audit index changed")
         original = audit.command
         pushed, approved_rows = [], []
 
@@ -2635,6 +2637,9 @@ class DevelopmentRunTests(unittest.TestCase):
                 elif change == "symlink":
                     index.unlink()
                     index.symlink_to("Home.md")
+                elif change == "duplicate-row":
+                    row = approved_rows[0] + "\n"
+                    index.write_text(human_notes + text.replace(row, row + row, 1))
                 else:
                     changed = {
                         "row": "".join(line for line in text.splitlines(keepends=True)
@@ -2653,25 +2658,40 @@ class DevelopmentRunTests(unittest.TestCase):
 
         with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
             with patch.object(audit, "command", side_effect=concurrent_update):
-                with self.assertRaisesRegex(manifest.ManifestError, "Published audit index changed"):
+                with self.assertRaisesRegex(manifest.ManifestError, error):
                     audit.publish(state, active, exported["identity"])
             self.assertEqual(len(pushed), 1)
             self.assertEqual(len(approved_rows), 1)
             self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
             self.assertEqual(self.audit_body_updates, [])
             self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+            if change == "duplicate-row":
+                with self.assertRaisesRegex(manifest.ManifestError, error):
+                    audit.publish(state, active, exported["identity"])
+                self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
+                self.assertEqual(self.audit_body_updates, [])
+                self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+                index = self.wiki / index_name
+                text = index.read_text()
+                row = approved_rows[0] + "\n"
+                self.assertEqual(text.count(row), 2)
+                index.write_text(text.replace(row + row, row, 1))
             if change in ("symlink", "encoding"):
                 self.git("restore", f"--source={pushed[0]}", "--", index_name, root=self.wiki)
+            if change in ("symlink", "encoding", "duplicate-row"):
                 self.git("add", "--", index_name, root=self.wiki)
-                self.git("commit", "-qm", "Restore readable index from history", root=self.wiki)
+                self.git("commit", "-qm", "Restore valid wiki audit index", root=self.wiki)
                 self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
             receipt = audit.publish(state, active, exported["identity"])
             self.assertEqual(audit.publish(state, active, exported["identity"]), receipt)
+            self.assertEqual(len(self.audit_body_updates), 1)
         self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
         index = self.git("show", f"FETCH_HEAD:{index_name}", root=self.wiki)
         self.assertEqual([line for line in index.splitlines() if "/pull/1)" in line], approved_rows)
-        if change in ("row", "report-link", "data-link", "metadata"):
+        if change in ("row", "report-link", "data-link", "metadata", "duplicate-row"):
             self.assertIn(other_row.rstrip("\n"), index.splitlines())
+        if change == "duplicate-row":
+            self.assertTrue(index.startswith(human_notes))
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent content")
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.finish(receipt)
@@ -2705,12 +2725,16 @@ class DevelopmentRunTests(unittest.TestCase):
         self.check_wiki_post_push_index_change("encoding")
 
     @pytest.mark.stable_storage
-    def test_wiki_post_push_superseded_pair_is_rejected_and_removed_on_retry(self):
+    def test_wiki_post_push_duplicate_index_row_requires_preserving_repair(self):
+        self.check_wiki_post_push_index_change("duplicate-row")
+
+    def check_wiki_post_push_superseded_restoration(self, *, json_only=False):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
         with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
             initial = audit.publish(state, active, exported["identity"])
             old_page = unquote(initial["url"].rsplit("/", 1)[1])
+            restored_files = [old_page + ".json"] if json_only else [old_page + ".md", old_page + ".json"]
             self.audit_title = "Renamed publication"
             state, active, replacement = self.audit_export()
             receipt_path = Path(replacement["directory"]) / "receipt.json"
@@ -2726,7 +2750,7 @@ class DevelopmentRunTests(unittest.TestCase):
                     self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
                     self.git("merge", "--ff-only", "FETCH_HEAD", root=self.wiki)
                     self.git("restore", f"--source={initial['wiki_commit']}", "--",
-                             old_page + ".md", old_page + ".json", root=self.wiki)
+                             *restored_files, root=self.wiki)
                     (self.wiki / "Other-page.md").write_text("Concurrent content\n")
                     self.git("add", ".", root=self.wiki)
                     self.git("commit", "-qm", "Restore superseded audit pair", root=self.wiki)
@@ -2740,8 +2764,19 @@ class DevelopmentRunTests(unittest.TestCase):
             self.assertEqual(receipt_path.read_bytes(), previous_receipt)
             self.assertEqual(len(self.audit_body_updates), 1)
             self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+            if json_only:
+                with self.assertRaisesRegex(manifest.ManifestError, "lacks its matching report/data pair"):
+                    audit.publish(state, active, replacement["identity"])
+                self.assertEqual(receipt_path.read_bytes(), previous_receipt)
+                self.assertEqual(len(self.audit_body_updates), 1)
+                self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+                self.git("restore", f"--source={initial['wiki_commit']}", "--", old_page + ".md", root=self.wiki)
+                self.git("add", "--", old_page + ".md", root=self.wiki)
+                self.git("commit", "-qm", "Restore superseded audit partner for recovery", root=self.wiki)
+                self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
             final = audit.publish(state, active, replacement["identity"])
             self.assertEqual(audit.publish(state, active, replacement["identity"]), final)
+            self.assertEqual((self.store / "RUN.json").read_bytes(), before)
         self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
         pages = self.git("ls-tree", "--name-only", "FETCH_HEAD", root=self.wiki).splitlines()
         new_page = unquote(final["url"].rsplit("/", 1)[1])
@@ -2750,6 +2785,14 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent content")
         self.assertEqual(len(self.audit_body_updates), 2)
         self.finish(final)
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_superseded_pair_is_rejected_and_removed_on_retry(self):
+        self.check_wiki_post_push_superseded_restoration()
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_superseded_json_requires_partial_pair_recovery(self):
+        self.check_wiki_post_push_superseded_restoration(json_only=True)
 
     @pytest.mark.stable_storage
     def test_wiki_contention_stops_after_three_attempts_and_can_resume(self):
