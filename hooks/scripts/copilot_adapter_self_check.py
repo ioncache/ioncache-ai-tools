@@ -174,6 +174,47 @@ class CopilotAdapterTests(unittest.TestCase):
         self.native_history('question', 'instruction')
         self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
 
+    def test_native_lifecycle_preserves_only_the_current_root_question(self):
+        args = {'agent_id': 'assigned-worker'}
+        for event, fields in (('preCompact', {}), ('sessionStart', {'source': 'resume'})):
+            with self.subTest(event=event):
+                self.native_history('question', 'children', 'handbacks')
+                self.assertFalse(self.marker.exists())
+                self.invoke(event, **fields)
+                self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+                self.assertEqual(self.tool('read_agent', args), {})
+                child, _ = self.invoke(
+                    'preToolUse', sessionId=self.payload['sessionId'] + '-child',
+                    agentId='child', parentAgentId=self.payload['sessionId'],
+                    toolName='stop_agent', toolArgs=args,
+                )
+                self.assertEqual(child, {})
+                for ending in ('instruction', 'answered'):
+                    with self.subTest(ending=ending):
+                        self.native_history('question', ending, 'children', 'handbacks')
+                        self.invoke(event, **fields)
+                        self.assertEqual(self.tool('stop_agent', args), {})
+                self.assertFalse(self.marker.exists())
+
+    def test_native_lifecycle_rechecks_replaced_history_without_stale_restrictions(self):
+        args = {'agent_id': 'assigned-worker'}
+        for event, fields in (('preCompact', {}), ('sessionStart', {'source': 'resume'})):
+            with self.subTest(event=event):
+                history = self.native_history('question')
+                self.assertFalse(self.marker.exists())
+                self.invoke(event, **fields)
+                self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+                replacement = history.with_suffix('.replacement')
+                replacement.write_text('\n'.join(
+                    json.dumps(item) for item in NATIVE_QUESTION_EVENTS['handbacks']
+                ) + '\n')
+                replacement.replace(history)
+                self.assertEqual(self.tool('stop_agent', args), {})
+                self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+                self.native_history('question')
+                self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+                self.assertFalse(self.marker.exists())
+
     def test_native_question_matches_user_origin_across_delivery_modes(self):
         path = self.native_history('question')
         question = [json.loads(line) for line in path.read_text().splitlines()]
