@@ -1,0 +1,42 @@
+{
+  "description": "Codex 0.163.0 native TUI capture: a user-triggered question allowed a read and denied a file redirect. The app-server capture had the same turn/message attribution. IDs, paths and prompt text replaced; unrelated fields omitted.",
+  "hook": {
+    "session_id": "codex-question-session",
+    "turn_id": "codex-question-turn",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {"command": "printf forbidden > forbidden.txt"}
+  },
+  "events": [
+    {
+      "type": "session_meta",
+      "payload": {"id": "codex-question-session", "session_id": "codex-question-session", "source": "cli"}
+    },
+    {
+      "type": "event_msg",
+      "payload": {
+        "type": "task_started",
+        "turn_id": "codex-question-turn",
+        "turn_attribution": {
+          "turn_id": "codex-question-turn",
+          "turn_trigger": "user",
+          "parent_turn_id": null,
+          "initiating_agent_path": null,
+          "root_turn_id": "codex-question-turn"
+        }
+      }
+    },
+    {
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Why did this change?"}],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "codex-question-turn",
+          "content_item_kinds": ["user.text"]
+        }
+      }
+    }
+  ]
+}

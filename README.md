@@ -297,12 +297,12 @@ for configuration examples.
 Hooks run without a skill invocation. Scope supplies guidance, not task
 approvals. Native host permissions still apply.
 
-Question guidance asks for direct answers without unrequested work. Copilot
-uses local native message evidence to restrict recognized state changes during
-a user-question turn. Running children remain unrestricted, and their
+Question guidance asks for direct answers without unrequested work. Claude,
+Copilot, and Codex use local native message evidence to restrict recognized
+state changes during a verified user-question turn. Running children remain unrestricted, and their
 question-shaped assignments and replies do not restrict the main session.
-Unknown-origin prompts receive guidance without a tool fence; Claude and
-Codex currently have no verified native user-origin signal. See
+The next instruction releases the restriction. Unknown-origin prompts,
+older host formats, and unavailable history receive guidance without a tool fence. See
 [docs/guardrails.md#question-turns](docs/guardrails.md#question-turns).
 
 Action checks block direct lockfile edits, broad process termination, and raw

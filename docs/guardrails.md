@@ -42,8 +42,8 @@ Host-started and unknown-origin prompt events clear the state instead of
 creating it, so an orchestrator can act on returned work after answering.
 They receive non-restrictive guidance, not the answer-only contract.
 Clearing precedes configuration and guidance work. A failed evaluation cannot
-create a marker afterward. Compaction and resume keep existing state until
-the next prompt.
+create a marker afterward. Native checks re-read current evidence after
+compaction or resume; unavailable evidence never restores a stale restriction.
 
 Copilot verifies native question turns at tool time, not from the prompt-hook
 payload alone. It correlates the current root `userPromptTransformed` with
@@ -55,10 +55,24 @@ restriction. Child events and tool-result handbacks cannot create a root
 question. A new instruction or a completed root answer ends the restriction.
 Missing, ambiguous, malformed or unreadable evidence leaves tools available.
 
-Claude and Codex still have no verified positive native user-origin signal.
-A genuine question with unknown origin receives guidance without a tool
-fence. The shared guard supports positively identified user questions, but
-normalized-input tests are not proof of those hosts' native detection.
+Claude correlates the tool hook's `prompt_id` with a root transcript message
+whose explicit `origin.kind` is `human`. The session and prompt must match,
+and sidechain, metadata, host-message framing and completed answers cannot
+create a question restriction. Native typed prompts and SDK messages declared
+as human input carry this origin. An SDK prompt without declared origin does not.
+
+Codex requires the current `turn_id` to have explicit `turn_trigger: "user"`
+attribution without a parent turn or initiating agent, followed by its original
+`user.text` message. This is the trigger assigned by the interactive TUI.
+Completed, interrupted, delegated and automated turns do not qualify.
+Additional user-role input in the same turn makes the original attribution
+ambiguous and releases the restriction; it does not inherit the original
+question. `codex exec` has an `exec` trigger, not verified human origin.
+
+All hosts use bounded local history at tool time, without another persisted
+permission state. Unknown origin, older formats and transcripts that have not
+caught up receive guidance without a tool fence. Native Claude and Codex calls
+never fall back to an old question marker when their history is unavailable.
 
 The missing tool fence does not relax the assistant's user-question rule.
 Root guidance still requires answering a genuine user question without
@@ -104,15 +118,19 @@ Recorded Claude model-facing batches, kept separate from hook captures, are in
 [../hooks/fixtures/claude-batched-prompts.json](../hooks/fixtures/claude-batched-prompts.json).
 Copilot native message provenance and worker routing are recorded separately in
 [../hooks/fixtures/copilot-question-events.json](../hooks/fixtures/copilot-question-events.json).
+The 2026-11-25 Claude and Codex captures are in
+[../hooks/fixtures/claude-question-events.json](../hooks/fixtures/claude-question-events.json)
+and [../hooks/fixtures/codex-question-events.json](../hooks/fixtures/codex-question-events.json).
 
 | Host | Observed input and documented limits | Remaining gap |
 | --- | --- | --- |
 | Claude Code 2.1.326 | Captured a root question, instruction, background subagent report and shell-task notification. User prompts and notifications both had `prompt_id`. Recorded model-facing entry 419 combines a notification inside a leading system reminder with an agent hand-back. Entries 248 and 268 contain summary reminders. The batch reproduces the old prefix miss and declarative-starter false positive without any question marks. | No verified positive user-origin signal. The recorded batch is not hook stdin, so its exact prompt-hook representation remains unverified. Independent peer messages, scheduled tasks and Code Mode output were not captured. |
+| Claude Code 2.1.332 (2026-11-25) | Interactive typed and declared-human SDK prompts carried `origin.kind: "human"` with matching prompt/session IDs before tool use. The plugin allowed a read and denied a file redirect with its answer-only reason. In one SDK process, the next instruction wrote its fixture, a child with a question-shaped assignment wrote its fixture and returned a question, and the parent then wrote its own fixture. Child tool hooks carried the parent's session/prompt IDs plus their own `agent_id`. Unmarked SDK input had no origin and `turnOrigin: "sdk"`. | Older formats and delayed transcripts remain guidance-only. Live interleaving of a fresh root question while a child writes is covered offline, not by this native sequence. Peer and scheduled deliveries remain uncaptured. |
 | Copilot CLI 1.0.113-1 | Captured a root question at `userPromptTransformed`, with `prompt` and `transformedPrompt` but no origin field. Documentation excludes system notifications from this event; that does not establish the provenance of every submitted or parent-written message. | Worker capture was denied by tool permissions. Instruction, hand-back, task-notification and peer-message captures remain unavailable. Batching and reminder formats are unverified. |
 | Copilot CLI 1.0.115-8 (2026-11-24) | Human questions and autopilot reminders have the same prompt-hook fields, but subsequent `user.message` records distinguish autopilot provenance. Synchronous and background assignments carry child identities and an agent source. Question-shaped handbacks arrive as tool results; completion arrives as a system notification, not a root prompt hook. | Prompt-hook fields alone do not establish origin. Peer-message, scheduled-prompt and batched-prompt routing remain unverified. |
 | Copilot CLI 1.0.116-1 (2026-11-24) | A fresh CLI invocation with this plugin denied a question-turn file redirect through the native pre-tool hook. Its emitted root message matches the earlier user-delivery evidence. Native pre-tool history records summarize a `toolCalls` batch; command hooks still receive individual tool inputs. | Resuming that disposable session with `--plugin-dir` emitted no hook events, so that invocation does not establish resumed enforcement. Custom callers that omit provenance cannot be distinguished from ordinary user delivery. |
 | Copilot CLI 1.0.116-2 (2026-11-24) | One interactive process allowed read-only research and denied a write during a user question. The next instruction launched a child with a question-shaped assignment; the child wrote its fixture and returned a question, after which the parent wrote its own fixture. Native hooks ran for both identities throughout. The prompt sequence included memory context with the same interaction identity. | Live interleaving of a new root question while a child is actively writing remains covered by isolated adapter tests, not this interactive run. Peer messages, scheduled prompts and other batching formats remain unverified. |
-| Codex 0.163.0 | Captured a root question and instruction. A worker returned a question-heavy report, but that return and the shell completion produced no additional prompt-hook invocation in this run. The documented prompt fields are `turn_id` and `prompt`, not origin. Stop-hook continuation reasons can act as new user prompts. | No verified positive user-origin signal. Child prompt, asynchronous notification, peer-message and Stop-continuation payloads were not captured. Batching and reminder formats are unverified. |
+| Codex 0.163.0 (2026-11-25) | The interactive CLI supplied matching `task_started.turn_attribution` and original `user.text` metadata. It allowed a read, denied a file redirect with the plugin's answer-only reason, then allowed the next user instruction to write its fixture in the same process. An app-server capture had the same user attribution. A separate exec capture used `exec`, which does not establish human origin. | The transcript format is not a stable hook API. Unknown triggers, steering, missing attribution and exec prompts remain guidance-only. Native child/peer routing is covered by offline adapter fixtures, not this live sequence. |
 
 Claude's hook documentation explicitly warns that transcripts are asynchronous
 and may not yet contain the current turn. The captures confirmed this at prompt
@@ -132,9 +150,12 @@ References for these specific contracts:
 
 - https://code.claude.com/docs/en/hooks#userpromptsubmit
 - https://code.claude.com/docs/en/hooks#common-input-fields
+- https://code.claude.com/docs/en/agent-sdk/typescript#sdkmessageorigin
 - https://docs.github.com/en/copilot/reference/hooks-reference#userprompttransformed
 - https://learn.chatgpt.com/docs/hooks#userpromptsubmit
 - https://learn.chatgpt.com/docs/hooks#stop
+- https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/tui/src/app_server_session.rs
+- https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/protocol/src/turn_input.rs
 
 The captures used an opt-in probe loaded from the feature worktree and a
 one-invocation Codex hook override. No persistent user hook registration points

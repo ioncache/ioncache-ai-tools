@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Deny recognized state changes while this agent's own user question is pending.
 
-guidance.py records the question state when a user prompt reaches a root
-identity. Read-only research remains available. The next non-question prompt
-to the same identity clears the restriction. Child identities never consult
-another identity's marker, so a question to one agent does not stop another.
+Native callers correlate their current root input with host provenance.
+The shared normalized-input contract uses guidance.py's identity-local marker.
+Read-only research remains available, and a new instruction clears the restriction.
+Children never consult another identity's evidence or marker.
 Shell matching catches common accidental actions, not every possible
 interpreter or shell construct.
 """
@@ -17,6 +17,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from classify_question import has_marker, is_root  # noqa: E402
+import claude_question  # noqa: E402
+import codex_question  # noqa: E402
 from hook_adapter_common import InvocationDeadline, invocation_deadline, unavailable  # noqa: E402
 from plugin_config import enabled  # noqa: E402
 from rule_engine import (  # noqa: E402
@@ -307,6 +309,11 @@ def evaluate(data):
     if not is_root(data) or not enabled('answer-questions', data):
         return None
     pending = data.get('_ioncache_native_question')
+    if (data.get('_ioncache_harness', 'claude') == 'claude'
+            and ('transcript_path' in data or 'prompt_id' in data)):
+        pending = claude_question.question_turn(data)
+    elif data.get('_ioncache_harness') == 'codex' and 'transcript_path' in data:
+        pending = codex_question.question_turn(data)
     if pending is None:
         pending = has_marker(data)
     if pending is not True:

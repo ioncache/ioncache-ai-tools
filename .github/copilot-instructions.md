@@ -74,11 +74,20 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   to the shared guard. It reads bounded local history without storing another
   permission state. Child identities, agent/automation/autopilot messages,
   completed root answers, and unknown or failed evidence must not fence work.
-  Claude and Codex still lack verified positive origin evidence.
+  `claude_question.py` correlates `prompt_id` with a root transcript message's
+  explicit `origin.kind: "human"`; completed answers and newer prompts release it.
+  `codex_question.py` requires a matching explicitly user-triggered turn without
+  delegated lineage and its original `user.text` input. Later user-role input
+  makes that attribution ambiguous and releases it. Exec and automated triggers
+  do not establish human origin. Both re-read bounded native history at tool time,
+  never persist another permission state or fall back to markers on missing evidence.
+  `question_history.py` owns the shared bounded, regular-file-only reader.
   Synthetic normalized-input tests do not establish native host support.
   See `docs/guardrails.md#prompt-origin-evidence-and-gaps` and the sanitized
   captures in `hooks/fixtures/prompt-origins.json` and
-  `hooks/fixtures/copilot-question-events.json`.
+  `hooks/fixtures/copilot-question-events.json`,
+  `hooks/fixtures/claude-question-events.json`, and
+  `hooks/fixtures/codex-question-events.json`.
   `claude_prompt.py` normalizes observed Claude framing at the guidance entry
   boundary. It removes system-reminder blocks from question text and recognizes
   task-notification or agent-message segments anywhere in a batch, not just
@@ -95,7 +104,7 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   including host-started, unknown-origin and parent-written turns. Neither
   an agent identity nor a parent identity may create a root question marker.
   A guidance or marker-clear failure must not create one afterward.
-  The guard uses only the caller's own marker or Copilot root-message evidence,
+  The guard uses only the caller's own marker or native root-message evidence,
   never a parent's state, so a root question cannot stop a running child.
   It denies `is_mutating`
   matches and `WORK_CONTROL_TOOLS` (launching, messaging, or stopping workers;
