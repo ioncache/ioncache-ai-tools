@@ -227,14 +227,14 @@ See [skills/autonomous-development/RECOVERY.md](skills/autonomous-development/RE
 
 Offline checks establish only the controller and adapter contracts they
 exercise. They do not establish native permissions, worker launch, result
-delivery or cancellation on a given host, cloud operation, or shared team
-controls. During execution, preflight records artifact access and native
-permissions, the handoff helper records fresh worker launch and result
-delivery, and review acceptance checks independent review, each from the
-selected host's evidence. Cancellation is the launcher's control and may remain
-deferred. Capabilities not yet established are reported as deferred, and
-specific missing ones with recovery options. An explicit authorization of the plan, models, limits and
-publication needs no separate trial approval or trial budget.
+delivery or cancellation on a given host. Execution establishes those from the
+selected host's evidence and reports any not yet established as deferred; see
+[skills/autonomous-development/WORKERS.md](skills/autonomous-development/WORKERS.md).
+Neither establishes cloud operation or shared team controls, which the consuming
+environment must provide.
+Authorization you already gave needs no separate trial approval or trial budget;
+see Prepare step 6 in
+[skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
 
 The launcher supplies the private store path and a cross-session monitor:
 

@@ -141,7 +141,12 @@ the revision or environment the evidence applies to:
 - **Same-PR task prerequisite:** the task's completion and acceptance evidence,
   not a separate merge.
 - **Cross-PR prerequisite:** the intended PR actually merged, with its required
-  changes present in the dependent base, as Prepare already verifies.
+  changes present in the dependent base. During execution, each PR's `prepare`
+  assignment waits until its prerequisite PRs are merged, then records the base
+  it prepared from ([WORKERS.md](WORKERS.md)). The controller checks the
+  reported merges and that this base descends from the approved one, not that
+  the prerequisite's changes reached it. When a prerequisite targets a
+  different branch, add a check that confirms them in the dependent base.
 - **Deployment, data, configuration or activation prerequisite:** evidence of
   the required state in the relevant environment. Merged code alone is not enough.
 
@@ -253,7 +258,9 @@ When GitHub publication is authorized:
   https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies
 - Link each PR to the issue or increment it actually completes. A closing
   keyword closes its issue when the PR merges into the default branch, so do not
-  use one for the parent on a partial PR:
+  use one for the parent on a partial PR. Record each PR's linked issue and
+  whether that PR may close it in the manifest `constraints`, which the workers
+  that write PR descriptions read:
   https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
 - Verify created issues and relationships. On retry, reconcile existing results
   instead of creating duplicates.
@@ -275,7 +282,7 @@ manifest fields.
 | Record | Required meaning |
 | --- | --- |
 | Delivery recommendation | One PR or several; reasons for the selected boundaries and material rejected alternatives. |
-| Increment map | Stable ID, goal or value, scope, proposed PR, issue or parent section, true dependencies, and safe post-merge state. |
+| Increment map | Stable ID, goal or value, scope, proposed PR, issue or parent section and whether that PR may close it, true dependencies, and safe post-merge state. |
 | Boundary contracts | Producers, consumers, shared authoritative contract, compatibility obligations and checks at each meaningful split. |
 | Prerequisite evidence | Required outcome and evidence source per dependency, its revision or environment, and handling of cancelled or replaced prerequisites. |
 | Conditional candidates | Predicate, investigation and evidence, retain, replace or remove decision, affected dependencies, and whether it was resolved before approval. |
@@ -322,5 +329,5 @@ Generic planning outcomes for common situations:
 | Existing children, partial publication failure or private source | Reuse existing children, report any relationship that could not be created with its cause, keep private details out of public issues, and continue unaffected work. |
 | Non-GitHub provider or unresolved decisions | Keep the selected provider and its native structure. Record open questions with provisional assumptions and continue authorized design instead of forcing GitHub or interactive questions. |
 | Enhanced planning disabled | Prepare uses its baseline step without this guide. Skill activation, reviews, audits, compatibility obligations and native permissions are unchanged. See [SKILL.md](SKILL.md). |
-| Already authorized execution | Recorded against the approved identity without a separate trial approval, repeated hash or invented budget prompt, under [SKILL.md](SKILL.md) Execute. This applies whether or not this guide is enabled. |
+| Already authorized execution | Recorded in `constraints` under [SKILL.md](SKILL.md) Prepare step 6, with only the publication permissions it names, without a separate trial approval, repeated hash or invented budget prompt. This applies whether or not this guide is enabled. |
 | Actual capability failure, or offline checks without end-to-end evidence | Report the failed operation, its evidence and recovery, or state the precise coverage limit, under [SKILL.md](SKILL.md) Execute. Never fabricate capability evidence. |

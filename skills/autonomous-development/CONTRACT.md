@@ -5,8 +5,10 @@ source of requirements. JSON is used for deterministic validation. Approval
 identifies its canonical JSON digest and every referenced artifact digest.
 It is an approval record, not authentication or a native permission grant.
 Explicit authorization the human already gave for this content and its
-execution is recorded against the identity; it needs no repeated consent or
-manually transcribed hash. Content outside that authorization needs new approval.
+execution is recorded in `constraints` before the identity is computed: where
+it was given and which permissions it names. It then needs no repeated
+consent or manually transcribed hash. Content or permissions outside that
+authorization need new approval; see [SKILL.md](SKILL.md) Prepare step 6.
 
 ## Manifest schema 1
 
@@ -123,7 +125,7 @@ fields or changed identities:
 | Boundary contracts | The authoritative design snapshot in each affected task's `artifacts`; producer and consumer obligations in task `compatibility`, `completion` and `checks` |
 | Prerequisite evidence | Plan or design text, plus the applicable `checks`, task `completion` or `compatibility`, or PR `rollout` for operational state |
 | Flag decision, rollout, rollback and cleanup | PR `rollout`, task `compatibility`, and checks for disabled and enabled paths |
-| Issue decision | Planning or design artifacts and their `source`; issues are not manifest records |
+| Issue decision | Planning or design artifacts and their `source`; issues are not manifest records. Each PR's linked issue and whether it may close it go in `constraints`, which the PR publishers read |
 | Shared scope, decisions and accepted risks | `constraints` |
 | Conditional candidates and unresolved uncertainty | The human-readable design only, until resolved |
 

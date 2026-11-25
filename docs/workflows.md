@@ -88,16 +88,11 @@ Accepted exceptions remain visible. Neither the controller nor its workers may
 approve or merge PRs, force-push, deploy, or silently expand approved scope.
 
 Offline lifecycle checks do not establish native permissions, worker launch,
-result delivery, cancellation or resume on a given host. During execution,
-preflight records artifact access and native permissions, the handoff helper
-records fresh worker launch and result delivery, and review acceptance checks
-independent review, each from available host evidence. Cancellation is the
-launcher's control and may remain deferred, and no execution step establishes
-resume. Capabilities not yet established are reported as deferred, and specific
-missing ones with recovery options. Explicit authorization already given for
-the plan, its models, bounded execution and publication needs no separate trial
-approval or trial budget; see step 6 of
-[the skill](../skills/autonomous-development/SKILL.md).
+result delivery or cancellation on a given host. Execution establishes those
+from the selected host's evidence and reports any not yet established as
+deferred; see [the worker contract](../skills/autonomous-development/WORKERS.md).
+Authorization already given needs no separate trial approval or trial budget;
+see Prepare step 6 of [the skill](../skills/autonomous-development/SKILL.md).
 Hosting, shared storage, team controls, notification services, and browser/upload
 capabilities are consuming-environment requirements, not provisioned services.
 

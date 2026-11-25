@@ -32,7 +32,9 @@ the assignment or stop workers. Hand-backs are not user questions.
    GitHub issues and Notion pages are optional destinations, not prerequisites.
 4. Establish task and PR boundaries, dependencies, exact acceptance commands,
    behavioral scope, compatibility, flags, intermediate states, rollout, rollback,
-   and cleanup. Several tasks may form one PR. First resolve the incremental
+   and cleanup. Several tasks may form one PR. When PRs will link issues, record
+   in `constraints` each PR's linked issue and whether that PR may close it,
+   because the PR publishers read it there. First resolve the incremental
    planning setting below. When it is enabled, make these decisions with
    [PLANNING.md](PLANNING.md): PR slicing, the feature-flag decision, issue
    structure, boundary contracts, prerequisite evidence and conditional candidates.
@@ -46,10 +48,21 @@ the assignment or stop workers. Hand-backs are not user questions.
 6. Resolve permissions and finite limits explicitly. Approval of document content
    is not native host permission. Do not infer publication or model budgets.
    Reuse explicit authorization the human already gave for this plan, its
-   models, bounded execution and publication: record it against the returned
-   identity and pass that identity to `init` yourself. Do not ask them to repeat
-   consent or transcribe the hash. Ask only about choices that authorization
-   does not cover, such as content changed outside its scope.
+   models, bounded execution and the publication it names. Before computing the
+   identity, record in manifest `constraints` where that authorization was given
+   and what it covers, so the approved identity includes it and the audit can
+   cite it as evidence. Keep it out of hosted plan sources, whose snapshots must
+   still match them. Then pass the returned identity to `init` yourself. Do not
+   ask the human to repeat consent or transcribe the hash.
+   Each publication permission needs its own coverage: PR publication (`push`,
+   `create_pr`, `mark_ready`), wiki audit publication (`publish_audit`),
+   follow-up issues (`create_follow_up_issues`) and UI evidence upload
+   (`screenshots`) to its destination. An authorization names a permission when
+   it states that permission, or when it approves a presented plan that showed
+   the permission's value together with any explanation below for it. Reuse
+   covers only those it names. Ask about any it does not name, with the
+   explanations below for audit and follow-up publication, and about content
+   changed outside the authorization's scope.
    Resolve native model and effort choices before launch under
    [MODELS.md](MODELS.md), including suitable implementation, adjudication and
    fixing choices. Bookkeeping runs in Python, not a model.
@@ -59,16 +72,18 @@ the assignment or stop workers. Hand-backs are not user questions.
    Size review allowances using the rule in CONTRACT.md, including independent
    category, adjudication, validation, owner and correction calls.
    Include `permissions.publish_audit` explicitly in new manifests, proposing
-   `true` for GitHub PRs. Explain the repository wiki, newest-first audit index,
-   public narrative review and PR-body links before approval. Confirm that the
+   `true` for GitHub PRs. Unless reused authorization names it, explain the
+   repository wiki, newest-first audit index, public narrative review and
+   PR-body links before the human decides. Confirm that the
    wiki is initialized and writable. A declined permission or
    the independent audit opt-out leaves publication disabled, not implied.
    Budget two additional assignments per PR plus any publication retries.
    See [AUDIT.md](AUDIT.md) for the export and publication contract.
    Also resolve `permissions.create_follow_up_issues`, proposing `true` for
-   automatic issue creation by the existing PR publishers. Explain deduplication,
-   safe disclosure and the independent publication opt-out in
-   [FOLLOW_UPS.md](FOLLOW_UPS.md). This needs no extra assignment or per-ticket approval.
+   automatic issue creation by the existing PR publishers. Unless reused
+   authorization names it, explain deduplication, safe disclosure and the
+   independent publication opt-out in [FOLLOW_UPS.md](FOLLOW_UPS.md) before the
+   human decides. This needs no extra assignment or per-ticket approval.
 
 Run the helper by resolving `../../scripts/development_run.py` relative to this
 installed skill directory:
@@ -172,11 +187,17 @@ another provider or launch an external CLI. An explicitly selected headless Clau
 session can use the native Workflow tool under its normal host permissions;
 that is different from replacing native orchestration with ad hoc CLI workers.
 
-Preflight verifies artifact access and records read-only evidence for native
-permissions. Capabilities a single worker cannot exercise are recorded as
+Offline self-checks establish only the controller, handoff and generated-script
+contracts they exercise, not a given host's capabilities. Execution establishes
+those from the selected host's evidence, as [WORKERS.md](WORKERS.md) preflight
+defines: preflight verifies artifact access and records read-only evidence for
+native permissions. Capabilities a single worker cannot exercise are recorded as
 deferred to the step that establishes them: the handoff helper observes fresh
-launch and result delivery, review acceptance checks independent coverage, and
+launch and result delivery, review acceptance checks independent review, and
 the launcher holds cancellation. Only an observed absence blocks preflight.
+Report a capability that no step has established as deferred, never as
+established. State that precise coverage limit, not an undefined qualification
+label.
 Approved manifest permissions are the human's explicit authorization for their
 operations; delivery prompts say so, so ambient instructions that defer an
 operation to explicit approval do not block it. The adapter
@@ -190,21 +211,10 @@ ignore them and use only their explicitly assigned ruleset. Disclose observed
 ambient sources; their presence must not stop execution, make coverage partial,
 or trigger replacements.
 
-Offline self-checks establish only the controller, handoff and generated-script
-contracts they exercise. They do not show that a given host provides artifact
-access and native permissions, launches fresh workers, keeps review independent,
-delivers results or honors cancellation. Under [WORKERS.md](WORKERS.md),
-preflight records artifact access and native permissions from the selected
-host's evidence, the handoff helper records fresh launch and result delivery,
-review acceptance checks independent review, and the launcher holds
-cancellation, recorded as available or deferred. Report a capability that no
-step has established as deferred, never as established. State that precise
-coverage limit, not an undefined qualification label.
-Explicit authorization the human already gave for the plan, models, bounded
-execution and publication covers ordinary execution: do not request a separate
-trial approval, repeated consent or a trial budget. Keep the approved finite
-logical limits, honor available native resource controls, and disclose that
-logical limits are not time or spending caps.
+Explicit authorization recorded under Prepare step 6 covers ordinary execution:
+do not request a separate trial approval, repeated consent or a trial budget.
+Keep the approved finite logical limits, honor available native resource
+controls, and disclose that logical limits are not time or spending caps.
 When an operation fails because a capability is missing or a host permission is
 denied, report that operation, its evidence and the available recovery options,
 preserving state and consumed limits. Do not fabricate capability evidence, claim

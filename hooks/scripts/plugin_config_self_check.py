@@ -1154,6 +1154,17 @@ class ConfigurationTests(unittest.TestCase):
         result = self.planning_lookup(plugin, project)
         self.assertEqual((result.returncode, result.stdout), (0, 'true\n'), result.stderr)
 
+    def test_incremental_planning_lookup_is_false_when_the_catalog_lacks_the_setting(self):
+        name = 'autonomous-development-incremental-planning'
+        plugin = self.root / 'older-plugin'
+        (plugin / 'hooks/scripts').mkdir(parents=True)
+        # plugin_config locates its catalog from its own resolved path, so a symlink would read the real one.
+        (plugin / 'hooks/scripts/plugin_config.py').write_bytes(Path(config.__file__).read_bytes())
+        catalog = {key: True for key in config.defaults() if key != name}
+        self.write(plugin / 'config/defaults.json', {'features': catalog})
+        result = self.planning_lookup(plugin)
+        self.assertEqual((result.returncode, result.stdout), (0, 'false\n'), result.stderr)
+
     def test_incremental_planning_lookup_is_effective_read_only_and_independent(self):
         name = 'autonomous-development-incremental-planning'
         paths = config.paths(self.project)
