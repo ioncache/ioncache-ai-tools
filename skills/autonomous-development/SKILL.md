@@ -227,8 +227,9 @@ Ticket failures remain visible but do not add readiness gates. Mark a PR
 ready only for its verified revision. Never approve or merge it, force-push,
 push the default branch, deploy, or change production flags.
 When audit publication is approved and enabled, publish initial evidence after
-creating the draft PR and final evidence before readiness. Preserve both immutable
-links. Report disabled publication explicitly; never upload the private run store.
+creating the draft PR and final evidence before readiness. Update one readable
+wiki page per PR; preserve prior versions in wiki history and retained receipts.
+Report disabled publication explicitly; never upload the private run store.
 For a stopped, failed or completed run, `development_audit.py archive` followed
 by `publish-archive` publishes reviewed historical evidence without reserving
 work or changing outcomes, history or allowances. Follow [AUDIT.md](AUDIT.md)

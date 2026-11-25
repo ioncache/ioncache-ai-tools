@@ -16,13 +16,28 @@ remain unchanged, and deleting an implementation branch does not delete the wiki
 This adapter supports github.com HTTPS and SSH repository URLs, not another
 hosting provider, GitHub Enterprise Server, or cross-repository PRs.
 
-Each publication creates separately named report and JSON files:
-`Audit-PR-<number>-run-<run-id>-<assignment-id>-<bundle-identity>.md` and `.json`.
+Keep one current report and matching JSON file per PR. The page title is
+`Audit: PR #<number>, <PR title in sentence case>`. For example:
+`Audit:-PR-#69,-incremental-delivery-planning-for-autonomous-development.md`
+and `.json`. The filename supplies the wiki title; do not repeat it as an H1
+inside the report. Links encode `#` as `%23`, while keeping `:` and `,` literal.
+Spaces become filename hyphens; literal title hyphens use U+2010 to retain their
+display. The helper preserves leading acronyms, removes unsafe filename
+characters and bounds the title's UTF-8 length. This title style intentionally
+uses `:`, despite GitHub's warning about Windows-incompatible filename characters.
+
 The initial publication follows draft creation. The final publication follows
 full-PR review, the accepted commit and any approved UI evidence, before readiness.
-The helper never overwrites different bytes at an existing publication path.
-Retain both versions and the wiki history. Repository access, deletion and
-retention policies still apply; the wiki is not tamper-proof archival storage.
+The final audit replaces the initial page and data in place. A later title change
+renames that pair on the next reviewed export; recognized older per-run audit
+pairs for that PR are removed from the current tree. Do not keep superseded page
+copies. Wiki Git history and retained receipts preserve prior versions.
+Partial pairs, symlinks, unrecognized content and foreign-PR data are not replaced:
+restore the pair from wiki history or preserve conflicting content under another
+page name, then retry. Title-based pairs require schema-2 PR ownership metadata;
+schema-1 pairs are recognized only under legacy per-run names.
+Unrelated wiki pages remain untouched. Repository access,
+deletion and retention policies still apply; the wiki is not tamper-proof storage.
 
 Update the `Automated-Pull-Request-Audits` wiki page automatically. Create that
 page if it is absent from an initialized wiki. Its table has `Date`,
@@ -30,7 +45,8 @@ page if it is absent from an initialized wiki. Its table has `Date`,
 newest publication and replace that PR's previous row, leaving other rows and
 surrounding content intact. Use the UTC publication date, PR number/title/link,
 and links to the report and JSON. Repeating the same publication leaves its
-existing row in place rather than duplicating or reordering it.
+matching row in place rather than duplicating or reordering it. A missing or
+altered managed row is rebuilt on retry without changing other PR rows.
 
 Keep the index discoverable from the existing `Home.md` or `Home.markdown`.
 If both exist, preserve and update both rather than relying on GitHub's
@@ -105,15 +121,31 @@ The helper mechanically projects:
 - Assignment IDs, roles, attempts, outcomes and report/worker identity hashes.
 - Available review ledgers' iteration counts, findings, observations, decisions,
   fix results, check outcomes, event ordering, timestamps and evidence hashes.
+  Pass names and known category identifiers come from recorded review structure;
+  missing category evidence stays unavailable, not inferred from all reviewers.
+  Read `review_type` from JSON evidence or `review_type=<category>` tokens.
+  A recognized pass name is the fallback when its evidence has no known category.
 - Execution limits, consumed assignments and explicit unavailable metrics.
 - Requested native models/efforts and separately observed actual identities,
   their observation source and an evidence digest, tied to assignment/role.
   Control calls are run-level observations, not invented assignments.
 
-It does not copy input documents, source blobs, raw report bodies, prompts,
-private paths, diagnostic strings or arbitrary event reason/evidence fields.
+Schema-2 JSON adds publication metadata, requested model selections and structured
+public finding details. Every finding has `title`, `summary`, `reason`,
+`locations`, `category`, `pass`, `tracking_issues` and public decision reasons.
+The short reason is the first sentence of the final public decision reason.
+The helper does not automatically copy input documents, source blobs, raw report
+bodies, prompts, private paths, diagnostic strings, finding keys or arbitrary
+event reason/evidence fields. Keys, locations and decision prose must be supplied
+in the separately reviewed public narrative. Categories and pass membership are
+mechanical; their identifiers still require publication review.
 Review progress checkpoints remain private and are not exported as evidence.
 Model observations project only the fields above, not their raw private files.
+Requested models and efforts combine saved dispatch job options with advisory
+selections, deduplicated per role. Partial observations do not hide other saved
+requests. Dispatch options include explicit overrides and configured fallbacks.
+Raw manifest and launch defaults are not evidence of an effective request.
+When neither record exists, the requested selection remains unknown.
 Their export-time snapshot stays fixed during acknowledgment; later observations
 do not revoke approval of unchanged published bytes.
 Model IDs, including private deployment identifiers, still need publication
@@ -134,14 +166,31 @@ The assigned worker separately writes publication-safe narrative JSON:
 ```json
 {
   "summary": "What was implemented and how the process ended.",
-  "method": "Review coverage, criteria, configuration, model observations and limitations.",
-  "verification": "What checks established and what remains unverified.",
+  "method": "Review coverage and any context not captured mechanically.",
+  "issues": ["https://github.com/owner/repo/issues/61"],
+  "planning": {
+    "model": null,
+    "effort": null,
+    "human_approved": true
+  },
+  "verification": [
+    {"check": "Targeted tests", "result": "Passed", "runner": "implementer"},
+    {"check": "Post-run check", "result": "Passed", "runner": "run by hand after the run stopped"}
+  ],
+  "not_verified": "Name what was not verified; do not infer live-host coverage.",
   "findings": [
     {
       "review": "<review-run-id>",
       "id": "F001",
+      "key": "documentation-pr-links",
       "summary": "A description safe for this repository's audience.",
-      "rationale": "Validation and decision history, including why it was fixed or rejected."
+      "rationale": "A public explanation of the disposition.",
+      "locations": ["docs/usage.md:20-25"],
+      "decisions": [
+        {"sequence": 6, "reason": "The links were broken. Public details of the initial assessment."},
+        {"sequence": 12, "reason": "The links now resolve. Public details of the final assessment."}
+      ],
+      "tracking_issues": []
     }
   ],
   "regressions": [],
@@ -150,10 +199,61 @@ The assigned worker separately writes publication-safe narrative JSON:
 ```
 
 Account for every finding in every available ledger, including rejected and
-ignored candidates. Preserve meaningful decision changes, not just the last
-label. Describe effective review coverage, checks and selection choices from
+ignored candidates. Supply every decision's actual ledger sequence in order;
+the example numbers are placeholders. Preserve meaningful decision changes, not
+just the last label. Use a publication-safe version of the finding key; the
+helper removes category prefixes and humanizes words such as PR and JSON.
+Locations must be repository-relative, optionally with line numbers. Tracking
+and top-level issue references must be GitHub issue URLs. Supply tracking links
+for out-of-scope work when available; do not invent an issue or infer a link from
+private input references.
+
+Narrative strings are plain text; the renderer escapes Markdown and HTML
+structure. `issues`, `planning` and `not_verified` are optional. Record the
+launching session's planning model and human approval only from evidence. The
+`prepare` worker is worktree/branch setup, never planning or design.
+Missing model records remain unknown. Review, implementation and delivery
+models are grouped by stage without inferring observed identities from requests.
+Legacy narratives with a verification string and summary/rationale-only findings
+remain readable, with explicit missing-runner and missing-detail notices. They
+never acquire private locations or decision prose automatically.
+
+Describe effective review coverage, checks and selection choices from
 actual records; do not infer success or observable model identity from defaults.
 The helper validates finding references and completeness, not narrative truth.
+
+## Human report layout
+
+The helper renders the link/date/stage line, outcome counts, finding key, review
+pass table, model-by-stage table, verification table and known gaps. It groups
+findings as Fixed; Real problems not fixed in this PR; Accurate observations,
+no change needed; and Rejected. Rejected entries are collapsed. Within each
+group, sort by impact, category, then display number. Display numbers are unique
+across available ledgers; their ledger mapping appears only under Identifiers.
+
+Use the recorded status, not an inferred resolution:
+
+| Validation / disposition | Public wording |
+| --- | --- |
+| valid / open | Confirmed, to be fixed |
+| valid / fixed | Confirmed, fixed |
+| valid / out_of_scope | Confirmed, outside this PR |
+| valid / ignored | Confirmed, no change needed |
+| invalid / ignored | Rejected, not a defect |
+
+Applied but unverified fixes and failed fixes remain unfixed. Pending or uncertain
+claims get an additional Unresolved section rather than being called confirmed
+or rejected. Missing histories contribute no invented findings or clean results.
+The report shows the first and final public decision sentences for fixed
+findings, or the final reason otherwise, up to four locations (not for rejected
+findings), and the complete public decision history under a disclosure.
+Horizontal rules separate consecutive findings, not section introductions.
+
+The assignment table comes near the end. Identifiers is last: run and ledger
+IDs, reviewed commit, observed PR head and any mismatch, plus the structured
+evidence bundle's SHA-256. The exact two-file approval identity stays in the
+receipt: embedding that digest into its own Markdown input would be circular.
+No mechanically generated hashes appear above Identifiers.
 
 An established regression relationship has `cause` and `effect` objects, each
 with `review` and `id`, plus `basis` (`observed` or `inferred`) and public `evidence`.
@@ -173,7 +273,16 @@ python3 "/absolute/plugin/scripts/development_audit.py" export "/private/run" \
 ```
 
 The helper writes two files under that assignment's private `audit/` directory
-and returns their combined identity. Read both complete files. Check publication
+and returns their combined identity. Export reads the open PR to freeze its
+title, head and UTC date before rendering. A title with no usable filename text
+must be corrected before export writes either file. Publication and acknowledgment
+reuse that metadata; a title or head change requires a fresh export and review.
+The publication date is the UTC date at push initiation, not remote acceptance.
+If it changes before the first push, regenerate and review the export.
+Retries of an already published identical bundle retain its original date and
+remain idempotent on later days.
+Historical exports do not fetch a live PR head and explicitly leave it unobserved.
+Read both complete files. Check publication
 scope, secrets, personal data, private-source references, accuracy and missing
 evidence. Revise the public narrative and export again if necessary.
 This semantic review is required: allowlisted structure is not an automatic
@@ -200,10 +309,17 @@ HTTPS Git operations use `gh auth git-credential` in the temporary checkout;
 SSH URLs retain Git's SSH authentication. Verify the chosen credential's actual
 wiki access rather than inferring it from access to the implementation repository.
 Before pushing, the helper verifies the two approved files, generated index and
-Home bytes, and rejects any unrelated changed files. Other wiki files remain
-untouched. Existing page bytes come from the fetched commit, not the checkout
-that smudge filters can transform. Filters or commit hooks cannot silently change the published bundle
-or navigation.
+Home bytes and removal of superseded audit pairs, and rejects unrelated changed
+files. Existing page bytes come from the fetched commit, not the checkout that
+smudge filters can transform. Filters or commit hooks cannot silently change the
+published bundle or navigation, or retain a superseded page.
+After pushing, the helper verifies the approved pair, this PR's managed index
+row, visible Home navigation and the absence of other recognized audit pages
+for this PR at the fetched wiki head, including pages absent before the push.
+Missing, changed or non-regular publication files, a missing or changed PR row,
+or restored superseded paths prevent receipt creation. Other PRs' pages, index rows,
+their order and surrounding text may change; the whole index need not match.
+The receipt identifies that confirmed commit.
 It respects Git signing configuration. Missing access or signing failures
 produce failure, not a fallback destination or a false successful receipt.
 
@@ -249,7 +365,10 @@ The URL is retained in the receipt, not written into workflow state.
 The command uses the same guarded wiki push, index and Home updates, PR link
 block and confirmed PR reread as normal publication. After confirmation, it
 atomically saves `receipt.json` beside the archive's two files, including the
-manifest approval identity and `publish_audit` authorization basis.
+manifest approval identity and `publish_audit` authorization basis. The first
+publication records its observed PR title and UTC publication date in the
+attempt and receipt. Retries retain that metadata without changing the approved
+historical export, whose own date describes export rather than publication.
 
 A normal retry with a valid receipt acknowledges that historical publication.
 It verifies the approved archive bytes, receipt, PR target and authorization,
@@ -259,16 +378,20 @@ current PR acceptance, current navigation or continued remote availability.
 Permissions, feature opt-outs and approved-input checks still apply.
 
 Without a receipt, publication still requires fresh matching run evidence and
-the exact current PR head. Before remote writes, the helper saves
-`publication-attempt.json` with the original managed PR block and wiki-row
-digests. Retries can finish effects that still match those originals or this
-archive. Unrelated PR text and other PRs' rows do not prevent recovery.
-If either audit pointer has changed to another record, report the publication
-as partial or superseded and preserve the newer navigation. A receipt write
+the exact current PR head. A new archive records a pending
+`publication-attempt.json`; exporting the same bundle again does not reset it.
+Before remote writes, the helper binds that attempt to the target and saves the
+original managed PR block, wiki row and same-PR report/data digests. Retries can
+finish effects that still match those originals or this archive. Unrelated PR
+text and other PRs' rows do not prevent recovery.
+If either pointer or the same-page audit bytes have changed to another record,
+report publication as partial or superseded and preserve the newer audit.
+A receipt write
 failure remains incomplete; matching effects can be confirmed and receipted
 without another wiki commit or PR update. For older publications without an
-attempt record, existing archive pages require matching index and PR links
-before automatic recovery.
+attempt record, existing archive pages require matching approved bytes, index
+and PR links before automatic recovery. A matching row retains its original
+publication date.
 
 To intentionally make the same approved archive current again, use
 `publish-archive STORE --pr ID --approved IDENTITY --republish`. This starts
@@ -292,8 +415,9 @@ does not complete a pending audit assignment or mark a PR ready.
 If a response is lost, inspect the existing export, wiki files and PR body.
 Live publication retries reuse matching files and links without creating
 another row, commit or PR update. Archive retries follow the acknowledgement
-and supersession rules above. Page names include the run, assignment and
-export identities. Different assignments retain distinct publication records.
+and supersession rules above. Changed audit bytes update the same PR's page
+and move its index row to the top even when its URL is unchanged. Different
+assignments retain separate private bundles and receipts, not public page copies.
 Concurrent wiki pushes are retried at most three times by fetching the new head
 and rebuilding the table edit; never force-push or discard another writer's rows.
 If contention continues, retry the same export within the assignment's limits.
@@ -302,8 +426,12 @@ but does not spend or refund development assignments.
 
 If the table or managed PR link block was edited into an unsupported shape,
 preserve the human content and repair only the structure before retrying.
+Keep the managed table unindented and outside fenced code and HTML blocks. Preserve
+unrelated code examples and notes when restoring the table.
 Move human notes outside the managed link block; do not discard them. Consolidate
-duplicate rows for this PR without deleting their audit records.
+duplicate rows for this PR while preserving human content and wiki history.
+Bare and angle-bracket PR link destinations identify the same row; confirmation
+still requires the exact approved row text.
 The publisher rereads the PR after pushing the wiki and verifies its body after
 updating it. GitHub's body update is not an atomic compare-and-swap: avoid
 concurrent PR-description writers, since an edit between the final read and

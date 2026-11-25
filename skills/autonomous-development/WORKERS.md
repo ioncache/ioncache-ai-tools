@@ -354,7 +354,9 @@ or `ready`), and `evidence` identifying the actual observed remote state.
 When audit publication is enabled, verify the retained final receipt and its PR
 links refer to the final wiki audit for this same code commit before marking ready.
 Preserve the managed `Audit` link block when updating the description, along with
-existing human text. Keep initial and final wiki files; neither is a review approval.
+existing human text. Keep one current report/data pair per PR; preserve earlier
+versions through wiki Git history and retained publication receipts. Neither an
+audit nor its receipt is a review approval.
 When disabled, disclose
 that no final audit was published rather than presenting initial evidence as final.
 The final human report includes the named unresolved list and publication
