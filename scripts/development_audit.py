@@ -500,6 +500,17 @@ def index_list_indent(line, paragraph):
     return marker.end() if 1 <= padding <= 4 else marker.end() - padding + 1
 
 
+def index_interrupts_lazy_paragraph(line):
+    fence = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
+    return bool(
+        not line.strip(" ") or
+        re.match(r" {0,3}(?:#{1,6}(?: |$)|>)", line) or
+        re.fullmatch(r" {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})", line) or
+        index_list_indent(line, False) is not None or
+        index_html_block_end(line, True) is not None or
+        (fence and (fence[1][0] == "~" or "`" not in fence[2])))
+
+
 class IndexBlock:
     def __init__(self):
         self.fence = None
@@ -507,16 +518,20 @@ class IndexBlock:
         self.list_indent = None
         self.child = None
         self.paragraph = False
+        self.has_content = False
 
     def container_line(self, line):
         if self.list_indent is not None:
-            if not line.strip(" ") or len(line) - len(line.lstrip(" ")) >= self.list_indent:
+            if not line.strip(" "):
+                return "" if self.child.has_content else None
+            if len(line) - len(line.lstrip(" ")) >= self.list_indent:
                 return line[self.list_indent:]
             return None
         quote = re.match(r" {0,3}> ?", line)
         return line[quote.end():] if quote else None
 
     def header(self, line):
+        self.has_content = self.has_content or bool(line.strip(" "))
         marker = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
         if self.fence is not None:
             if (marker and marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence)
@@ -533,8 +548,11 @@ class IndexBlock:
                 self.child.header(content)
                 self.paragraph = self.child.paragraph
                 return False
+            if self.child.paragraph and not index_interrupts_lazy_paragraph(line):
+                return False
             self.child = None
             self.list_indent = None
+            self.paragraph = False
         if re.fullmatch(r" {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})", line):
             self.paragraph = False
             return False
@@ -556,7 +574,7 @@ class IndexBlock:
             self.paragraph = False
             return False
         heading = re.match(r" {0,3}#{1,6}(?: |$)", line) or (
-            self.paragraph and re.fullmatch(r" {0,3}=+ *", line))
+            self.paragraph and re.fullmatch(r" {0,3}(?:=+|-+) *", line))
         reference = not self.paragraph and re.fullmatch(
             r""" {0,3}\[(?:\\.|[^\]\\])+\]: *(?:<[^<>]*>|[^ <>\t]+)"""
             r"""(?: +(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))? *""", line)

@@ -2619,7 +2619,9 @@ class DevelopmentRunTests(unittest.TestCase):
         other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
         human_notes = "Human notes for the audit index.\n\n"
         if change == "fenced-table":
-            human_notes += "1. ```text\n   Keep this example\n   ```\n\n"
+            human_notes += ("1. ```text\n   Keep this example\n   ```\n\n"
+                            "Heading\n--\n<custom>\n```\n</custom>\n\n"
+                            "- Note\ncontinued\n\n  ```text\n  Keep this example too\n\n")
         errors = {"duplicate-row": "consolidate this PR's row", "equivalent-row": "consolidate this PR's row",
                   "fenced-table": "outside fenced code blocks"}
         error = errors.get(change, "Published audit index changed")

@@ -573,7 +573,8 @@ class AuditFormatTests(unittest.TestCase):
         table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
         prefixes = ("```\n", "~~~markdown\n", "   ````python\n",
                     "````\n```\n", "```\n~~~\n", "```\n```not-a-close\n",
-                    "```\n    ```\n")
+                    "```\n    ```\n", "- Note\n2. continued\n\n  ```text\n",
+                    "1. Note\n100. continued\n\n   ```text\n", "- Note\n-\n\n  ```text\n")
         for prefix in prefixes:
             with self.subTest(prefix=prefix):
                 text = prefix + table + "````\n"
@@ -639,6 +640,13 @@ class AuditFormatTests(unittest.TestCase):
             "1. ```text\n   example\n   ```\n\n",
             "- Human example:\n\n  ```text\n  example\n\n",
             "- Outer:\n  - ```\n    nested example\n    ```\n\n",
+            "- Note\ncontinued\n\n  ```text\n  example\n\n",
+            "1. Note\ncontinued\n\n   ```text\n   example\n\n",
+            "- Outer\n  - Note\ncontinued\n\n    ```text\n    example\n\n",
+            "> - Note\ncontinued\n>\n>   ```text\n>   example\n>\n\n",
+            "- Note\n2. continued\n\n  ```text\n  example\n\n```\n\n",
+            "1. Note\n100. continued\n\n   ```text\n   example\n\n```\n\n",
+            "1. Note\n-\n  ```text\n  example\n\n",
             "> ```\n> Quoted example\n> ```\n\n",
             "- ```\n  example\n<custom>\n```\n</custom>\n\n",
             "<!-- Archived fence:\n```\n-->\n\n",
@@ -651,6 +659,9 @@ class AuditFormatTests(unittest.TestCase):
             '<custom-tag title="example">\n```\n</custom-tag>\n\n',
             "```\n<!-- Not an HTML block inside a fence\n```\n\n",
             "Heading\n===\n<custom>\n```\n</custom>\n\n",
+            "Heading\n--\n<custom>\n```\n</custom>\n\n",
+            "Heading\n-\n<custom>\n```\n</custom>\n\n",
+            "Heading\n   --  \n<custom>\n```\n</custom>\n\n",
             "[example]: /reference\n<custom>\n```\n</custom>\n\n",
         )
         for example in examples:
@@ -670,14 +681,17 @@ class AuditFormatTests(unittest.TestCase):
                        "data_url": "https://example.invalid/data"}
         table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
         for paragraph in ("- Human note\n", "> Human note\n", "- Note\n\n  Continued note\n",
+                          "- Note\ncontinued\n", "1. Note\ncontinued\n", "> Note\ncontinued\n",
+                          "- Note\n--\n", "> Note\n===\n",
                           "A paragraph\n    Indented continuation\n", "[example]: invalid reference text\n",
                           "Human introduction\n[reference]: /reference\n"):
-            with self.subTest(paragraph=paragraph):
-                content = paragraph + "<custom>\n```\n\n" + table + "```\n"
-                with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
-                    audit.index_entry(content, publication)
-                with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
-                    audit.published_index_matches(content.encode(), publication)
+            for fence in ("```", "~~~"):
+                with self.subTest(paragraph=paragraph, fence=fence):
+                    content = paragraph + f"<custom>\n{fence}\n\n" + table + f"{fence}\n"
+                    with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                        audit.index_entry(content, publication)
+                    with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                        audit.published_index_matches(content.encode(), publication)
 
 
 if __name__ == "__main__":
