@@ -314,6 +314,9 @@ def render(bundle):
         top += " &#183; Issue: " + ", ".join(issue_link(url, repo) for url in public["issues"])
     top += f" &#183; {'Exported' if bundle['stage'] == 'archive' else 'Published'} {publication['date']} as {stage}"
     lines = [top, "", "## Outcome", "", text(public["summary"]), ""]
+    if bundle["stage"] == "archive":
+        lines += [f"Historical run outcome: {code(bundle.get('run_outcome', 'Not recorded'))}.",
+                  "This publication does not establish current PR review acceptance.", ""]
     lines += table(["Result", "Findings", "Meaning"], outcome_rows(items))
     lines += ["### How to read each finding", "",
               "- **Confirmed / Rejected:** whether the adjudicator accepted the claim.",

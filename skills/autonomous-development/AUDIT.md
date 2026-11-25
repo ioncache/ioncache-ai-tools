@@ -314,8 +314,8 @@ files. Existing page bytes come from the fetched commit, not the checkout that
 smudge filters can transform. Filters or commit hooks cannot silently change the
 published bundle or navigation, or retain a superseded page.
 After pushing, the helper verifies the approved pair, this PR's managed index
-row and the absence of other recognized audit pages for this PR at the fetched
-wiki head, including pages that were absent before the push.
+row, visible Home navigation and the absence of other recognized audit pages
+for this PR at the fetched wiki head, including pages absent before the push.
 Missing, changed or non-regular publication files, a missing or changed PR row,
 or restored superseded paths prevent receipt creation. Other PRs' pages, index rows,
 their order and surrounding text may change; the whole index need not match.
@@ -365,7 +365,10 @@ The URL is retained in the receipt, not written into workflow state.
 The command uses the same guarded wiki push, index and Home updates, PR link
 block and confirmed PR reread as normal publication. After confirmation, it
 atomically saves `receipt.json` beside the archive's two files, including the
-manifest approval identity and `publish_audit` authorization basis.
+manifest approval identity and `publish_audit` authorization basis. The first
+publication records its observed PR title and UTC publication date in the
+attempt and receipt. Retries retain that metadata without changing the approved
+historical export, whose own date describes export rather than publication.
 
 A normal retry with a valid receipt acknowledges that historical publication.
 It verifies the approved archive bytes, receipt, PR target and authorization,
@@ -375,16 +378,20 @@ current PR acceptance, current navigation or continued remote availability.
 Permissions, feature opt-outs and approved-input checks still apply.
 
 Without a receipt, publication still requires fresh matching run evidence and
-the exact current PR head. Before remote writes, the helper saves
-`publication-attempt.json` with the original managed PR block and wiki-row
-digests. Retries can finish effects that still match those originals or this
-archive. Unrelated PR text and other PRs' rows do not prevent recovery.
-If either audit pointer has changed to another record, report the publication
-as partial or superseded and preserve the newer navigation. A receipt write
+the exact current PR head. A new archive records a pending
+`publication-attempt.json`; exporting the same bundle again does not reset it.
+Before remote writes, the helper binds that attempt to the target and saves the
+original managed PR block, wiki row and same-PR report/data digests. Retries can
+finish effects that still match those originals or this archive. Unrelated PR
+text and other PRs' rows do not prevent recovery.
+If either pointer or the same-page audit bytes have changed to another record,
+report publication as partial or superseded and preserve the newer audit.
+A receipt write
 failure remains incomplete; matching effects can be confirmed and receipted
 without another wiki commit or PR update. For older publications without an
-attempt record, existing archive pages require matching index and PR links
-before automatic recovery.
+attempt record, existing archive pages require matching approved bytes, index
+and PR links before automatic recovery. A matching row retains its original
+publication date.
 
 To intentionally make the same approved archive current again, use
 `publish-archive STORE --pr ID --approved IDENTITY --republish`. This starts

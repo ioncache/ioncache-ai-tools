@@ -871,6 +871,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.audit_body_updates = []
         self.audit_title = "Fixture pull request"
         self.lose_audit_response = False
+        self.enterContext(patch.object(audit, "api", self.audit_api))
 
     def audit_export(self):
         state = development.load(self.store)
@@ -899,9 +900,8 @@ class DevelopmentRunTests(unittest.TestCase):
         return state, active, exported
 
     def audit_cli(self, operation, *args, ok=True):
-        with patch.object(audit, "api", self.audit_api):
-            result = run_main(audit, [operation, str(self.store), *args],
-                              env=self.env, process=uses_process(self))
+        result = run_main(audit, [operation, str(self.store), *args],
+                          env=self.env, process=uses_process(self))
         self.assertEqual(result.returncode, 0 if ok else 2, result.stdout + result.stderr)
         return json.loads(result.stdout) if ok else result.stderr
 
@@ -1047,7 +1047,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertNotIn(initial["url"], self.audit_body)
         self.assertIn(final["url"], self.audit_body)
         self.assertEqual(len(self.audit_body_updates), 2)
-        self.assertEqual(self.git("show", "FETCH_HEAD:Home.md", root=self.wiki), "Existing wiki content")
+        home = self.git("show", "FETCH_HEAD:Home.md", root=self.wiki)
+        self.assertTrue(home.startswith("Existing wiki content\n"))
+        self.assertEqual(home.count(final["index_url"]), 1)
         self.assertIn("audit-initial", self.git("show", f"{initial['wiki_commit']}:{old_page}.json", root=self.wiki))
         self.finish(final)
 
@@ -1111,7 +1113,9 @@ class DevelopmentRunTests(unittest.TestCase):
                                     cwd=self.wiki, env=self.env, check=True, capture_output=True).stdout
             self.assertEqual(actual, expected)
             self.assertTrue(self.git("show", f"{initial['wiki_commit']}:{old_page}{extension}", root=self.wiki))
-        self.assertEqual(self.git("show", "FETCH_HEAD:Home.md", root=self.wiki), "Existing wiki content")
+        home = self.git("show", "FETCH_HEAD:Home.md", root=self.wiki)
+        self.assertTrue(home.startswith("Existing wiki content\n"))
+        self.assertEqual(home.count(final["index_url"]), 1)
         self.assertNotIn(initial["url"], self.audit_body)
         self.assertIn(final["url"], self.audit_body)
         self.assertEqual(len(self.audit_body_updates), 2)
@@ -1360,7 +1364,7 @@ class DevelopmentRunTests(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "Final audit is missing"):
             development.require_final_audit(state, "first", receipt["code_commit"], development.feature(root))
         self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
-        page = receipt["url"].rsplit("/", 1)[1]
+        page = unquote(receipt["url"].rsplit("/", 1)[1])
         for name, published in (("audit.json", page + ".json"), ("AUDIT.md", page + ".md")):
             expected = (Path(exported["directory"]) / name).read_bytes()
             self.assertEqual(audit.command(["git", "show", f"FETCH_HEAD:{published}"], cwd=self.wiki), expected)
@@ -1375,6 +1379,30 @@ class DevelopmentRunTests(unittest.TestCase):
         index = self.git("show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md", root=self.wiki)
         self.assertEqual(index.count(receipt["pr_url"]), 1)
         self.assertIn(receipt["url"], index)
+
+    @pytest.mark.stable_storage
+    def test_archive_retry_retains_publication_metadata_across_date_and_title_changes(self):
+        from datetime import timedelta
+
+        _, _, exported = self.archive_fixture()
+        args = ("publish-archive", "--pr", "first", "--approved", exported["identity"])
+        folder = Path(exported["directory"])
+        original = (folder / "audit.json").read_bytes()
+        title = self.audit_title
+        published_at = audit.datetime.now(audit.timezone.utc) + timedelta(days=1)
+        self.lose_audit_response = True
+        with patch.object(audit, "datetime", wraps=audit.datetime) as clock:
+            clock.now.return_value = published_at
+            self.assertIn("lost response", self.audit_cli(*args, ok=False))
+            head = self.git("ls-remote", str(self.wiki_remote), "HEAD")
+            self.assertFalse((folder / "receipt.json").exists())
+            clock.now.return_value = published_at + timedelta(days=1)
+            self.audit_title = "Renamed after publication"
+            receipt = self.audit_cli(*args)
+        self.assertEqual(receipt["publication"], {"title": title, "date": published_at.date().isoformat()})
+        self.assertEqual(self.git("ls-remote", str(self.wiki_remote), "HEAD"), head)
+        self.assertEqual(len(self.audit_body_updates), 1)
+        self.assertEqual((folder / "audit.json").read_bytes(), original)
 
     @pytest.mark.stable_storage
     def test_archive_publication_also_works_with_active_and_exhausted_runs(self):
@@ -1406,7 +1434,9 @@ class DevelopmentRunTests(unittest.TestCase):
         with patch.object(audit, "api", self.audit_api):
             receipt = self.audit_cli(*args)
             newer = self.audit_cli("publish", "--approved", live["identity"])
-        self.assertNotEqual(receipt["url"], newer["url"])
+        self.assertEqual(receipt["url"], newer["url"])
+        self.assertNotEqual(receipt["bundle"], newer["bundle"])
+        self.assertNotEqual(receipt["wiki_commit"], newer["wiki_commit"])
         self.assertIn(newer["url"], self.audit_body)
         return args, Path(archived["directory"]), receipt, newer
 
@@ -1445,6 +1475,10 @@ class DevelopmentRunTests(unittest.TestCase):
                 with self.subTest(field=field):
                     path.write_bytes(manifest.encode({**receipt, field: value}))
                     self.assertIn("receipt does not match", self.audit_cli(*args, ok=False))
+            for malformed in (None, [], {}):
+                with self.subTest(receipt=malformed):
+                    path.write_bytes(manifest.encode(malformed))
+                    self.audit_cli(*args, ok=False)
             path.write_bytes(saved)
             self.assertIn("recorded PR target", self.audit_cli(
                 *args, "--pull-request", "https://github.com/fixture/project/pull/2", ok=False))
@@ -1470,7 +1504,7 @@ class DevelopmentRunTests(unittest.TestCase):
             self.assertEqual(self.audit_cli(*args), receipt)
         self.assertEqual(path.read_bytes(), saved)
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
-        self.assertEqual(len(self.audit_body_updates), 2)
+        self.assertEqual(len(self.audit_body_updates), 1)
 
     @pytest.mark.stable_storage
     def test_missing_archive_receipt_preserves_newer_links_until_explicit_republication(self):
@@ -1484,22 +1518,31 @@ class DevelopmentRunTests(unittest.TestCase):
                 with self.subTest(legacy=legacy):
                     if legacy:
                         (folder / "publication-attempt.json").unlink()
+                        state = development.load(self.store)
+                        public = self.store / "reports" / state["active"]["id"] / "public.json"
+                        date = json.loads((folder / "audit.json").read_bytes())["publication"]["date"]
+                        instant = audit.datetime.fromisoformat(date).replace(tzinfo=audit.timezone.utc)
+                        with patch.object(audit, "datetime", wraps=audit.datetime) as clock:
+                            clock.now.return_value = instant
+                            repeated = self.audit_cli("archive", "--pr", "first", "--public", str(public))
+                        self.assertEqual(repeated["directory"], str(folder))
+                        self.assertFalse((folder / "publication-attempt.json").exists())
                     self.assertIn("partial or superseded", self.audit_cli(*args, ok=False))
                     self.assertFalse((folder / "receipt.json").exists())
                     self.assertIn(newer["url"], self.audit_body)
                     self.assertEqual(self.git("ls-remote", str(self.wiki_remote), "HEAD"), head)
-                    self.assertEqual(len(self.audit_body_updates), 2)
+                    self.assertEqual(len(self.audit_body_updates), 1)
             (folder / "publication-attempt.json").write_bytes(attempt)
             restored = self.audit_cli(*args, "--republish")
             self.assertEqual(restored["url"], receipt["url"])
             self.assertNotEqual(restored["wiki_commit"], receipt["wiki_commit"])
             self.assertIn(receipt["url"], self.audit_body)
             self.assertEqual(self.audit_cli(*args), restored)
-        self.assertEqual(len(self.audit_body_updates), 3)
+        self.assertEqual(len(self.audit_body_updates), 1)
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
 
     @pytest.mark.stable_storage
-    def test_archive_retry_preserves_changed_wiki_row_even_when_pr_links_still_match(self):
+    def test_archive_retry_preserves_newer_bytes_even_when_navigation_still_matches(self):
         args, folder, receipt, newer = self.superseded_archive_fixture()
         (folder / "receipt.json").unlink()
         self.audit_body = audit.pr_body(self.audit_body, receipt)
@@ -1507,9 +1550,12 @@ class DevelopmentRunTests(unittest.TestCase):
         with patch.object(audit, "api", self.audit_api):
             self.assertIn("partial or superseded", self.audit_cli(*args, ok=False))
         self.assertEqual(head, self.git("ls-remote", str(self.wiki_remote), "HEAD"))
-        self.assertEqual(len(self.audit_body_updates), 2)
+        self.assertEqual(len(self.audit_body_updates), 1)
         self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
         self.assertIn(newer["url"], self.git("show", f"FETCH_HEAD:{audit.INDEX_PAGE}.md", root=self.wiki))
+        page = unquote(newer["url"].rsplit("/", 1)[1])
+        published = self.git("show", f"FETCH_HEAD:{page}.json", root=self.wiki)
+        self.assertEqual(json.loads(published)["stage"], "audit-initial")
 
     @pytest.mark.stable_storage
     def test_archive_attempt_is_durable_before_remote_writes_and_validated_on_retry(self):
@@ -1541,6 +1587,8 @@ class DevelopmentRunTests(unittest.TestCase):
 
     @pytest.mark.stable_storage
     def test_archive_recovers_matching_legacy_publication_without_local_records(self):
+        from datetime import timedelta
+
         _, _, exported = self.archive_fixture()
         args = ("publish-archive", "--pr", "first", "--approved", exported["identity"])
         folder = Path(exported["directory"])
@@ -1551,7 +1599,10 @@ class DevelopmentRunTests(unittest.TestCase):
             body = self.audit_body
             (folder / "receipt.json").unlink()
             (folder / "publication-attempt.json").unlink()
-            recovered = self.audit_cli(*args)
+            later = audit.datetime.now(audit.timezone.utc) + timedelta(days=2)
+            with patch.object(audit, "datetime", wraps=audit.datetime) as clock:
+                clock.now.return_value = later
+                recovered = self.audit_cli(*args)
         self.assertEqual(recovered, receipt)
         self.assertEqual(json.loads((folder / "receipt.json").read_bytes()), receipt)
         self.assertTrue((folder / "publication-attempt.json").is_file())
@@ -1606,15 +1657,16 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn(receipt["url"], own_row)
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
 
-    def archive_contention_fixture(self, *, superseded):
+    def archive_contention_fixture(self, change):
         _, _, exported = self.archive_fixture()
         state = development.load(self.store)
-        publication = audit.publication_links(state, audit.archive_assignment(state, "first"), "0" * 64)
+        superseded = change != "other-pr"
         if not superseded:
-            publication = {key: value.replace("/pull/1", "/pull/9").replace("Audit-PR-1-", "Audit-PR-9-")
-                           for key, value in publication.items()}
+            state["prs"]["first"]["url"] = "https://github.com/fixture/project/pull/9"
+        title = self.audit_title if change == "same-page" else "Concurrent audit"
+        publication = audit.publication_links(state, audit.archive_assignment(state, "first"), title)
         index = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n",
-                                  {**publication, "title": "Concurrent audit"})
+                                  {**publication, "title": title})
         original = audit.command
         pushes = 0
         raced_head = None
@@ -1625,6 +1677,12 @@ class DevelopmentRunTests(unittest.TestCase):
                 pushes += 1
                 if pushes == 1:
                     (self.wiki / (audit.INDEX_PAGE + ".md")).write_text(index)
+                    if change == "same-page":
+                        bundle = json.loads((Path(exported["directory"]) / "audit.json").read_bytes())
+                        bundle["public"]["summary"] = "Newer reviewed audit at the same URL."
+                        files = audit.contents(bundle)
+                        for suffix, source in ((".md", "AUDIT.md"), (".json", "audit.json")):
+                            (self.wiki / (publication["page"] + suffix)).write_bytes(files[source])
                     self.git("add", ".", root=self.wiki)
                     self.git("commit", "-qm", "Concurrent archive navigation", root=self.wiki)
                     self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
@@ -1644,7 +1702,7 @@ class DevelopmentRunTests(unittest.TestCase):
 
     @pytest.mark.stable_storage
     def test_archive_refetch_preserves_newer_own_navigation(self):
-        raced = self.archive_contention_fixture(superseded=True)
+        raced = self.archive_contention_fixture("row")
         self.assertIn("partial or superseded", raced["result"])
         self.assertEqual(raced["pushes"], 1)
         self.assertEqual(self.git("rev-parse", "FETCH_HEAD", root=self.wiki), raced["raced_head"])
@@ -1655,8 +1713,17 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertFalse((raced["folder"] / "receipt.json").exists())
 
     @pytest.mark.stable_storage
+    def test_archive_refetch_preserves_newer_bytes_at_the_same_url(self):
+        raced = self.archive_contention_fixture("same-page")
+        self.assertIn("partial or superseded", raced["result"])
+        self.assertEqual(raced["pushes"], 1)
+        self.assertEqual(self.git("rev-parse", "FETCH_HEAD", root=self.wiki), raced["raced_head"])
+        self.assertEqual(self.audit_body_updates, [])
+        self.assertFalse((raced["folder"] / "receipt.json").exists())
+
+    @pytest.mark.stable_storage
     def test_archive_refetch_preserves_other_pr_navigation_and_completes(self):
-        raced = self.archive_contention_fixture(superseded=False)
+        raced = self.archive_contention_fixture("other-pr")
         receipt = raced["result"]
         self.assertEqual(raced["pushes"], 2)
         self.assertNotEqual(receipt["wiki_commit"], raced["raced_head"])
@@ -1675,7 +1742,7 @@ class DevelopmentRunTests(unittest.TestCase):
         _, _, exported = self.archive_fixture()
         args = ("publish-archive", "--pr", "first", "--approved", exported["identity"])
         state = development.load(self.store)
-        newer = audit.publication_links(state, audit.archive_assignment(state, "first"), "0" * 64)
+        newer = audit.publication_links(state, audit.archive_assignment(state, "first"), "Newer audit")
         reads = 0
 
         def changed_navigation(endpoint, **kwargs):
@@ -1752,7 +1819,11 @@ class DevelopmentRunTests(unittest.TestCase):
         with patch.object(audit, "api", committed_pull):
             receipt = self.audit_cli("publish-archive", "--pr", "first", "--approved", refreshed["identity"])
         self.assertEqual(receipt["code_commit"], self.git("rev-parse", "HEAD", root=root))
-        self.assertEqual(len(self.audit_body_updates), updates + 1)
+        self.assertEqual(len(self.audit_body_updates), updates)
+        self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+        page = unquote(receipt["url"].rsplit("/", 1)[1])
+        published = json.loads(self.git("show", f"FETCH_HEAD:{page}.json", root=self.wiki))
+        self.assertEqual(published["code_commit"], head)
 
     @pytest.mark.stable_storage
     def test_archive_publication_rejects_changed_pr_head(self):
@@ -2211,7 +2282,7 @@ class DevelopmentRunTests(unittest.TestCase):
             with self.subTest(transformation=transformation):
                 def transform(argv, **kwargs):
                     root = Path(kwargs["cwd"])
-                    if argv[1] == "add" and transformation == "filter":
+                    if argv[1:3] == ["--literal-pathspecs", "add"] and transformation == "filter":
                         (root / ".git/info/attributes").write_text("Home.md filter=audit\n")
                         original(["git", "config", "filter.audit.clean", "sed s/Existing/Changed/"], cwd=root)
                     if argv[1] == "commit" and transformation == "hook":
@@ -2541,6 +2612,8 @@ class DevelopmentRunTests(unittest.TestCase):
         original = audit.command
         pushed = []
         filename = page + (".json" if change == "replace" else ".md")
+        if change == "home":
+            filename = "Home.md"
         other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
 
         def concurrent_update(argv, **kwargs):
@@ -2557,8 +2630,12 @@ class DevelopmentRunTests(unittest.TestCase):
                 elif change == "symlink":
                     path.unlink()
                     path.symlink_to("Home.md")
+                elif change == "home":
+                    path.write_text("Concurrent Home notes\n")
                 else:
                     (self.wiki / "Other-page.md").write_text("Concurrent content\n")
+                    home = self.wiki / "Home.md"
+                    home.write_text("Concurrent Home notes\n\n" + home.read_text())
                     index = self.wiki / (audit.INDEX_PAGE + ".md")
                     index.write_text("Concurrent introduction\n\n" + index.read_text().replace(
                         audit.INDEX_SEPARATOR + "\n", audit.INDEX_SEPARATOR + "\n" + other_row))
@@ -2572,13 +2649,18 @@ class DevelopmentRunTests(unittest.TestCase):
                 if change == "unrelated":
                     receipt = audit.publish(state, active, exported["identity"])
                 else:
-                    with self.assertRaisesRegex(manifest.ManifestError, "Published audit pair changed"):
+                    error = "Published wiki Home changed" if change == "home" else "Published audit pair changed"
+                    with self.assertRaisesRegex(manifest.ManifestError, error):
                         audit.publish(state, active, exported["identity"])
             self.assertEqual(len(pushed), 1)
             if change != "unrelated":
                 self.assertFalse((folder / "receipt.json").exists())
                 self.assertEqual(self.audit_body_updates, [])
-                self.git("restore", f"--source={pushed[0]}", "--", filename, root=self.wiki)
+                if change == "home":
+                    path = self.wiki / filename
+                    path.write_text(path.read_text() + f"\n[Audit index]({audit.wiki_index(state)})\n")
+                else:
+                    self.git("restore", f"--source={pushed[0]}", "--", filename, root=self.wiki)
                 self.git("add", "--", filename, root=self.wiki)
                 self.git("commit", "-qm", "Restore approved audit from history", root=self.wiki)
                 self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
@@ -2592,6 +2674,13 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertTrue(index.startswith("Concurrent introduction\n\n"))
                 self.assertIn(other_row, index)
                 self.assertLess(index.index("/pull/9)"), index.index("/pull/1)"))
+                home = self.git("show", f"{receipt['wiki_commit']}:Home.md", root=self.wiki)
+                self.assertTrue(home.startswith("Concurrent Home notes\n\n"))
+                self.assertEqual(home.count(receipt["index_url"]), 1)
+            if change == "home":
+                home = self.git("show", f"{receipt['wiki_commit']}:Home.md", root=self.wiki)
+                self.assertTrue(home.startswith("Concurrent Home notes\n"))
+                self.assertEqual(home.count(receipt["index_url"]), 1)
         self.finish(receipt)
 
     @pytest.mark.stable_storage
@@ -2605,6 +2694,10 @@ class DevelopmentRunTests(unittest.TestCase):
     @pytest.mark.stable_storage
     def test_wiki_post_push_symlink_requires_restoring_the_approved_pair(self):
         self.check_wiki_post_push_change("symlink")
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_home_link_removal_requires_preserving_repair(self):
+        self.check_wiki_post_push_change("home")
 
     @pytest.mark.stable_storage
     def test_wiki_post_push_unrelated_update_preserves_publication_and_retry(self):

@@ -320,8 +320,10 @@ def accepted_archive_commit(state, pr, *, required=False):
     return None
 
 
-def archive_bundle(state, pr, public, *, model_snapshot=None, require_commit_evidence=False):
-    bundle = build(state, archive_assignment(state, pr), public, model_snapshot=model_snapshot)
+def archive_bundle(state, pr, public, *, model_snapshot=None, publication_snapshot=None,
+                   require_commit_evidence=False):
+    bundle = build(state, archive_assignment(state, pr), public, model_snapshot=model_snapshot,
+                   publication_snapshot=publication_snapshot)
     bundle["run_outcome"] = state["outcome"]
     bundle["accepted_code_commit"] = accepted_archive_commit(state, pr, required=require_commit_evidence)
     bundle["limitations"].append(
@@ -343,9 +345,14 @@ def archive(state, pr, public):
     files = contents(bundle)
     key = bundle_identity(files)
     folder = archive_directory(state, pr, key)
+    fresh = not folder.exists()
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name, data in files.items():
         review.atomic_write(review.safe_path(folder, name), data)
+    if fresh:
+        pending = {"bundle": key, "pr_url": None, "approval": state["approval"],
+                   "before": None, "publication": None}
+        review.atomic_write(review.safe_path(folder, "publication-attempt.json"), plan.encode(pending))
     return {"directory": str(folder), "identity": key, "files": list(FILES), "historical": True}
 
 
@@ -356,6 +363,8 @@ def read_archive(state, pr, approved):
     plan.require(bundle_identity(files) == approved,
                  "Publication approval must identify both exact exported files; export and inspect again")
     bundle = json.loads(files["audit.json"])
+    plan.require(isinstance(bundle, dict) and bundle.get("schema") == 2,
+                 "Archive uses an older format; run archive again and inspect both files before publishing")
     plan.require(bundle["stage"] == "archive" and bundle["run"] == state["id"] and
                  bundle["pr"] == pr and bundle["approval"] == state["approval"] and files == contents(bundle),
                  "Archive does not match this run's approved historical export; export and inspect again")
@@ -366,6 +375,7 @@ def prepared_archive(state, pr, approved):
     folder, bundle, files = read_archive(state, pr, approved)
     expected = archive_bundle(state, pr, bundle["public"],
                               model_snapshot=(bundle["models"], bundle["models_unavailable"]),
+                              publication_snapshot=bundle["publication"],
                               require_commit_evidence=True)
     plan.require(bundle == expected and files == contents(bundle),
                  "Archive evidence changed; run archive again and inspect both new files before publishing")
@@ -798,14 +808,14 @@ def wiki_files(root, publication, files):
         expected[page + ".md"] = None
         expected[page + ".json"] = None
     path = review.safe_path(root, INDEX_PAGE + ".md")
-    text = (path.read_text() if path.exists() else
+    text = (path.read_bytes().decode() if path.exists() else
             "Development process audit records, one row per pull request. Newest first.\n\n"
             f"{INDEX_HEADER}\n{INDEX_SEPARATOR}\n")
     expected[path.name] = index_entry(text, publication, unchanged=unchanged).encode()
     homes = [name for name in ("Home.md", "Home.markdown") if (root / name).exists()] or ["Home.md"]
     for name in homes:
         path = review.safe_path(root, name)
-        text = path.read_text() if path.exists() else ""
+        text = path.read_bytes().decode() if path.exists() else ""
         expected[name] = home_page(text, publication["index_url"]).encode()
     return expected
 
@@ -843,6 +853,14 @@ def published_index_matches(content, publication):
     return index_entry(text, publication, unchanged=True) == text
 
 
+def published_home_matches(content, publication):
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return home_page(text, publication["index_url"]) == text
+
+
 def confirm_publication(root, publication, expected):
     commit = command(["git", "rev-parse", "FETCH_HEAD"], cwd=root).decode().strip()
     for filename, data in expected.items():
@@ -852,13 +870,18 @@ def confirm_publication(root, publication, expected):
                          "the reviewed export to remove superseded pages")
             continue
         is_index = filename == INDEX_PAGE + ".md"
+        is_home = filename in ("Home.md", "Home.markdown")
         message = ("Published audit index changed; restore an unreadable index from wiki history or retry "
                    "the reviewed export to repair this PR's entry, preserving unrelated content" if is_index else
                    "Published audit pair changed; restore the approved pair from wiki history or preserve "
                    "conflicting pages, then retry the reviewed export")
+        if is_home:
+            message = ("Published wiki Home changed; preserve its human content and restore a visible "
+                       "audit-index link before retrying")
         plan.require(entry.startswith(b"100644 blob "), message)
         content = command(["git", "show", f"{commit}:{filename}"], cwd=root)
-        matches = published_index_matches(content, publication) if is_index else content == data
+        matches = (published_index_matches(content, publication) if is_index else
+                   published_home_matches(content, publication) if is_home else content == data)
         plan.require(matches, message)
     names = command(["git", "ls-tree", "--full-tree", "--name-only", "-z", commit], cwd=root)
     pages = audit_page_names((Path(name) for name in names.decode("utf-8", "surrogateescape").split("\0")[:-1]),
@@ -969,12 +992,16 @@ def publish_bundle(state, assignment, payload, *, storage=None, recovery=None):
     exported = bundle_identity(files)
     repo, number = target(state, assignment)
     pull = checked_pull(state, assignment, bundle)
-    publication = publication_links(state, assignment, bundle["publication"]["title"])
+    metadata = bundle["publication"]
+    if recovery is not None:
+        metadata = ((recovery["record"] or {}).get("publication") or
+                    {"title": plan.text(pull["title"]), "date": datetime.now(timezone.utc).date().isoformat()})
+        recovery["publication"] = metadata
+    publication = publication_links(state, assignment, metadata["title"])
     pr_body(pull.get("body") or "", publication)
     if recovery is not None:
         archive_pr_recovery(recovery, publication, pull.get("body") or "")
-    commit = publish_files(state, {**publication, "title": bundle["publication"]["title"],
-                                   "date": bundle["publication"]["date"]}, files,
+    commit = publish_files(state, {**publication, **metadata}, files,
                            storage=storage, recovery=recovery)
     pull = checked_pull(state, assignment, bundle)
     original = pull.get("body") or ""
@@ -987,6 +1014,7 @@ def publish_bundle(state, assignment, payload, *, storage=None, recovery=None):
     plan.require(observed.get("body") == body, "PR audit links were not confirmed; reread the PR and retry")
     return {"stage": assignment["role"], "code_commit": bundle["code_commit"],
             "bundle": exported, "wiki_commit": commit,
+            **({"publication": metadata} if recovery is not None else {}),
             **{key: value for key, value in publication.items() if key != "page"}}
 
 
@@ -1001,7 +1029,8 @@ def publish(state, assignment, approved):
 
 def archive_receipt(state, publication, payload):
     bundle, receipt = payload
-    plan.fields(receipt, "stage code_commit bundle wiki_commit url data_url index_url pr_url authorization")
+    plan.fields(receipt, "stage code_commit bundle wiki_commit url data_url index_url pr_url authorization publication")
+    archive_publication_metadata(receipt["publication"])
     expected = {key: value for key, value in publication.items() if key != "page"}
     expected.update(stage="archive", code_commit=bundle["code_commit"],
                     authorization={"approval": state["approval"], "permission": "publish_audit"})
@@ -1016,18 +1045,34 @@ def archive_receipt(state, publication, payload):
     return receipt
 
 
+def archive_publication_metadata(value):
+    plan.fields(value, "title date")
+    plan.require(isinstance(value["title"], str) and value["title"].strip() and
+                 isinstance(value["date"], str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value["date"]) and
+                 timestamp(value["date"]) is not None,
+                 "Archive publication metadata is invalid; preserve it and inspect the publication record")
+    return value
+
+
 def archive_recovery(folder, binding, *, republish):
     path = review.safe_path(folder, "publication-attempt.json")
     record = None
     if path.exists() and not republish:
         record = json.loads(path.read_bytes())
-        plan.fields(record, "bundle pr_url approval before")
-        plan.fields(record["before"], "pr wiki")
-        plan.require(all(record[key] == value for key, value in binding.items()) and
-                     all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
-                         for value in record["before"].values()),
+        plan.fields(record, "bundle pr_url approval before publication")
+        pending = record["before"] is None
+        expected = {**binding, "pr_url": None} if pending else binding
+        plan.require(all(record[key] == value for key, value in expected.items()),
                      "Archive attempt does not match the approved publication; preserve it and use "
                      "--republish only when intentionally restoring this archive")
+        if pending:
+            plan.require(record["publication"] is None, "Pending archive attempt has publication metadata")
+        else:
+            plan.fields(record["before"], "pr wiki")
+            plan.require(all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
+                             for value in record["before"].values()),
+                         "Archive attempt has invalid navigation digests; preserve it and inspect the record")
+            archive_publication_metadata(record["publication"])
     return {"path": path, "binding": binding, "record": record, "republish": republish}
 
 
@@ -1042,7 +1087,7 @@ def archive_pr_recovery(recovery, publication, body):
     block = (body[body.index(LINK_START):body.index(LINK_END) + len(LINK_END)]
              if LINK_START in body else "")
     current = review.digest(block.encode())
-    if recovery["record"] is not None:
+    if recovery["record"] is not None and recovery["record"]["before"] is not None:
         require_archive_navigation(matches or current == recovery["record"]["before"]["pr"])
     recovery["pr"] = current
     recovery["pr_matches"] = matches
@@ -1055,30 +1100,48 @@ def archive_wiki_recovery(recovery, publication, pages, expected):
     if text:
         lines, _, matches = index_table(text, publication)
         row = lines[matches[0]] if matches else ""
-    current = review.digest(row.encode())
-    matches = pages.get(index) == expected[index]
+    own = {name: data for name, data in pages.items() if audit_page_names((Path(name),), publication)}
+    current = identity({"row": row, "pages": {name: review.digest(data) for name, data in own.items()}})
+    pair_matches = all(pages.get(name) == data for name, data in expected.items()
+                       if audit_page_names((Path(name),), publication))
+    if recovery["record"] is None and not recovery["republish"] and pair_matches:
+        date = re.match(r"\| ([0-9]{4}-[0-9]{2}-[0-9]{2}) \|", row)
+        if date and timestamp(date[1]) is not None:
+            prior = index_entry(text, {**publication, "date": date[1]}, unchanged=True).encode()
+            if prior == pages.get(index):
+                publication["date"] = recovery["publication"]["date"] = date[1]
+                expected[index] = prior
+    matches = pages.get(index) == expected[index] and pair_matches
     if recovery["record"] is None:
-        existing = any(publication["page"] + suffix in pages for suffix in (".md", ".json"))
+        existing = bool(own) or bool(row)
         require_archive_navigation(recovery["republish"] or not existing or
                                    (matches and recovery["pr_matches"]))
-        record = {**recovery["binding"], "before": {"pr": recovery["pr"], "wiki": current}}
+    if recovery["record"] is None or recovery["record"]["before"] is None:
+        record = {**recovery["binding"], "before": {"pr": recovery["pr"], "wiki": current},
+                  "publication": recovery["publication"]}
         review.atomic_write(recovery["path"], plan.encode(record))
         recovery["record"] = record
     require_archive_navigation(matches or current == recovery["record"]["before"]["wiki"])
 
 
 def publish_archive(state, pr, approved, *, pull_request=None, republish=False):
+    assignment = {"role": "archive", "pr": pr, "pr_url": pull_request}
+    repo, number = target(state, assignment)
     folder = archive_directory(state, pr, approved)
     receipt = review.safe_path(folder, "receipt.json")
     acknowledge = receipt.exists() and not republish
     loader = read_archive if acknowledge else prepared_archive
     folder, bundle, files = loader(state, pr, approved)
-    assignment = {"id": bundle["assignment"], "role": "archive", "pr": pr, "pr_url": pull_request}
-    publication = publication_links(state, assignment, approved)
+    assignment["id"] = bundle["assignment"]
     if acknowledge:
+        saved = json.loads(receipt.read_bytes())
+        plan.require(isinstance(saved, dict),
+                     "Archive receipt is invalid; preserve it and inspect its publication record")
+        metadata = archive_publication_metadata(saved.get("publication"))
+        publication = publication_links(state, assignment, metadata["title"])
         return archive_receipt(state, {**publication, "bundle": approved},
-                               (bundle, json.loads(receipt.read_bytes())))
-    recovery = archive_recovery(folder, {"bundle": approved, "pr_url": publication["pr_url"],
+                               (bundle, saved))
+    recovery = archive_recovery(folder, {"bundle": approved, "pr_url": f"https://github.com/{repo}/pull/{number}",
                                         "approval": state["approval"]}, republish=republish)
     result = publish_bundle(state, assignment, (bundle, files), storage=folder, recovery=recovery)
     result["authorization"] = {"approval": state["approval"], "permission": "publish_audit"}
