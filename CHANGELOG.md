@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.8 (2026-11-25)
+
+### New
+
+* publish readable development audits per PR ([#76](https://github.com/ioncache/ioncache-ai-tools/issues/76)) ([cb3648c](https://github.com/ioncache/ioncache-ai-tools/commit/cb3648c27485e0451a97aec22de6150688036f23))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* restore Copilot question guards without blocking workers ([#77](https://github.com/ioncache/ioncache-ai-tools/issues/77)) ([dbafc18](https://github.com/ioncache/ioncache-ai-tools/commit/dbafc18d411060cbda8b1d9e06cb8531eb634218))
+
 ## 1.13.7 (2026-11-24)
 
 ### New
