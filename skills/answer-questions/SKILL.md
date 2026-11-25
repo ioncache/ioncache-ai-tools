@@ -94,8 +94,14 @@ autopilot messages do not create the restriction. Child calls never inherit
 the root's question state; worker replies and notifications do not create
 root questions. The next instruction or a completed root answer ends the
 restriction. Missing, ambiguous or unreadable evidence leaves tools available.
-Claude and Codex still have no verified positive native user-origin signal.
-Do not infer their native enforcement from shared-contract tests.
+Claude checks the current `prompt_id` against a root transcript message with
+`origin.kind: "human"`. Codex checks its current turn's explicit `user` trigger,
+absence of delegation, and original `user.text` input. Neither uses question
+shape or a prompt event name as proof of authorship. Unmarked SDK input,
+`codex exec`, unknown turn triggers, and ambiguous Codex steering inputs do
+not establish human origin. All three checks use bounded native history
+without creating another permission state. Older hosts without these fields,
+or a transcript that has not caught up, receive guidance without a tool fence.
 Evidence and gaps: [../../docs/guardrails.md#prompt-origin-evidence-and-gaps](../../docs/guardrails.md#prompt-origin-evidence-and-gaps).
 
 ## Checklist

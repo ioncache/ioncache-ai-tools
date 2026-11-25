@@ -1,0 +1,24 @@
+{
+  "description": "Claude Code 2.1.332 native captures: interactive typed input and SDK input declared as human both supplied origin.kind=human. Paths, IDs and prompt text replaced; unrelated fields omitted. Unmarked SDK input had no origin and turnOrigin=sdk.",
+  "hook": {
+    "session_id": "claude-question-session",
+    "prompt_id": "claude-question-prompt",
+    "hook_event_name": "PreToolUse",
+    "permission_mode": "acceptEdits",
+    "tool_name": "Bash",
+    "tool_input": {"command": "printf forbidden > forbidden.txt"}
+  },
+  "events": [
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "turnPromptId": "claude-question-prompt",
+      "isSidechain": false,
+      "origin": {"kind": "human"},
+      "turnOrigin": "human",
+      "promptSource": "typed",
+      "message": {"role": "user", "content": "Why did this change?"}
+    }
+  ]
+}
