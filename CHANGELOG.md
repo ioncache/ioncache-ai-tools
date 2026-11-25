@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.13.9 (2026-11-25)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* enforce Claude and Codex user-question turns ([#78](https://github.com/ioncache/ioncache-ai-tools/issues/78)) ([52f884a](https://github.com/ioncache/ioncache-ai-tools/commit/52f884acd580a74cc7c7bf55edae00fbbb276d38))
+
 ## 1.13.8 (2026-11-25)
 
 ### New
