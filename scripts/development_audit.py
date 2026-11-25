@@ -582,8 +582,9 @@ def index_table(text, publication):
     end = start
     while end < len(lines) and lines[end].lstrip().startswith("|"):
         end += 1
+    destination = re.escape(publication["pr_url"])
     pr_cell = (r"^\|[^|]*\|\s*\[(?:\\.|[^\]\\])*\]\("
-               + re.escape(publication["pr_url"]) + r"\)\s*\|")
+               + rf"(?:{destination}|<{destination}>)\)\s*\|")
     matches = [i for i in range(start, end) if re.match(pr_cell, lines[i], re.IGNORECASE)]
     plan.require(len(matches) <= 1, "Preserve duplicate wiki audit records and consolidate this PR's row before retrying")
     return lines, start, matches

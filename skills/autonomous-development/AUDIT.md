@@ -423,6 +423,8 @@ Keep the managed table unindented and outside fenced code and HTML blocks. Prese
 unrelated code examples and notes when restoring the table.
 Move human notes outside the managed link block; do not discard them. Consolidate
 duplicate rows for this PR while preserving human content and wiki history.
+Bare and angle-bracket PR link destinations identify the same row; confirmation
+still requires the exact approved row text.
 The publisher rereads the PR after pushing the wiki and verifies its body after
 updating it. GitHub's body update is not an atomic compare-and-swap: avoid
 concurrent PR-description writers, since an edit between the final read and

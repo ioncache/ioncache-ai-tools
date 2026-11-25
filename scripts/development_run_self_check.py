@@ -2620,7 +2620,8 @@ class DevelopmentRunTests(unittest.TestCase):
         human_notes = "Human notes for the audit index.\n\n"
         if change == "fenced-table":
             human_notes += "1. ```text\n   Keep this example\n   ```\n\n"
-        errors = {"duplicate-row": "consolidate this PR's row", "fenced-table": "outside fenced code blocks"}
+        errors = {"duplicate-row": "consolidate this PR's row", "equivalent-row": "consolidate this PR's row",
+                  "fenced-table": "outside fenced code blocks"}
         error = errors.get(change, "Published audit index changed")
         original = audit.command
         pushed, approved_rows = [], []
@@ -2640,9 +2641,11 @@ class DevelopmentRunTests(unittest.TestCase):
                 elif change == "symlink":
                     index.unlink()
                     index.symlink_to("Home.md")
-                elif change == "duplicate-row":
+                elif change in ("duplicate-row", "equivalent-row"):
                     row = approved_rows[0] + "\n"
-                    index.write_text(human_notes + text.replace(row, row + row, 1))
+                    extra = (row.replace(f"]({publication['pr_url']})", f"](<{publication['pr_url']}>)")
+                             if change == "equivalent-row" else row)
+                    index.write_text(human_notes + text.replace(row, row + extra, 1))
                 elif change == "fenced-table":
                     index.write_text(human_notes + "```markdown\n" + text + "```\n")
                 else:
@@ -2670,7 +2673,7 @@ class DevelopmentRunTests(unittest.TestCase):
             self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
             self.assertEqual(self.audit_body_updates, [])
             self.assertEqual((self.store / "RUN.json").read_bytes(), before)
-            if change in ("duplicate-row", "fenced-table"):
+            if change in ("duplicate-row", "equivalent-row", "fenced-table"):
                 with self.assertRaisesRegex(manifest.ManifestError, error):
                     audit.publish(state, active, exported["identity"])
                 self.assertFalse((Path(exported["directory"]) / "receipt.json").exists())
@@ -2678,10 +2681,13 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertEqual((self.store / "RUN.json").read_bytes(), before)
                 index = self.wiki / index_name
                 text = index.read_text()
-                if change == "duplicate-row":
+                if change in ("duplicate-row", "equivalent-row"):
                     row = approved_rows[0] + "\n"
-                    self.assertEqual(text.count(row), 2)
-                    index.write_text(text.replace(row + row, row, 1))
+                    extra = (row.replace(f"]({publication['pr_url']})", f"](<{publication['pr_url']}>)")
+                             if change == "equivalent-row" else row)
+                    self.assertIn(row + extra, text)
+                    self.assertEqual(text.count(row), 1 if change == "equivalent-row" else 2)
+                    index.write_text(text.replace(row + extra, row, 1))
                 else:
                     self.assertTrue(text.startswith(human_notes + "```markdown\n"))
                     self.assertTrue(text.endswith("```\n"))
@@ -2689,7 +2695,7 @@ class DevelopmentRunTests(unittest.TestCase):
                         human_notes + "```markdown\n").removesuffix("```\n"))
             if change in ("symlink", "encoding"):
                 self.git("restore", f"--source={pushed[0]}", "--", index_name, root=self.wiki)
-            if change in ("symlink", "encoding", "duplicate-row", "fenced-table"):
+            if change in ("symlink", "encoding", "duplicate-row", "equivalent-row", "fenced-table"):
                 self.git("add", "--", index_name, root=self.wiki)
                 self.git("commit", "-qm", "Restore valid wiki audit index", root=self.wiki)
                 self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
@@ -2699,9 +2705,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
         index = self.git("show", f"FETCH_HEAD:{index_name}", root=self.wiki)
         self.assertEqual([line for line in index.splitlines() if "/pull/1)" in line], approved_rows)
-        if change in ("row", "report-link", "data-link", "metadata", "duplicate-row", "fenced-table"):
+        if change in ("row", "report-link", "data-link", "metadata", "duplicate-row", "equivalent-row", "fenced-table"):
             self.assertIn(other_row.rstrip("\n"), index.splitlines())
-        if change in ("duplicate-row", "fenced-table"):
+        if change in ("duplicate-row", "equivalent-row", "fenced-table"):
             self.assertTrue(index.startswith(human_notes))
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent content")
         self.assertEqual((self.store / "RUN.json").read_bytes(), before)
@@ -2738,6 +2744,10 @@ class DevelopmentRunTests(unittest.TestCase):
     @pytest.mark.stable_storage
     def test_wiki_post_push_duplicate_index_row_requires_preserving_repair(self):
         self.check_wiki_post_push_index_change("duplicate-row")
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_equivalent_index_row_requires_preserving_repair(self):
+        self.check_wiki_post_push_index_change("equivalent-row")
 
     @pytest.mark.stable_storage
     def test_wiki_post_push_fenced_index_requires_preserving_repair(self):

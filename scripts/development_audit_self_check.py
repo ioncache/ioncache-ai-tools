@@ -588,6 +588,31 @@ class AuditFormatTests(unittest.TestCase):
                 with self.assertRaisesRegex(plan.ManifestError, "unindented"):
                     audit.index_entry(text, publication)
 
+    def test_index_replaces_an_angle_wrapped_pr_destination_without_adding_a_row(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
+        alternate = table.replace(f"]({publication['pr_url']})", f"](<{publication['pr_url']}>)")
+        self.assertFalse(audit.published_index_matches(alternate.encode(), publication))
+        for unchanged in (False, True):
+            with self.subTest(unchanged=unchanged):
+                self.assertEqual(audit.index_entry(alternate, publication, unchanged=unchanged), table)
+        self.assertTrue(audit.published_index_matches(table.encode(), publication))
+
+    def test_index_rejects_duplicate_rows_with_equivalent_pr_destinations(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
+        row = table.splitlines(keepends=True)[-1]
+        alternate = row.replace(f"]({publication['pr_url']})", f"](<{publication['pr_url']}>)")
+        for rows in (row + alternate, alternate + row, alternate + alternate):
+            with self.subTest(rows=rows):
+                duplicate = table.removesuffix(row) + rows
+                with self.assertRaisesRegex(plan.ManifestError, "consolidate this PR's row"):
+                    audit.index_entry(duplicate, publication)
+                with self.assertRaisesRegex(plan.ManifestError, "consolidate this PR's row"):
+                    audit.published_index_matches(duplicate.encode(), publication)
+
     def test_index_preserves_closed_code_examples_when_updating_the_real_table(self):
         publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
                        "data_url": "https://example.invalid/data"}
