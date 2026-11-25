@@ -7,9 +7,10 @@ import subprocess
 import sys
 
 import docs_cache
+import copilot_question
 from docs_cache import DISTILLER_ENV
 from hook_adapter_common import ADAPTER_TIMEOUT_SECONDS, PATCH_REWRITE_REASON, InvocationDeadline, invocation_deadline, run_shared_hooks, unavailable
-from plugin_config import synchronize
+from plugin_config import enabled, synchronize
 
 
 def docs_cache_hook(handler, data):
@@ -99,6 +100,14 @@ def normalized_tools(data):
 
 def pre_tool_use(data, completed_outputs=None):
     hook_input = shared_input(data)
+    if completed_outputs is None and enabled('answer-questions', hook_input):
+        try:
+            question = copilot_question.question_turn(data)
+            if question is not None:
+                hook_input['_ioncache_native_question'] = question
+        except (OSError, ValueError, TypeError) as error:
+            hook_input['_ioncache_native_question'] = False
+            user_warning(unavailable('copilot-question', error))
     rewrite = None
     for name, args in normalized_tools(data):
         outputs = run_shared_hooks('PreToolUse', {

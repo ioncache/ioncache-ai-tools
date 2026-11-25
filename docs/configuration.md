@@ -40,7 +40,7 @@ remain after synchronization finishes.
 
 | ID | Controls |
 | --- | --- |
-| `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts; native origin detection is currently unavailable |
+| `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts, including Copilot's native message-evidence check |
 | `autonomous-development-explicit-only` | Reject assistant skill-tool calls to autonomous development; direct human invocation and ordinary work remain available |
 | `autonomous-development-follow-ups` | Automatic follow-up issue creation by authorized development PR publishers; separate from run approval, audit publication and reporting |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |

@@ -23,8 +23,8 @@ applies this contract:
 
 - The agent receives the answer contract: reasoning, a supported cause for
   WHY, and no apologies, deflections, recommendations, or offers of more work.
-- The agent's recognized state-changing tool calls are denied until its next
-  non-question prompt, even to continue an existing assignment.
+- The agent's recognized state-changing tool calls are denied during the
+  question turn, even to continue an existing assignment.
 - Read-only research stays available. After a denial, the agent answers from
   what it can research and ends the turn.
 
@@ -33,7 +33,7 @@ applies this contract:
 | File edits | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `apply_patch` |
 | Recognized shell mutations | `git commit`/`push`/`reset`/`rebase`/`merge`, `gh pr create`/`merge`, `rm`, `mv`, `cp`, `mkdir`, `touch`, `tee`, file redirects, `npm install`, `node -e`, `python -c`, GraphQL mutations |
 | MCP operations | Operation names starting with the word `create`, `update`, `delete`, `edit`, `write`, `remove`, `merge`, or `push`, in snake, kebab, dotted, or camel case (`create_issue`, `createIssue`) |
-| Work control | Launching, messaging, or stopping workers (`Agent`, `Task`, `Workflow`, `SendMessage`, `TaskStop`, `spawn_agent`, `send_input`) and task or todo creation (`TaskCreate`, `TaskUpdate`, `TodoWrite`) |
+| Work control | Launching, messaging, or stopping workers (`Agent`, `Task`, `Workflow`, `SendMessage`, `TaskStop`, `stop_agent`, `spawn_agent`, `send_input`) and task or todo creation (`TaskCreate`, `TaskUpdate`, `TodoWrite`) |
 
 Question state belongs to one identity. A question to the root never blocks a
 running subagent. Prompts a subagent receives from its parent are not user
@@ -45,12 +45,27 @@ Clearing precedes configuration and guidance work. A failed evaluation cannot
 create a marker afterward. Compaction and resume keep existing state until
 the next prompt.
 
-**Native question enforcement is currently unavailable on all three hosts.**
-The captured payloads do not establish user origin. A genuine question with
-unknown origin therefore receives guidance without a tool fence. This favors
-unattended continuation over accidentally stopping a worker on a report.
-The shared guard still supports positively identified user questions, but
-its normalized-input tests are not proof of native detection.
+Copilot verifies native question turns at tool time, not from the prompt-hook
+payload alone. It correlates the current root `userPromptTransformed` with
+the subsequent native `user.message`, including delivery and provenance.
+An intervening memory-context message is skipped only when it belongs to
+that same interaction.
+Agent-authored, automation and autopilot messages do not start a question
+restriction. Child events and tool-result handbacks cannot create a root
+question. A new instruction or a completed root answer ends the restriction.
+Missing, ambiguous, malformed or unreadable evidence leaves tools available.
+
+Claude and Codex still have no verified positive native user-origin signal.
+A genuine question with unknown origin receives guidance without a tool
+fence. The shared guard supports positively identified user questions, but
+normalized-input tests are not proof of those hosts' native detection.
+
+The missing tool fence does not relax the assistant's user-question rule.
+Root guidance still requires answering a genuine user question without
+continuing an existing assignment in that turn. Asking why workers have not
+stopped does not authorize stopping them. This behavioral instruction does
+not classify an unknown-origin prompt as user-written: question-shaped reports,
+notifications, and parent-written assignments remain non-blocking.
 
 A user-text clause ending in `?` makes the prompt a question. Without `?`,
 the entire prompt must be one short clause: at most 12 words and 120
@@ -81,16 +96,22 @@ Coverage limits:
 
 ### Prompt-origin evidence and gaps
 
-The official references below and live command-hook captures were checked on
-macOS on 2026-11-17. Sanitized stdin payloads are in
+The initial references and live command-hook captures were checked on macOS
+on 2026-11-17. Copilot's reference and live-session hook inputs were checked
+again on 2026-11-24. Sanitized payloads are in
 [../hooks/fixtures/prompt-origins.json](../hooks/fixtures/prompt-origins.json).
 Recorded Claude model-facing batches, kept separate from hook captures, are in
 [../hooks/fixtures/claude-batched-prompts.json](../hooks/fixtures/claude-batched-prompts.json).
+Copilot native message provenance and worker routing are recorded separately in
+[../hooks/fixtures/copilot-question-events.json](../hooks/fixtures/copilot-question-events.json).
 
 | Host | Observed input and documented limits | Remaining gap |
 | --- | --- | --- |
 | Claude Code 2.1.326 | Captured a root question, instruction, background subagent report and shell-task notification. User prompts and notifications both had `prompt_id`. Recorded model-facing entry 419 combines a notification inside a leading system reminder with an agent hand-back. Entries 248 and 268 contain summary reminders. The batch reproduces the old prefix miss and declarative-starter false positive without any question marks. | No verified positive user-origin signal. The recorded batch is not hook stdin, so its exact prompt-hook representation remains unverified. Independent peer messages, scheduled tasks and Code Mode output were not captured. |
 | Copilot CLI 1.0.113-1 | Captured a root question at `userPromptTransformed`, with `prompt` and `transformedPrompt` but no origin field. Documentation excludes system notifications from this event; that does not establish the provenance of every submitted or parent-written message. | Worker capture was denied by tool permissions. Instruction, hand-back, task-notification and peer-message captures remain unavailable. Batching and reminder formats are unverified. |
+| Copilot CLI 1.0.115-8 (2026-11-24) | Human questions and autopilot reminders have the same prompt-hook fields, but subsequent `user.message` records distinguish autopilot provenance. Synchronous and background assignments carry child identities and an agent source. Question-shaped handbacks arrive as tool results; completion arrives as a system notification, not a root prompt hook. | Prompt-hook fields alone do not establish origin. Peer-message, scheduled-prompt and batched-prompt routing remain unverified. |
+| Copilot CLI 1.0.116-1 (2026-11-24) | A fresh CLI invocation with this plugin denied a question-turn file redirect through the native pre-tool hook. Its emitted root message matches the earlier user-delivery evidence. Native pre-tool history records summarize a `toolCalls` batch; command hooks still receive individual tool inputs. | Resuming that disposable session with `--plugin-dir` emitted no hook events, so that invocation does not establish resumed enforcement. Custom callers that omit provenance cannot be distinguished from ordinary user delivery. |
+| Copilot CLI 1.0.116-2 (2026-11-24) | One interactive process allowed read-only research and denied a write during a user question. The next instruction launched a child with a question-shaped assignment; the child wrote its fixture and returned a question, after which the parent wrote its own fixture. Native hooks ran for both identities throughout. The prompt sequence included memory context with the same interaction identity. | Live interleaving of a new root question while a child is actively writing remains covered by isolated adapter tests, not this interactive run. Peer messages, scheduled prompts and other batching formats remain unverified. |
 | Codex 0.163.0 | Captured a root question and instruction. A worker returned a question-heavy report, but that return and the shell completion produced no additional prompt-hook invocation in this run. The documented prompt fields are `turn_id` and `prompt`, not origin. Stop-hook continuation reasons can act as new user prompts. | No verified positive user-origin signal. Child prompt, asynchronous notification, peer-message and Stop-continuation payloads were not captured. Batching and reminder formats are unverified. |
 
 Claude's hook documentation explicitly warns that transcripts are asynchronous
@@ -180,6 +201,11 @@ requests, task approvals, or assignments. The question guard stores one empty
 marker file per questioned root identity under `/tmp`; the next non-question
 prompt removes it. A marker that is not a regular file owned by the current
 account is reported as an unavailable check, not enforced.
+Copilot's native check instead reads up to 4 MiB from its own session's
+`events.jsonl` under `$COPILOT_HOME/session-state`, or
+`~/.copilot/session-state` when unset. It requires an owned regular file and
+rejects symlinks. The plugin does not copy or persist that conversation
+history, and it cannot verify a prompt outside the bounded history window.
 
 Documentation-cache distillation is separate and consumes additional model
 usage when enabled. Disable `docs-cache` to prevent those calls. Explicitly

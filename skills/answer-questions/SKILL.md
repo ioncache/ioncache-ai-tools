@@ -16,6 +16,8 @@ must not make that decision or start implementing it in the same turn.
   implementation in the same question turn.
 - A question to one agent does not pause, cancel, or stop other agents or
   their authorized work.
+- A question about stopping workers is not permission to stop them. Explain
+  their status or why they are running; do not cancel them to answer it.
 
 **Forbidden in the reply:**
 
@@ -59,9 +61,9 @@ unrequested design work.
 
 ## Tool guard
 
-When a root prompt has verified user origin and is classified as a question, the plugin denies
-that agent's recognized state-changing tool calls until the next non-question
-prompt. Denied calls include file edits, recognized shell mutations such as
+When a root prompt has verified user origin and is classified as a question,
+the plugin denies that agent's recognized state-changing tool calls during
+the question turn. Denied calls include file edits, recognized shell mutations such as
 commits and file writes, task or todo creation, and launching, messaging, or
 stopping workers. Read-only research stays available. After a denial, answer
 from what read-only research can establish and end the turn.
@@ -81,10 +83,19 @@ period-ended sentences. Conditional instructions such as "When CI passes,
 merge the PR." do not start a question turn.
 
 Unknown origin also clears the marker and must not produce an answer-only
-fence. Root identity and question-like text do not prove that the user wrote
-the prompt. The current native integrations have no verified positive origin
-signal, so genuine questions on those hosts receive guidance without this
-tool guard. Do not infer native enforcement from shared-contract tests.
+tool fence. This is a hook limitation, not an exemption from the user-question
+rule above. A genuine user question still requires an answer-only response,
+even when the hook cannot verify its origin. Question-shaped reports,
+notifications, and parent-written assignments do not suspend authorized work.
+Root identity and question-like text do not prove that the user wrote the
+prompt. Copilot verifies the current root prompt against its native
+`user.message` provenance at tool time. Parent-written, automated and
+autopilot messages do not create the restriction. Child calls never inherit
+the root's question state; worker replies and notifications do not create
+root questions. The next instruction or a completed root answer ends the
+restriction. Missing, ambiguous or unreadable evidence leaves tools available.
+Claude and Codex still have no verified positive native user-origin signal.
+Do not infer their native enforcement from shared-contract tests.
 Evidence and gaps: [../../docs/guardrails.md#prompt-origin-evidence-and-gaps](../../docs/guardrails.md#prompt-origin-evidence-and-gaps).
 
 ## Checklist

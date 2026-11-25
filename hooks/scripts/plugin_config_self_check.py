@@ -419,6 +419,22 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
         self.assertEqual(config.synchronize(str(self.project), 'copilot', strict=True), disabled)
 
+    def test_unknown_origin_keeps_user_question_guidance_without_marking_the_turn(self):
+        for event in ('SessionStart', 'UserPromptSubmit'):
+            with self.subTest(event=event):
+                data = {**self.data, '_ioncache_prompt_origin': 'unknown',
+                        'prompt': 'Why have the workers not stopped?'}
+                output = str(guidance.run_hook(event, data))
+                self.assertIn('A user question asks for information, not action', output)
+                self.assertIn('even for an existing assignment', output)
+                self.assertIn('A question about stopping workers is not permission to stop them', output)
+                self.assertIn('reports, notifications, or parent-written messages', output)
+                self.assertNotIn('Question turn:', output)
+                self.assertFalse(marker_path(data).exists())
+                self.assertEqual(run_shared_hooks('PreToolUse', {
+                    **data, 'tool_name': 'stop_agent', 'tool_input': {'agent_id': 'worker'},
+                }), [])
+
     def test_question_marker_applies_only_to_the_questioned_identity(self):
         root = {**self.data, 'tool_name': 'Write', 'tool_input': {'file_path': 'target.py', 'content': 'requested'}}
         child = {**root, 'agent_id': 'worker'}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run all checks, or pass CopilotAdapterTests.test_name for one test."""
+import copy
 import io
 import json
 import os
@@ -17,6 +18,7 @@ from contextlib import nullcontext
 
 import copilot_adapter
 import copilot_history
+import copilot_question
 import docs_cache
 import guidance
 import hook_adapter_common
@@ -30,6 +32,7 @@ import pytest
 from self_check_support import inprocess_hooks, run_main, uses_process
 
 EM_DASH = chr(0x2014)
+NATIVE_QUESTION_EVENTS = json.loads((ROOT / 'hooks/fixtures/copilot-question-events.json').read_text())
 
 
 class CopilotAdapterTests(unittest.TestCase):
@@ -96,6 +99,117 @@ class CopilotAdapterTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config))
 
+    def native_history(self, *groups):
+        events = [event for group in groups for event in NATIVE_QUESTION_EVENTS[group]]
+        content = '\n'.join(json.dumps(event) for event in events) + '\n'
+        content = content.replace('capture-root', self.payload['sessionId'])
+        path = self.home / '.copilot/session-state' / self.payload['sessionId'] / 'events.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return path
+
+    def test_native_user_question_blocks_only_the_main_session(self):
+        self.prompt(NATIVE_QUESTION_EVENTS['question'][0]['data']['input']['prompt'])
+        self.native_history('question', 'children', 'handbacks')
+        self.assertEqual(self.tool('create', {'path': 'main.txt', 'file_text': 'no'}).get('permissionDecision'),
+                         'deny')
+        self.assertEqual(self.tool('stop_agent', {'agent_id': 'worker'}).get('permissionDecision'), 'deny')
+        self.assertEqual(self.tool('view', {'path': 'main.txt'}), {})
+        self.assertEqual(self.tool('read_agent', {'agent_id': 'worker'}), {})
+        for identity in ({'agentId': 'child', 'parentAgentId': self.payload['sessionId']},
+                         {'sessionId': self.payload['sessionId'] + '-child', 'agentId': 'child',
+                          'parentAgentId': self.payload['sessionId']}):
+            output, _ = self.invoke('preToolUse', **identity, toolName='create',
+                                    toolArgs={'path': 'child.txt', 'file_text': 'continued'})
+            self.assertEqual(output, {})
+        self.assertEqual(self.tool('task', {'prompt': 'Continue work'}).get('permissionDecision'), 'deny')
+        self.native_history('question', 'answered', 'handbacks')
+        command = 'printf continued > continued.txt'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+        self.assertEqual((self.project / 'continued.txt').read_text(), 'continued')
+        self.native_history('question', 'instruction', 'children', 'handbacks')
+        self.assertEqual(self.tool('task', {'prompt': 'Continue work'}), {})
+
+    def test_native_non_user_sources_never_create_a_question_restriction(self):
+        path = self.native_history('question')
+        question = [json.loads(line) for line in path.read_text().splitlines()]
+        variants = [{'source': source} for source in
+                    ('agent-parent', 'automation-check', 'schedule-1', 'system', 'autopilot', 'memory', '')]
+        variants += [{'agentAuthored': True}, {'isAutopilotContinuation': True}]
+        for metadata in variants:
+            with self.subTest(metadata=metadata):
+                events = copy.deepcopy(question)
+                events[-1]['data'].update(metadata)
+                path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+                self.assertEqual(self.tool('create', {'path': 'continued.txt', 'file_text': 'yes'}), {})
+        self.native_history('question', 'autopilot', 'children', 'handbacks')
+        self.assertEqual(self.tool('stop_agent', {'agent_id': 'worker'}), {})
+
+    def test_native_question_evidence_failures_do_not_reuse_an_old_question(self):
+        path = self.native_history('question')
+        question = path.read_text()
+        self.marker.write_text('')
+        pending = copy.deepcopy(NATIVE_QUESTION_EVENTS['instruction'][0])
+        pending['data']['input']['sessionId'] = self.payload['sessionId']
+        for suffix in ('{incomplete', '{invalid}\n', json.dumps(pending) + '\n'):
+            with self.subTest(suffix=suffix):
+                path.write_text(question + suffix)
+                self.assertEqual(self.tool('create', {'path': 'continued.txt', 'file_text': 'yes'}), {})
+                self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        path.unlink()
+        path.symlink_to(self.project / 'missing-history')
+        self.assertEqual(self.tool('stop_agent', {'agent_id': 'worker'}), {})
+
+    def test_native_question_opt_out_and_new_instruction_recovery(self):
+        self.native_history('question')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}).get('permissionDecision'), 'deny')
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
+                          {'features': {'answer-questions': False}})
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json',
+                          {'features': {'answer-questions': True}})
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}).get('permissionDecision'), 'deny')
+        self.native_history('question', 'instruction')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+
+    def test_native_question_matches_user_origin_across_delivery_modes(self):
+        path = self.native_history('question')
+        question = [json.loads(line) for line in path.read_text().splitlines()]
+        for delivery in ('idle', 'steering', 'queued'):
+            with self.subTest(delivery=delivery):
+                question[-1]['data'].update(source='user', delivery=delivery)
+                path.write_text('\n'.join(json.dumps(event) for event in question) + '\n')
+                self.assertEqual(self.tool('task', {'prompt': 'Change files'}).get('permissionDecision'), 'deny')
+
+    def test_native_interactive_question_correlates_through_its_memory_context(self):
+        path = self.native_history('interactive_question')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}).get('permissionDecision'), 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'cat seed.txt'}), {})
+        events = [json.loads(line) for line in path.read_text().splitlines()]
+        events[1]['data']['interactionId'] = 'another-interaction'
+        path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+        self.native_history('interactive_question', 'instruction', 'children', 'handbacks')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+
+    def test_native_history_budget_and_mismatched_message_fail_open(self):
+        path = self.native_history('question')
+        question = path.read_text()
+        filler = json.dumps({'type': 'assistant.message', 'data': {'content': 'x' * 2000}}) + '\n'
+        with mock.patch.object(copilot_question, 'MAX_HISTORY_BYTES', 1024):
+            path.write_text(filler + question)
+            self.assertEqual(self.tool('task', {'prompt': 'Change files'}).get('permissionDecision'), 'deny')
+            path.write_text(question + filler)
+            self.assertEqual(self.tool('task', {'prompt': 'Change files'}), {})
+            self.assertTrue(any('history budget' in message for message in self.progress))
+        events = [json.loads(line) for line in question.splitlines()]
+        events[-1]['data']['content'] = 'Different displayed content'
+        path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+        self.assertEqual(self.tool('task', {'prompt': 'Change files'}), {})
+        self.assertTrue(any('do not match' in message for message in self.progress))
+
     def test_unverified_prompt_origins_release_existing_question_state(self):
         fixtures = json.loads((ROOT / 'hooks/fixtures/prompt-origins.json').read_text())['copilot']
         prompts = [item['payload'] for item in fixtures]
@@ -112,7 +226,9 @@ class CopilotAdapterTests(unittest.TestCase):
                 output, _ = self.invoke('userPromptTransformed', **fields)
                 self.assertFalse(self.marker.exists())
                 self.assertNotIn('Question turn:', str(output))
-                self.assertNotIn('do not decide or implement next steps', str(output))
+                self.assertIn('A user question asks for information, not action', str(output))
+                self.assertIn('even for an existing assignment', str(output))
+                self.assertIn('reports, notifications, or parent-written messages', str(output))
                 self.assertEqual(self.tool('create', {'path': 'report.txt', 'file_text': 'continued'}), {})
                 self.assertEqual(self.tool('task', {'prompt': 'Continue the assigned work'}), {})
                 self.assertEqual(self.tool('bash', {'command': 'git status --short'}), {})
@@ -120,6 +236,48 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('bash', {'command': command}), {})
         subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
         self.assertEqual((self.project / 'resumed.txt').read_text(), 'continued')
+
+    def test_question_stop_control_preserves_read_only_recovery_and_child_work(self):
+        args = {'agent_id': 'assigned-worker'}
+        self.verified_question('Why have the workers not stopped?')
+        denied = self.tool('stop_agent', args)
+        self.assertEqual(denied.get('permissionDecision'), 'deny')
+        self.assertIn('Read-only research remains available', denied['permissionDecisionReason'])
+        self.assertEqual(self.tool('read_agent', args), {})
+        self.assertEqual(self.tool('list_agents', {}), {})
+        for identity in ({'agentId': 'child', 'parentAgentId': self.payload['sessionId']},
+                         {'sessionId': self.payload['sessionId'] + '-child', 'agentId': 'child',
+                          'parentAgentId': self.payload['sessionId']},
+                         {'sessionId': self.payload['sessionId'] + '-independent'}):
+            with self.subTest(identity=identity):
+                output, _ = self.invoke('preToolUse', **identity, toolName='stop_agent', toolArgs=args)
+                self.assertEqual(output, {})
+        self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+        self.prompt('Stop the assigned worker')
+        self.assertEqual(self.tool('stop_agent', args), {})
+
+    def test_question_stop_control_opt_out_and_checker_failure(self):
+        args = {'agent_id': 'assigned-worker'}
+        settings = self.home / '.claude/ioncache-ai-tools.local.json'
+        self.verified_question('Why have the workers not stopped?')
+        self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+        self.write_config(settings, {'features': {'answer-questions': False}})
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.tool('stop_agent', args), {})
+        output = self.prompt('Why have the workers not stopped?')
+        self.assertNotIn('A user question asks for information, not action', str(output))
+        self.assertEqual(self.tool('stop_agent', args), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.write_config(settings, {'features': {'answer-questions': True}})
+        self.verified_question('Why have the workers not stopped?')
+        self.assertEqual(self.tool('stop_agent', args).get('permissionDecision'), 'deny')
+        self.marker.unlink()
+        self.marker.symlink_to(self.project / 'unavailable-marker')
+        self.assertEqual(self.tool('stop_agent', args), {})
+        self.assertTrue(any('pending-question checks unavailable' in item for item in self.progress))
+        self.prompt('Continue the assignment')
+        self.assertFalse(self.marker.is_symlink())
+        self.assertEqual(self.tool('stop_agent', args), {})
 
     def test_incomplete_child_identity_cannot_clear_or_inherit_root_marker(self):
         self.verified_question('Why did this change?')

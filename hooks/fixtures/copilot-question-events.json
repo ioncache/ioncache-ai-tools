@@ -1,0 +1,175 @@
+{
+  "capture": {
+    "versions": ["1.0.115-8", "1.0.116-2"],
+    "date": "2026-11-24",
+    "notes": "Projected native session events from live user input, autopilot continuation, synchronous explore and background general-purpose workers, plus a 1.0.116-2 interactive prompt with memory context. Only fields used to establish question provenance and delivery are retained. Native identities are replaced consistently; omitted optional source fields remain absent."
+  },
+  "question": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "ok and your cahnges, do they do that?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "ok and your cahnges, do they do that?",
+        "delivery": "idle"
+      }
+    }
+  ],
+  "interactive_question": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "This is a bounded native hook integration test. In two separate bash calls, first run exactly cat seed.txt, then attempt exactly printf blocked > live-forbidden.txt. Report the result without retrying or any other tools. Why should the write be denied during this question turn?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "",
+        "source": "memory",
+        "interactionId": "capture-interaction"
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "This is a bounded native hook integration test. In two separate bash calls, first run exactly cat seed.txt, then attempt exactly printf blocked > live-forbidden.txt. Report the result without retrying or any other tools. Why should the write be denied during this question turn?",
+        "delivery": "idle",
+        "interactionId": "capture-interaction"
+      }
+    }
+  ],
+  "instruction": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "ok well verify"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "ok well verify",
+        "delivery": "idle"
+      }
+    }
+  ],
+  "autopilot": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "You have not yet marked the task as complete using the task_complete tool. If you were planning changes the user asked for, stop planning and start implementing. You aren't done until you have fully completed the task.\n\nIMPORTANT: Do NOT call task_complete if:\n- You have open questions or ambiguities - make good decisions and keep working\n- You encountered an error - try to resolve it or find an alternative approach\n- There are remaining steps - complete them first\n\nIf the user asked only for a review, analysis or recommendation and you have already delivered it, the task is complete: call task_complete now. A follow-up you offered or recommended is not part of the task, so do not start it.\n\nKeep working autonomously until the task is truly finished, then call task_complete."
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "",
+        "source": "autopilot",
+        "delivery": "idle",
+        "isAutopilotContinuation": true
+      }
+    }
+  ],
+  "children": [
+    {
+      "type": "hook.start",
+      "agentId": "capture-background",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-background",
+          "agentId": "capture-background",
+          "agentType": "general-purpose",
+          "parentAgentId": "capture-root",
+          "prompt": "Use documentation-backed third-party specifics. Applicable verified documentation can be reused; summaries establish only their stated details.\n\nAnswer questions with their reasoning and do not invent unrequested work. A question in an assignment from your parent does not pause it, and a question to another agent does not stop your authorized work.\n\nUse the engineering-judgment skill for non-trivial planning and implementation. Assigned review workers and validators use only supplied instructions: do not load engineering-judgment, review-code, other categories or generic review workflows. Reading source does not activate skills. This guidance does not change permissions.\n\nScope includes necessary supporting changes, not unrelated work or unsolicited next steps. Honor explicit limits; ask before exceeding them.\n\nThis is a live hook-routing probe, not a coding or review assignment. Do not use tools, inspect files, load skills, change files, or launch other workers. Return exactly this one sentence and nothing else: Why did IONCACHE_ORIGIN_BACKGROUND_20261124 finish, and can the parent continue?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "agentId": "capture-background",
+      "data": {
+        "content": "This is a live hook-routing probe, not a coding or review assignment. Do not use tools, inspect files, load skills, change files, or launch other workers. Return exactly this one sentence and nothing else: Why did IONCACHE_ORIGIN_BACKGROUND_20261124 finish, and can the parent continue?",
+        "source": "agent-capture-root",
+        "delivery": "idle"
+      }
+    },
+    {
+      "type": "hook.start",
+      "agentId": "capture-sync",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-sync",
+          "agentId": "capture-sync",
+          "agentType": "explore",
+          "parentAgentId": "capture-root",
+          "prompt": "Use documentation-backed third-party specifics. Applicable verified documentation can be reused; summaries establish only their stated details.\n\nAnswer questions with their reasoning and do not invent unrequested work. A question in an assignment from your parent does not pause it, and a question to another agent does not stop your authorized work.\n\nUse the engineering-judgment skill for non-trivial planning and implementation. Assigned review workers and validators use only supplied instructions: do not load engineering-judgment, review-code, other categories or generic review workflows. Reading source does not activate skills. This guidance does not change permissions.\n\nScope includes necessary supporting changes, not unrelated work or unsolicited next steps. Honor explicit limits; ask before exceeding them.\n\nThis is a live hook-routing probe, not a coding or review assignment. Do not use tools, inspect files, load skills, change files, or launch other workers. Return exactly this one sentence and nothing else: Why did IONCACHE_ORIGIN_SYNC_20261124 finish, and can the parent continue?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "agentId": "capture-sync",
+      "data": {
+        "content": "This is a live hook-routing probe, not a coding or review assignment. Do not use tools, inspect files, load skills, change files, or launch other workers. Return exactly this one sentence and nothing else: Why did IONCACHE_ORIGIN_SYNC_20261124 finish, and can the parent continue?",
+        "source": "agent-capture-root",
+        "delivery": "idle"
+      }
+    }
+  ],
+  "handbacks": [
+    {
+      "type": "tool.execution_complete",
+      "data": {
+        "result": {
+          "content": "Why did IONCACHE_ORIGIN_SYNC_20261124 finish, and can the parent continue?"
+        }
+      }
+    },
+    {
+      "type": "tool.execution_complete",
+      "data": {
+        "result": {
+          "content": "Agent is idle (waiting for messages). agent_id: capture-background, agent_type: general-purpose, status: idle, description: Probe background prompt routing, elapsed: 3s, total_turns: 1\n\n[Turn 0]\nWhy did IONCACHE_ORIGIN_BACKGROUND_20261124 finish, and can the parent continue?"
+        }
+      }
+    },
+    {
+      "type": "system.notification",
+      "data": {
+        "content": "<system_notification>\nAgent \"origin-background-probe\" (general-purpose) has finished processing and is now idle.\n</system_notification>"
+      }
+    }
+  ],
+  "answered": [
+    {
+      "type": "hook.end",
+      "data": {
+        "hookType": "agentStop",
+        "success": true
+      }
+    }
+  ]
+}

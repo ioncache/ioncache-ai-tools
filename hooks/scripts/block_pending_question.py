@@ -30,7 +30,7 @@ ALWAYS_MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_pa
 # read-only research, and delegation would bypass this agent's restriction.
 WORK_CONTROL_TOOLS = {
     'Agent', 'Task', 'task', 'spawn_agent', 'run_dynamic_workflow', 'Workflow',
-    'write_agent', 'send_input', 'resume_agent', 'SendMessage', 'TaskStop',
+    'write_agent', 'send_input', 'resume_agent', 'SendMessage', 'TaskStop', 'stop_agent',
     'TodoWrite', 'TaskCreate', 'TaskUpdate',
 }
 
@@ -304,7 +304,12 @@ def evaluate(data):
     if not isinstance(tool_name, str):
         raise ValueError('missing tool_name')
     # Only this identity's own marker: a root question must not stop children.
-    if not is_root(data) or not has_marker(data) or not enabled('answer-questions', data):
+    if not is_root(data) or not enabled('answer-questions', data):
+        return None
+    pending = data.get('_ioncache_native_question')
+    if pending is None:
+        pending = has_marker(data)
+    if pending is not True:
         return None
     if not is_question_blocked(tool_name, data.get('tool_input') or {}):
         return None
