@@ -68,19 +68,24 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   The shared boundary uses `_ioncache_prompt_origin: "user"`; this is an
   internal contract, not a native host field. Root identity alone, a prompt
   event name, and the absence of known text prefixes do not establish origin.
-  Current native payloads have no verified user-origin signal, so all three
-  harnesses do not create markers, even for genuine questions. Origin stays
-  unknown unless observed framing identifies a host turn. Restoring native
-  question enforcement requires verified origin
-  evidence; synthetic normalized-input tests do not establish host support.
+  Native prompt payloads alone do not establish user origin and do not create
+  markers. Copilot's `copilot_question.py` correlates the current root prompt
+  with native `user.message` provenance at pre-tool time and passes the result
+  to the shared guard. It reads bounded local history without storing another
+  permission state. Child identities, agent/automation/autopilot messages,
+  completed root answers, and unknown or failed evidence must not fence work.
+  Claude and Codex still lack verified positive origin evidence.
+  Synthetic normalized-input tests do not establish native host support.
   See `docs/guardrails.md#prompt-origin-evidence-and-gaps` and the sanitized
-  captures in `hooks/fixtures/prompt-origins.json`.
+  captures in `hooks/fixtures/prompt-origins.json` and
+  `hooks/fixtures/copilot-question-events.json`.
   `claude_prompt.py` normalizes observed Claude framing at the guidance entry
   boundary. It removes system-reminder blocks from question text and recognizes
   task-notification or agent-message segments anywhere in a batch, not just
   at the beginning. Keep the recorded model-facing batches in
   `hooks/fixtures/claude-batched-prompts.json` distinct from hook-stdin captures.
-  Copilot and Codex batching/reminder formats remain unverified.
+  Keep Copilot's captured same-interaction memory records distinct from submitted
+  prompts. Other Copilot and Codex batching/reminder formats remain unverified.
   The shared classifier keeps clauses ending in `?`. Starting words count
   only for a whole, single-clause prompt of at most 12 words and 120 characters,
   without a trailing period, newline, colon or semicolon. Commas may repeat
@@ -90,8 +95,9 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   including host-started, unknown-origin and parent-written turns. Neither
   an agent identity nor a parent identity may create a root question marker.
   A guidance or marker-clear failure must not create one afterward.
-  The guard reads only the caller's own marker, never the root's,
-  so a root question cannot stop a running child. It denies `is_mutating`
+  The guard uses only the caller's own marker or Copilot root-message evidence,
+  never a parent's state, so a root question cannot stop a running child.
+  It denies `is_mutating`
   matches and `WORK_CONTROL_TOOLS` (launching, messaging, or stopping workers;
   task/todo creation) so the questioned agent cannot delegate around it.
   Marker and settings failures report unavailability without a denial.

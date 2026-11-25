@@ -435,7 +435,7 @@ WORK_CONTROL_FIXTURES = [
     ('Agent', True), ('Task', True), ('task', True), ('Workflow', True), ('spawn_agent', True),
     ('send_input', True), ('SendMessage', True), ('TaskStop', True), ('TaskCreate', True),
     ('TaskUpdate', True), ('TodoWrite', True), ('run_dynamic_workflow', True),
-    ('write_agent', True), ('resume_agent', True), ('Read', False), ('Grep', False),
+    ('write_agent', True), ('resume_agent', True), ('stop_agent', True), ('Read', False), ('Grep', False),
     ('TaskList', False), ('WebFetch', False),
 ]
 

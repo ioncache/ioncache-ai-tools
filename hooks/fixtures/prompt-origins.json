@@ -2,7 +2,7 @@
   "capture": {
     "date": "2026-11-17",
     "platform": "macOS",
-    "notes": "Live command-hook stdin from isolated CLI runs. Session, prompt, task and tool identifiers and filesystem paths are redacted. These payloads contain no verified user-origin signal. Missing events are not fabricated fixtures.",
+    "notes": "Initial live command-hook stdin from isolated CLI runs. Later entries carry their own capture metadata. Session, prompt, task and tool identifiers and filesystem paths are redacted. These payloads contain no verified user-origin signal. Missing events are not fabricated fixtures.",
     "versions": {
       "claude": "2.1.326",
       "copilot": "1.0.113-1",
@@ -68,6 +68,36 @@
         "cwd": "/capture/project",
         "prompt": "What is two plus two? Answer without tools.",
         "transformedPrompt": "<current_datetime>2026-11-17T14:11:57.269-05:00</current_datetime>\n\nWhat is two plus two? Answer without tools."
+      }
+    },
+    {
+      "case": "root-question-current",
+      "capture": {
+        "date": "2026-11-24",
+        "version": "1.0.115-8",
+        "source": "Live-session hook.start input for userPromptTransformed"
+      },
+      "payload": {
+        "sessionId": "capture-session",
+        "timestamp": 1795565502024,
+        "cwd": "/capture/project",
+        "prompt": "wait what 2 cycle limit?  are you not fixing the answer questions skill rightnow?",
+        "transformedPrompt": "wait what 2 cycle limit?  are you not fixing the answer questions skill rightnow?"
+      }
+    },
+    {
+      "case": "automated-completion-reminder",
+      "capture": {
+        "date": "2026-11-24",
+        "version": "1.0.115-8",
+        "source": "Live-session hook.start input for userPromptTransformed"
+      },
+      "payload": {
+        "sessionId": "capture-session",
+        "timestamp": 1795565511906,
+        "cwd": "/capture/project",
+        "prompt": "You have not yet marked the task as complete using the task_complete tool. If you were planning changes the user asked for, stop planning and start implementing. You aren't done until you have fully completed the task.\n\nIMPORTANT: Do NOT call task_complete if:\n- You have open questions or ambiguities - make good decisions and keep working\n- You encountered an error - try to resolve it or find an alternative approach\n- There are remaining steps - complete them first\n\nIf the user asked only for a review, analysis or recommendation and you have already delivered it, the task is complete: call task_complete now. A follow-up you offered or recommended is not part of the task, so do not start it.\n\nKeep working autonomously until the task is truly finished, then call task_complete.",
+        "transformedPrompt": "<current_datetime>2026-11-24T19:11:51.905-05:00</current_datetime>\n\nYou have not yet marked the task as complete using the task_complete tool. If you were planning changes the user asked for, stop planning and start implementing. You aren't done until you have fully completed the task.\n\nIMPORTANT: Do NOT call task_complete if:\n- You have open questions or ambiguities - make good decisions and keep working\n- You encountered an error - try to resolve it or find an alternative approach\n- There are remaining steps - complete them first\n\nIf the user asked only for a review, analysis or recommendation and you have already delivered it, the task is complete: call task_complete now. A follow-up you offered or recommended is not part of the task, so do not start it.\n\nKeep working autonomously until the task is truly finished, then call task_complete."
       }
     }
   ],
