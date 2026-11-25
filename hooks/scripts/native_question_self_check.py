@@ -185,9 +185,57 @@ def test_codex_native_question_denial_and_recovery(codex_question):
         'hookSpecificOutput']['permissionDecision'] == 'deny'
     assert codex_tool(data, agent_id='child', agent_type='worker') == {}
     assert codex_tool(data)['hookSpecificOutput']['permissionDecision'] == 'deny'
-    events[-1]['payload']['content'][0]['text'] = 'Implement the change'
+    next_turn = 'next-user-turn'
+    start, message = copy.deepcopy(events[1:])
+    start['payload']['turn_id'] = next_turn
+    start['payload']['turn_attribution'].update(turn_id=next_turn, root_turn_id=next_turn)
+    message['payload']['internal_chat_message_metadata_passthrough']['turn_id'] = next_turn
+    message['payload']['content'][0]['text'] = 'Implement the change'
+    events.extend([
+        {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': data['turn_id']}},
+        start, message,
+    ])
     save_events(data, events)
+    assert codex_tool(data, turn_id=next_turn) == {}
     assert codex_tool(data) == {}
+
+
+@pytest.mark.parametrize('evidence', ['missing', 'question', 'instruction', 'task_complete', 'turn_aborted'])
+def test_codex_truncated_history_requires_a_current_turn_boundary(codex_question, monkeypatch, evidence):
+    import codex_question as native
+    from question_history import history_tail
+
+    data, events = codex_question
+    large_output = {'type': 'response_item', 'payload': {
+        'type': 'function_call_output', 'call_id': 'read-call', 'output': 'x' * 2048,
+    }}
+    if evidence in ('question', 'instruction'):
+        if evidence == 'instruction':
+            events[-1]['payload']['content'][0]['text'] = 'Implement the change'
+        events.insert(0, large_output)
+    else:
+        events.append(large_output)
+        if evidence != 'missing':
+            events.append({'type': 'event_msg', 'payload': {
+                'type': evidence, 'turn_id': data['turn_id'],
+            }})
+    save_events(data, events)
+    lines, truncated = history_tail(data['transcript_path'], 1024)
+    assert truncated
+    assert any(json.loads(line)['payload'].get('type') == 'task_started' for line in lines) == (
+        evidence in ('question', 'instruction')
+    )
+    monkeypatch.setattr(native, 'history_tail', lambda path: history_tail(path, 1024))
+    marker_path(data).write_text('')
+    output = codex_tool(data)
+    if evidence == 'missing':
+        assert 'permissionDecision' not in str(output)
+        assert 'unavailable' in output['systemMessage']
+    elif evidence == 'question':
+        assert output['hookSpecificOutput']['permissionDecision'] == 'deny'
+        assert 'systemMessage' not in output
+    else:
+        assert output == {}
 
 
 @pytest.mark.parametrize('attribution', [

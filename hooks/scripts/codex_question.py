@@ -29,7 +29,8 @@ def user_text(payload, turn_id):
 
 
 def question_from_events(lines, data):
-    active = False
+    """Return None when no turn boundary establishes the question state."""
+    active = None
     text = None
     for line in lines:
         event = json.loads(line)
@@ -61,7 +62,10 @@ def question_turn(data):
     if not data.get('turn_id') or not data.get('transcript_path'):
         return False
     try:
-        lines, _ = history_tail(data['transcript_path'])
+        lines, truncated = history_tail(data['transcript_path'])
     except FileNotFoundError:
         return False
-    return question_from_events(lines, data)
+    result = question_from_events(lines, data)
+    if result is None and truncated:
+        raise ValueError('current turn exceeds the native question history budget')
+    return result is True
