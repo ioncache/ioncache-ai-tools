@@ -713,14 +713,12 @@ def home_page(text, index_url):
 def wiki_pages(root, parent, publication):
     filenames = (publication["page"] + ".md", publication["page"] + ".json",
                  INDEX_PAGE + ".md", "Home.md", "Home.markdown")
-    number = publication["pr_url"].rsplit("/", 1)[1]
-    pattern = rf"(?:Audit:-PR-\#{number},-.+|Audit-PR-{number}-run-[a-f0-9]{{32}}-A[0-9]+-[a-f0-9]{{64}})\.(?:md|json)"
     entries = command(["git", "ls-tree", "-z", parent], cwd=root)
     pages = {}
     for entry in entries.split(b"\0")[:-1]:
         metadata, name = entry.split(b"\t", 1)
         filename = name.decode("utf-8", "surrogateescape")
-        if filename not in filenames and not re.fullmatch(pattern, filename):
+        if filename not in filenames and not audit_page_names((Path(filename),), publication):
             continue
         plan.require(metadata.startswith(b"100644 blob "),
                      "Preserve the wiki and restore regular page files before retrying")
@@ -728,11 +726,15 @@ def wiki_pages(root, parent, publication):
     return pages
 
 
-def previous_pages(root, publication):
+def audit_page_names(entries, publication):
     number = publication["pr_url"].rsplit("/", 1)[1]
     pattern = rf"(?:Audit:-PR-\#{number},-.+|Audit-PR-{number}-run-[a-f0-9]{{32}}-A[0-9]+-[a-f0-9]{{64}})"
-    pages = {entry.stem for entry in root.iterdir()
-             if entry.suffix in (".md", ".json") and re.fullmatch(pattern, entry.stem)}
+    return {entry.stem for entry in entries
+            if entry.suffix in (".md", ".json") and re.fullmatch(pattern, entry.stem)}
+
+
+def previous_pages(root, publication):
+    pages = audit_page_names(root.iterdir(), publication)
     for page in sorted(pages):
         data = review.safe_path(root, page + ".json")
         report = review.safe_path(root, page + ".md")
@@ -839,6 +841,12 @@ def confirm_publication(root, publication, expected):
         content = command(["git", "show", f"{commit}:{filename}"], cwd=root)
         matches = published_index_matches(content, publication) if is_index else content == data
         plan.require(matches, message)
+    names = command(["git", "ls-tree", "--full-tree", "--name-only", "-z", commit], cwd=root)
+    pages = audit_page_names((Path(name) for name in names.decode("utf-8", "surrogateescape").split("\0")[:-1]),
+                             publication)
+    plan.require(not (pages - {publication["page"]}),
+                 "Superseded audit reappeared; inspect the wiki, restore any incomplete report/data pairs "
+                 "or preserve conflicting pages under other names, then retry the reviewed export")
     return commit
 
 

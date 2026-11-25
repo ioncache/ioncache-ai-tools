@@ -2743,12 +2743,32 @@ class DevelopmentRunTests(unittest.TestCase):
     def test_wiki_post_push_fenced_index_requires_preserving_repair(self):
         self.check_wiki_post_push_index_change("fenced-table")
 
-    def check_wiki_post_push_superseded_restoration(self, *, json_only=False):
+    def check_wiki_post_push_superseded_restoration(self, *, json_only=False, absent_legacy=False):
         self.start_audit_fixture()
         state, active, exported = self.audit_export()
+        if absent_legacy:
+            old_page = f"Audit-PR-1-run-{state['id']}-{active['id']}-{'a' * 64}"
+            other_page = old_page.replace("Audit-PR-1-", "Audit-PR-10-")
+            legacy = {"schema": 1, "stage": "audit-final", "run": state["id"]}
+            for page in (old_page, other_page):
+                (self.wiki / (page + ".md")).write_text("Historical audit\n")
+                (self.wiki / (page + ".json")).write_bytes(manifest.encode(legacy))
+            self.git("add", ".", root=self.wiki)
+            self.git("commit", "-qm", "Historical audit pairs", root=self.wiki)
+            self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
+            restoration_commit = self.git("rev-parse", "HEAD", root=self.wiki)
         with patch.dict(os.environ, self.env, clear=True), patch.object(audit, "api", self.audit_api):
             initial = audit.publish(state, active, exported["identity"])
-            old_page = unquote(initial["url"].rsplit("/", 1)[1])
+            if absent_legacy:
+                self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
+                pages = self.git("ls-tree", "--name-only", "FETCH_HEAD", root=self.wiki).splitlines()
+                self.assertNotIn(old_page + ".md", pages)
+                self.assertNotIn(old_page + ".json", pages)
+                self.assertIn(other_page + ".md", pages)
+                self.assertIn(other_page + ".json", pages)
+            else:
+                old_page = unquote(initial["url"].rsplit("/", 1)[1])
+                restoration_commit = initial["wiki_commit"]
             restored_files = [old_page + ".json"] if json_only else [old_page + ".md", old_page + ".json"]
             self.audit_title = "Renamed publication"
             state, active, replacement = self.audit_export()
@@ -2764,7 +2784,7 @@ class DevelopmentRunTests(unittest.TestCase):
                     pushed.append(argv[-1].split(":")[0])
                     self.git("fetch", str(self.wiki_remote), "docs", root=self.wiki)
                     self.git("merge", "--ff-only", "FETCH_HEAD", root=self.wiki)
-                    self.git("restore", f"--source={initial['wiki_commit']}", "--",
+                    self.git("restore", f"--source={restoration_commit}", "--",
                              *restored_files, root=self.wiki)
                     (self.wiki / "Other-page.md").write_text("Concurrent content\n")
                     self.git("add", ".", root=self.wiki)
@@ -2785,7 +2805,7 @@ class DevelopmentRunTests(unittest.TestCase):
                 self.assertEqual(receipt_path.read_bytes(), previous_receipt)
                 self.assertEqual(len(self.audit_body_updates), 1)
                 self.assertEqual((self.store / "RUN.json").read_bytes(), before)
-                self.git("restore", f"--source={initial['wiki_commit']}", "--", old_page + ".md", root=self.wiki)
+                self.git("restore", f"--source={restoration_commit}", "--", old_page + ".md", root=self.wiki)
                 self.git("add", "--", old_page + ".md", root=self.wiki)
                 self.git("commit", "-qm", "Restore superseded audit partner for recovery", root=self.wiki)
                 self.git("push", str(self.wiki_remote), "HEAD:refs/heads/docs", root=self.wiki)
@@ -2797,6 +2817,11 @@ class DevelopmentRunTests(unittest.TestCase):
         new_page = unquote(final["url"].rsplit("/", 1)[1])
         self.assertEqual(sorted(name for name in pages if name.startswith("Audit:")),
                          sorted([new_page + ".md", new_page + ".json"]))
+        self.assertNotIn(old_page + ".md", pages)
+        self.assertNotIn(old_page + ".json", pages)
+        if absent_legacy:
+            self.assertEqual(self.git("show", f"FETCH_HEAD:{other_page}.md", root=self.wiki), "Historical audit")
+            self.assertEqual(json.loads(self.git("show", f"FETCH_HEAD:{other_page}.json", root=self.wiki)), legacy)
         self.assertEqual(self.git("show", "FETCH_HEAD:Other-page.md", root=self.wiki), "Concurrent content")
         self.assertEqual(len(self.audit_body_updates), 2)
         self.finish(final)
@@ -2808,6 +2833,14 @@ class DevelopmentRunTests(unittest.TestCase):
     @pytest.mark.stable_storage
     def test_wiki_post_push_superseded_json_requires_partial_pair_recovery(self):
         self.check_wiki_post_push_superseded_restoration(json_only=True)
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_previously_absent_legacy_pair_is_rejected_and_removed(self):
+        self.check_wiki_post_push_superseded_restoration(absent_legacy=True)
+
+    @pytest.mark.stable_storage
+    def test_wiki_post_push_previously_absent_legacy_json_requires_pair_recovery(self):
+        self.check_wiki_post_push_superseded_restoration(absent_legacy=True, json_only=True)
 
     @pytest.mark.stable_storage
     def test_wiki_contention_stops_after_three_attempts_and_can_resume(self):

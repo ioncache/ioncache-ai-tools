@@ -314,9 +314,10 @@ files. Existing page bytes come from the fetched commit, not the checkout that
 smudge filters can transform. Filters or commit hooks cannot silently change the
 published bundle or navigation, or retain a superseded page.
 After pushing, the helper verifies the approved pair, this PR's managed index
-row and the absence of scheduled superseded paths at the fetched wiki head.
+row and the absence of other recognized audit pages for this PR at the fetched
+wiki head, including pages that were absent before the push.
 Missing, changed or non-regular publication files, a missing or changed PR row,
-or restored superseded paths prevent receipt creation. Other index rows,
+or restored superseded paths prevent receipt creation. Other PRs' pages, index rows,
 their order and surrounding text may change; the whole index need not match.
 The receipt identifies that confirmed commit.
 It respects Git signing configuration. Missing access or signing failures
