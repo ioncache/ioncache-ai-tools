@@ -604,6 +604,55 @@ class AuditFormatTests(unittest.TestCase):
         self.assertTrue(updated.startswith(invalid_fence))
         self.assertTrue(audit.published_index_matches(updated.encode(), publication))
 
+    def test_index_preserves_container_examples_without_losing_top_level_fences(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        empty = f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n"
+        table = audit.index_entry(empty, publication)
+        examples = (
+            "- ```text\n  example\n  ```\n\n",
+            "1. ```text\n   example\n   ```\n\n",
+            "- Human example:\n\n  ```text\n  example\n\n",
+            "- Outer:\n  - ```\n    nested example\n    ```\n\n",
+            "> ```\n> Quoted example\n> ```\n\n",
+            "- ```\n  example\n<custom>\n```\n</custom>\n\n",
+            "<!-- Archived fence:\n```\n-->\n\n",
+            "<pre>\n```\n</pre>\n\n",
+            "<style>\n```\n</style>\n\n",
+            "<?example\n```\n?>\n\n",
+            "<!EXAMPLE\n```\n>\n\n",
+            "<![CDATA[\n```\n]]>\n\n",
+            "<div>\n```\n</div>\n\n",
+            '<custom-tag title="example">\n```\n</custom-tag>\n\n',
+            "```\n<!-- Not an HTML block inside a fence\n```\n\n",
+            "Heading\n===\n<custom>\n```\n</custom>\n\n",
+            "[example]: /reference\n<custom>\n```\n</custom>\n\n",
+        )
+        for example in examples:
+            with self.subTest(example=example):
+                updated = audit.index_entry(example + empty, publication)
+                self.assertEqual(updated, example + table)
+                self.assertTrue(audit.published_index_matches(updated.encode(), publication))
+                for content in (example + "```\n" + table + "```\n",
+                                example + "~~~\n" + table + "~~~\n"):
+                    with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                        audit.index_entry(content, publication)
+                    with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                        audit.published_index_matches(content.encode(), publication)
+
+    def test_lazy_container_paragraphs_do_not_hide_a_top_level_fence(self):
+        publication = {**self.bundle["publication"], "url": "https://example.invalid/report",
+                       "data_url": "https://example.invalid/data"}
+        table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
+        for paragraph in ("- Human note\n", "> Human note\n", "- Note\n\n  Continued note\n",
+                          "A paragraph\n    Indented continuation\n", "[example]: invalid reference text\n"):
+            with self.subTest(paragraph=paragraph):
+                content = paragraph + "<custom>\n```\n\n" + table + "```\n"
+                with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                    audit.index_entry(content, publication)
+                with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
+                    audit.published_index_matches(content.encode(), publication)
+
 
 if __name__ == "__main__":
     unittest.main()

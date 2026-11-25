@@ -418,7 +418,7 @@ but does not spend or refund development assignments.
 
 If the table or managed PR link block was edited into an unsupported shape,
 preserve the human content and repair only the structure before retrying.
-Keep the managed table unindented and outside fenced code blocks. Preserve
+Keep the managed table unindented and outside fenced code and HTML blocks. Preserve
 unrelated code examples and notes when restoring the table.
 Move human notes outside the managed link block; do not discard them. Consolidate
 duplicate rows for this PR while preserving human content and wiki history.

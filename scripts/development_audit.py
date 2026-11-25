@@ -467,29 +467,114 @@ def audit_links(publication):
             f" &#183; [Automated Pull Request Audits]({publication['index_url']})")
 
 
-def index_table_headers(lines):
-    headers = []
-    fence = None
-    for index, line in enumerate(lines):
-        marker = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line.expandtabs(4).rstrip("\r\n"))
-        if fence is not None:
-            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
+def index_html_block_end(line, paragraph):
+    starts = (
+        (r"(?i:<(?:script|pre|style)(?=[ >]|$))", r"(?i:</(?:script|pre|style)>)"),
+        (r"<!--", r"-->"), (r"<\?", r"\?>"),
+        (r"<![A-Z]", r">"), (r"<!\[CDATA\[", r"\]\]>"),
+    )
+    for opening, ending in starts:
+        if re.match(r" {0,3}" + opening, line):
+            return ending
+    block_tags = (
+        "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|"
+        "details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|"
+        "h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+        "optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+    )
+    if re.match(r" {0,3}(?i:</?(?:" + block_tags + r")(?=[ >]|/>|$))", line):
+        return r"^ *$"
+    value = r"""(?:[^ "'=<>`]+|'[^']*'|"[^"]*")"""
+    attribute = r" +[A-Za-z_:][A-Za-z0-9_.:-]*(?: *= *" + value + r")?"
+    tag = r"(?:<[A-Za-z][A-Za-z0-9-]*(?:" + attribute + r")* */?>|</[A-Za-z][A-Za-z0-9-]* *>)"
+    if not paragraph and re.fullmatch(r" {0,3}" + tag + r" *", line):
+        return r"^ *$"
+    return None
+
+
+def index_list_indent(line, paragraph):
+    marker = re.match(r" {0,3}(?:[-+*]|([0-9]{1,9})[.)])( +|$)", line)
+    if marker is None or (paragraph and (marker[1] not in (None, "1") or not line[marker.end():])):
+        return None
+    padding = len(marker[2])
+    return marker.end() if 1 <= padding <= 4 else marker.end() - padding + 1
+
+
+class IndexBlock:
+    def __init__(self):
+        self.fence = None
+        self.html_end = None
+        self.list_indent = None
+        self.child = None
+        self.paragraph = False
+
+    def container_line(self, line):
+        if self.list_indent is not None:
+            if not line.strip(" ") or len(line) - len(line.lstrip(" ")) >= self.list_indent:
+                return line[self.list_indent:]
+            return None
+        quote = re.match(r" {0,3}> ?", line)
+        return line[quote.end():] if quote else None
+
+    def header(self, line):
+        marker = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if self.fence is not None:
+            if (marker and marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence)
                     and not marker[2].strip(" ")):
-                fence = None
-            continue
+                self.fence = None
+            return False
+        if self.html_end is not None:
+            if re.search(self.html_end, line):
+                self.html_end = None
+            return False
+        if self.child is not None:
+            content = self.container_line(line)
+            if content is not None:
+                self.child.header(content)
+                self.paragraph = self.child.paragraph
+                return False
+            self.child = None
+            self.list_indent = None
+        if re.fullmatch(r" {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})", line):
+            self.paragraph = False
+            return False
+        self.list_indent = index_list_indent(line, self.paragraph)
+        quote = re.match(r" {0,3}> ?", line)
+        if self.list_indent is not None or quote:
+            self.child = IndexBlock()
+            self.child.header(line[self.list_indent:] if self.list_indent is not None else line[quote.end():])
+            self.paragraph = self.child.paragraph
+            return False
+        self.html_end = index_html_block_end(line, self.paragraph)
+        if self.html_end is not None:
+            if re.search(self.html_end, line):
+                self.html_end = None
+            self.paragraph = False
+            return False
         if marker and (marker[1][0] == "~" or "`" not in marker[2]):
-            fence = marker[1]
-            continue
-        if re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.rstrip()):
-            headers.append(index)
-    return headers
+            self.fence = marker[1]
+            self.paragraph = False
+            return False
+        heading = re.match(r" {0,3}#{1,6}(?: |$)", line) or (
+            self.paragraph and re.fullmatch(r" {0,3}=+ *", line))
+        reference = re.fullmatch(r""" {0,3}\[(?:\\.|[^\]\\])+\]: *(?:<[^<>]*>|[^ <>\t]+)"""
+                                 r"""(?: +(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))? *""",
+                                 line)
+        self.paragraph = bool(line.strip(" ") and (self.paragraph or not line.startswith("    ")) and
+                              not (heading or reference))
+        return bool(re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.rstrip()))
+
+
+def index_table_headers(lines):
+    block = IndexBlock()
+    return [index for index, line in enumerate(lines) if block.header(line.expandtabs(4).rstrip("\r\n"))]
 
 
 def index_table(text, publication):
     lines = text.splitlines(keepends=True)
     headers = index_table_headers(lines)
     plan.require(len(headers) == 1, "Preserve the wiki index and restore one unindented Date / Pull request / "
-                 "Audit records table outside fenced code blocks before retrying")
+                 "Audit records table outside fenced code blocks and HTML blocks before retrying")
     start = headers[0] + 1
     plan.require(start < len(lines) and re.fullmatch(r"\|(?:\s*:?-{3,}:?\s*\|){3}", lines[start].strip()),
                  "Preserve the wiki index and repair its audit table separator before retrying")

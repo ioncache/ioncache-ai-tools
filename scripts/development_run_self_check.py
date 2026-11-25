@@ -2618,6 +2618,8 @@ class DevelopmentRunTests(unittest.TestCase):
         index_name = audit.INDEX_PAGE + ".md"
         other_row = "| 2026-01-01 | [#9 Other PR](https://github.com/fixture/project/pull/9) | Other audit |\n"
         human_notes = "Human notes for the audit index.\n\n"
+        if change == "fenced-table":
+            human_notes += "1. ```text\n   Keep this example\n   ```\n\n"
         errors = {"duplicate-row": "consolidate this PR's row", "fenced-table": "outside fenced code blocks"}
         error = errors.get(change, "Published audit index changed")
         original = audit.command
