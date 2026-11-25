@@ -557,9 +557,9 @@ class IndexBlock:
             return False
         heading = re.match(r" {0,3}#{1,6}(?: |$)", line) or (
             self.paragraph and re.fullmatch(r" {0,3}=+ *", line))
-        reference = re.fullmatch(r""" {0,3}\[(?:\\.|[^\]\\])+\]: *(?:<[^<>]*>|[^ <>\t]+)"""
-                                 r"""(?: +(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))? *""",
-                                 line)
+        reference = not self.paragraph and re.fullmatch(
+            r""" {0,3}\[(?:\\.|[^\]\\])+\]: *(?:<[^<>]*>|[^ <>\t]+)"""
+            r"""(?: +(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))? *""", line)
         self.paragraph = bool(line.strip(" ") and (self.paragraph or not line.startswith("    ")) and
                               not (heading or reference))
         return bool(re.fullmatch(r"\|\s*Date\s*\|\s*Pull request\s*\|\s*Audit records\s*\|", line.rstrip()))

@@ -645,7 +645,8 @@ class AuditFormatTests(unittest.TestCase):
                        "data_url": "https://example.invalid/data"}
         table = audit.index_entry(f"{audit.INDEX_HEADER}\n{audit.INDEX_SEPARATOR}\n", publication)
         for paragraph in ("- Human note\n", "> Human note\n", "- Note\n\n  Continued note\n",
-                          "A paragraph\n    Indented continuation\n", "[example]: invalid reference text\n"):
+                          "A paragraph\n    Indented continuation\n", "[example]: invalid reference text\n",
+                          "Human introduction\n[reference]: /reference\n"):
             with self.subTest(paragraph=paragraph):
                 content = paragraph + "<custom>\n```\n\n" + table + "```\n"
                 with self.assertRaisesRegex(plan.ManifestError, "outside fenced code blocks"):
