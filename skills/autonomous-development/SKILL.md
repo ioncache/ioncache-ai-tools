@@ -54,7 +54,7 @@ the assignment or stop workers. Hand-backs are not user questions.
    - It covers only the permissions, model choices and finite limits it names.
      It names one by stating it, or by approving a presented plan that showed
      its value. For `publish_audit` and `create_follow_up_issues`, that
-     plan must also have given the explanation below. Each kind of
+     plan must also have given that permission's explanation below. Each kind of
      publication is named separately: PR publication (`push`, `create_pr`,
      `mark_ready`), wiki audit publication (`publish_audit`), follow-up issues
      (`create_follow_up_issues`) and UI evidence upload (`screenshots`) to its
