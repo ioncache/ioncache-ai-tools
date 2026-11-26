@@ -32,6 +32,8 @@ the main loop and subagent loops that expose this event. It also reviews string
 `message` fields in `SubagentHandback` calls and string `message`, `content` and
 `summary` fields in `SendMessage` calls before forwarding their argument chunks.
 Recipients, control fields and other tool inputs are left unchanged.
+Malformed message arguments remain subject to native tool validation; they do
+not discard other calls or prevent valid drafts from being reviewed.
 
 Responses without text or supported message payloads do not need a model call.
 Ordinary text, including acknowledgements, goes through the reviewer.

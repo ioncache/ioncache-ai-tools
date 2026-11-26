@@ -18,7 +18,15 @@ export function responseDrafts(chunks) {
   const drafts = [...text].filter(([, value]) => value.trim())
     .map(([index, value]) => ({ id: `text:${index}`, text: value }));
   for (const [index, tool] of tools) {
-    tool.input = JSON.parse(tool.json);
+    try {
+      tool.input = JSON.parse(tool.json);
+    } catch {
+      tool.input = null;
+    }
+    if (tool.input === null || typeof tool.input !== 'object' || Array.isArray(tool.input)) {
+      tools.delete(index);
+      continue;
+    }
     for (const field of MESSAGE_FIELDS[tool.name]) {
       if (typeof tool.input[field] === 'string' && tool.input[field].trim()) {
         drafts.push({ id: `tool:${index}:${field}`, text: tool.input[field] });

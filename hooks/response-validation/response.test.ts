@@ -28,7 +28,7 @@ function setup(on, options = {}) {
     if (options.streamError) throw new Error('source interrupted');
     return {
       turnId: event.turnId, index: event.index, answer: 'The deployed key was tested.',
-      toolUses: options.toolUses || [], stopReason: 'end_turn', usage: null,
+      toolUses: options.toolUses || [], stopReason: options.stopReason || 'end_turn', usage: null,
     };
   });
   return calls;
@@ -97,6 +97,42 @@ test('rewrites handback arguments before yielding them and preserves other tool 
   expect(input).toEqual({ ...original, message: 'Only the local key was tested.' });
   expect(output.result.toolUses[1].input).toEqual(input);
 });
+
+for (const malformed of ['{"message":', 'null']) {
+  test(`invalid message arguments ${malformed} do not discard other calls or drafts`, async ($, on) => {
+    const read = { name: 'Read', input: { file_path: 'file.py' } };
+    const broken = { name: 'SendMessage', input: malformed };
+    const handback = { name: 'SubagentHandback', input: { message: 'The deployed key was tested.' } };
+    const chunks = [
+      { kind: 'tool', index: 0, id: 'read', name: read.name },
+      { kind: 'input', index: 0, json: JSON.stringify(read.input) },
+      { kind: 'tool', index: 1, id: 'broken', name: broken.name },
+      { kind: 'input', index: 1, json: malformed },
+      { kind: 'tool', index: 2, id: 'handback', name: handback.name },
+      { kind: 'input', index: 2, json: JSON.stringify(handback.input) },
+      { kind: 'text', index: 3, text: 'The deployed key was tested.' },
+      { kind: 'stop', stopReason: 'tool_use', usage: null },
+    ];
+    const calls = setup(on, {
+      chunks, toolUses: [read, broken, handback], stopReason: 'tool_use',
+      verdict: JSON.stringify({ edits: [
+        { id: 'tool:2:message', text: 'Only the local key was tested.' },
+        { id: 'text:3', text: 'Only the local key was tested.' },
+      ] }),
+    });
+    const output = await collect(step($, 'child'));
+    expect(output.chunks.slice(0, 5)).toEqual(chunks.slice(0, 5));
+    expect(JSON.parse(output.chunks[5].json).message).toBe('Only the local key was tested.');
+    expect(output.text).toBe('Only the local key was tested.');
+    expect(output.result.answer).toBe(output.text);
+    expect(output.result.toolUses).toEqual([
+      read, broken, { ...handback, input: { message: 'Only the local key was tested.' } },
+    ]);
+    expect(output.result.stopReason).toBe('tool_use');
+    expect(output.chunks.at(-1)).toEqual(chunks.at(-1));
+    expect(calls.model.length).toBe(1);
+  });
+}
 
 test('a reviewer failure replaces the draft without preventing the next response', async ($, on) => {
   let attempts = 0;

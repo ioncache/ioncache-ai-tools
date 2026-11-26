@@ -52,6 +52,23 @@ class ResponseValidationSettingsTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 1)
         self.assertEqual(path.read_text(), '{broken')
 
+    def test_feature_query_keeps_opt_out_when_reconciliation_cannot_write(self):
+        path = config.paths(self.project)['claude'][0]
+        path.parent.mkdir(parents=True)
+        path.write_text('{"features":{"response-validation":false}}')
+        original, _, reconciled = config.read_settings(path, config.defaults(), True, None)
+        self.assertNotEqual(original, reconciled)
+        with (
+            mock.patch.object(config, 'write_atomic', side_effect=PermissionError('read-only')) as writer,
+            mock.patch.object(sys, 'stderr', io.StringIO()),
+        ):
+            self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+            writer.assert_not_called()
+            with self.assertRaises(SystemExit) as error:
+                self.invoke(None)
+            self.assertEqual(error.exception.code, 1)
+        self.assertEqual(path.read_text(), original)
+
     def test_existing_sync_output_is_preserved_and_unknown_features_fail(self):
         self.assertEqual(self.invoke(None), str(config.paths(self.project)['claude'][0]))
         with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as error:

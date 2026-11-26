@@ -226,7 +226,10 @@ def main():
         catalog = defaults()
         if args.feature and args.feature not in catalog:
             raise ValueError('unknown feature')
-        disabled = synchronize(str(Path(args.project).resolve()), args.host, strict=True, catalog=catalog)
+        disabled = synchronize(
+            str(Path(args.project).resolve()), args.host,
+            strict=True, catalog=catalog, persist=not args.feature,
+        )
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-config: synchronization failed: {error}', file=sys.stderr)
         sys.exit(1)

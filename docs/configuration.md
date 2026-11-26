@@ -336,6 +336,8 @@ already delivered to the conversation.
 Claude's response mod reads the current effective `response-validation` setting
 before each response. Its configuration reader uses
 `plugin_config.py claude --project /absolute/project --feature response-validation`;
-the JSON output contains an `enabled` boolean. Without `--feature`, the existing
-synchronization command still prints the global settings path.
+the JSON output contains an `enabled` boolean. This query resolves settings
+without writing, so a readable opt-out still works when reconciliation cannot
+persist. Malformed or unreadable settings still fail. Without `--feature`, the
+synchronization command remains strict and prints the global settings path.
 See [response-validation.md](response-validation.md).
