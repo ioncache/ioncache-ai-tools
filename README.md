@@ -323,26 +323,24 @@ usage.** Disable `docs-cache` to opt out.
 
 Every shipped guard and skill is enabled by default.
 
-### Interactive settings in Claude Code
+### Using plugin settings
 
-Run `/plugin-settings-ui` in Claude Code to open the native settings pane. Choose
-Project or Global, then select a setting to toggle it. Changes save immediately
-across Claude, Copilot, and Codex; global changes preserve project overrides.
-Settings are grouped with section separators. Use Tab and Enter to navigate,
-Page Up/Down to scroll, and Esc to close.
+Run `/ioncache-ai-tools:plugin-settings` to manage settings without editing JSON.
+In Claude Code with mods enabled, it opens a native settings pane. Otherwise,
+the same command prints the grouped settings listing. Copilot and Codex use
+the text interface.
 
-The pane requires Claude Code 2.1.326+ with mods enabled. `/plugin-settings-ui --list`
-prints the full listing instead; setting flags also work with this native
-command. `hook:plugin-settings-ui` controls the pane independently of the skill.
-Copilot, Codex, and Claude installations without mods use the skill below.
+In the pane, choose Project or Global, then select a setting to toggle it.
+Changes save immediately across Claude, Copilot, and Codex; global changes
+preserve project overrides. Use Tab and Enter to navigate, Page Up/Down to
+scroll, and Esc to close.
 
-### Using the settings skill
-
-List settings and their effective states, or enable and disable them without
-editing a settings file:
+Use `--list` to request text even when the pane is available. Setting flags also
+use the text interface:
 
 ```text
 /ioncache-ai-tools:plugin-settings
+/ioncache-ai-tools:plugin-settings --list
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
 /ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
@@ -360,7 +358,9 @@ Use the displayed names as flags; existing JSON keys stay unchanged.
 
 Changes default to the current project and apply across all three hosts.
 `--global` changes global values, preserving project overrides and showing
-their effective result. The bare invocation is read-only; `--help` lists flags.
+their effective result. Opening the pane or listing settings does not change
+preferences; `--help` lists flags. `hook:plugin-settings-ui` independently
+disables the pane, making the same command fall back to text.
 
 ### Editing settings manually
 

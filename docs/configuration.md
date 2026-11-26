@@ -7,8 +7,9 @@ active guards, services, and skills. Every entry ships as `true`.
 
 ## Native Claude settings pane
 
-In Claude Code 2.1.326+ with mods enabled, `/plugin-settings-ui` opens an interactive
-pane. It groups the complete catalog under the same headings and typed names
+In Claude Code with mods enabled, `/ioncache-ai-tools:plugin-settings` opens an
+interactive pane when available, or prints the grouped listing otherwise.
+It groups the complete catalog under the same headings and typed names
 as the CLI. Select Project or Global, then select a setting to enable or disable
 it. Each toggle saves immediately across all three hosts, using the existing
 settings helper and its readback verification. Opening, switching scopes, and
@@ -20,27 +21,29 @@ override differs. Refresh reloads external changes. During an operation,
 setting controls are unavailable. A failed save clears stale controls and shows
 the error; Refresh inspects any partial update before another toggle.
 
-`/plugin-settings-ui --list` prints the grouped listing. Arguments such as
-`/plugin-settings-ui --global --hook:docs-cache=disabled` run the existing CLI
+`/ioncache-ai-tools:plugin-settings --list` always prints the grouped listing.
+Arguments such as
+`/ioncache-ai-tools:plugin-settings --global --hook:docs-cache=disabled` run the existing CLI
 operation without opening the pane. Arguments are parsed as data, never
 executed by a shell. Native commands and controls do not call a model.
 This pane is separate from Claude's built-in `/config`; there is no second
 settings store to reconcile.
-Claude reserves the existing skill's name, so the native command uses the
-`-ui` suffix rather than replacing `/ioncache-ai-tools:plugin-settings`.
+The mod handles the existing namespaced skill command rather than registering
+another command. Without mods, the same invocation runs the skill's text
+interface. No unnamespaced alias is registered.
 
 `hook:plugin-settings-ui` (JSON key `plugin-settings-ui`) controls the pane
 independently of `skill:plugin-settings`. Disable either without disabling the
 other. A disabled pane can be re-enabled with:
 
 ```text
-/plugin-settings-ui --hook:plugin-settings-ui=enabled
+/ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled
 ```
 
-If mods are unavailable, use the namespaced skill or the standalone helper.
-The native command can remain visible when its pane is disabled. An unavailable
-backend or command-name conflict reports the fallback without blocking the
-session. The normal helper remains usable with both UI and skill disabled.
+When the pane is disabled or cannot be displayed, the command automatically
+prints the listing. If the backend also fails, it reports the error and the
+explicit `--list` recovery command without blocking the session.
+The standalone helper remains usable with both UI and skill disabled.
 
 Copilot and Codex use the settings skill below. This plugin does not yet ship
 a native pane for either host. The shared helper's `--json` output
@@ -50,9 +53,11 @@ paths for native callers without duplicating the catalog or persistence rules.
 ## Settings command
 
 Invoke `/ioncache-ai-tools:plugin-settings` in Claude or Copilot, or
-`$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it lists every
-shipped setting and its effective `enabled` or `disabled` state in separate
-groups, without writing settings or lock files.
+`$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it opens the
+Claude pane where available; otherwise it lists every shipped setting and its
+effective `enabled` or `disabled` state in separate groups. `--list` requests
+the listing on every host. Opening or listing does not write settings or lock
+files.
 
 ```text
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled

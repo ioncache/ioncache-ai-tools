@@ -1,5 +1,5 @@
 const PANE = 'ioncache-plugin-settings';
-const RECOVERY = 'Use /ioncache-ai-tools:plugin-settings for the CLI fallback, or run the standalone plugin_settings.py helper.';
+const RECOVERY = 'Use /ioncache-ai-tools:plugin-settings --list for the text interface, or run the standalone plugin_settings.py helper.';
 
 let snapshot;
 let scope = 'project';
@@ -17,6 +17,14 @@ async function run($, args) {
     throw new Error(result.stderr.trim() || 'Settings helper failed without a diagnostic.');
   }
   return result.stdout;
+}
+
+async function listOrChange($, args = '--list') {
+  try {
+    return { text: await run($, ['--command', args]), isTextDisplayOnly: true };
+  } catch (error) {
+    return { text: error.message + '\n' + RECOVERY, isTextDisplayOnly: true };
+  }
 }
 
 async function refresh($, options = {}) {
@@ -52,7 +60,7 @@ function settingRows($, elements) {
   if (!snapshot || busy) return [];
   if (!snapshot.uiEnabled) {
     return [Text({ children: [
-      'Native pane disabled. Re-enable with /plugin-settings-ui --hook:plugin-settings-ui=enabled.',
+      'Native pane disabled. Re-enable with /ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled.',
     ] })];
   }
   return snapshot.groups.flatMap(group => [
@@ -81,41 +89,20 @@ function settingRows($, elements) {
 }
 
 export function register(on) {
-  on('session.start', async ($, e, next) => {
-    try {
-      await $.command.register({
-        name: 'plugin-settings-ui',
-        description: 'Open plugin settings; flags use the CLI, --list prints all settings',
-        argumentHint: '[--list | --setting=enabled|disabled]',
-      });
-    } catch (error) {
-      $.ui.log('Native settings command unavailable: ' + error.message + '\n' + RECOVERY);
-    }
-    return next(e);
-  });
-
-  on('command.run', { command: 'plugin-settings-ui' }, async ($, e) => {
+  on('command.run', { command: 'ioncache-ai-tools:plugin-settings' }, async ($, e) => {
     if (busy) return { text: 'A settings operation is still running.', isTextDisplayOnly: true };
-    if (e.args.trim()) {
-      try {
-        return { text: await run($, ['--command', e.args]), isTextDisplayOnly: true };
-      } catch (error) {
-        return { text: error.message + '\n' + RECOVERY, isTextDisplayOnly: true };
-      }
-    }
+    if (e.args.trim()) return listOrChange($, e.args);
     project = undefined;
     scope = 'project';
     await refresh($);
-    if (!snapshot) return { text: message, isTextDisplayOnly: true };
+    if (!snapshot || !snapshot.uiEnabled) return listOrChange($);
     try {
       const placement = await $.ui.open({
         id: PANE, title: 'Plugin settings', focus: true, closeOnEscape: true,
       });
-      if (!placement.isPlaced) {
-        return { text: 'Settings pane could not be displayed. ' + RECOVERY, isTextDisplayOnly: true };
-      }
-    } catch (error) {
-      return { text: error.message + '\n' + RECOVERY, isTextDisplayOnly: true };
+      if (!placement.isPlaced) return listOrChange($);
+    } catch {
+      return listOrChange($);
     }
     return {};
   });

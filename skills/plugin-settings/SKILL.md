@@ -1,17 +1,20 @@
 ---
 name: plugin-settings
-description: Lists grouped plugin settings and changes them with typed CLI-style flags. Use when the user invokes plugin-settings to inspect settings or explicitly enable or disable plugin features.
+description: Manages plugin settings through the namespaced plugin-settings command, with a native Claude pane or grouped text and typed flags. Use when the user invokes plugin-settings to inspect settings or explicitly enable or disable plugin features.
 ---
 
 # Plugin settings
 
 Use a command interface, not a conversational configuration interview.
 
-Claude Code 2.1.326+ with mods enabled also registers a native `/plugin-settings-ui`
-command. Its bare invocation opens an interactive pane without an assistant
-turn. Do not imitate that pane with conversational questions. The namespaced
-skill below remains the text interface and fallback on all three hosts.
-`/plugin-settings-ui --list` prints settings through Claude's native command.
+There is one command: `/ioncache-ai-tools:plugin-settings`. Claude Code with
+mods enabled handles this existing namespaced command natively: no arguments
+opens a pane when available, otherwise it prints the grouped listing.
+`--list` and setting flags use the text interface without an assistant turn.
+No second slash command or unnamespaced alias is registered.
+
+When the host loads this skill instead, run the text interface below. Do not
+imitate the native pane with conversational questions.
 
 ## Invocation
 
@@ -19,6 +22,7 @@ Claude and Copilot:
 
 ```text
 /ioncache-ai-tools:plugin-settings
+/ioncache-ai-tools:plugin-settings --list
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
 /ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
@@ -28,8 +32,7 @@ Claude and Copilot:
 ```
 
 In Codex, replace the leading `/` with `$`, retaining the plugin namespace.
-The native `/plugin-settings-ui` command is Claude-only. `/plugin-settings`
-is shorthand here, not a promised unnamespaced host alias.
+Only Claude currently has a native pane; Copilot and Codex use text.
 
 With no setting flags, list every shipped setting and its effective
 `enabled` or `disabled` state. Preserve the helper's separate groups: Hooks,
@@ -77,6 +80,7 @@ before retrying. Never claim the files form one atomic transaction.
 helper remains available for explicitly requested settings management, including
 re-enabling the skill. Do not re-enable it without a user request.
 `hook:plugin-settings-ui` independently controls Claude's interactive pane.
+Disabling it makes the same command print the listing instead.
 Neither switch disables the standalone helper.
 Settings changes need no reinstall; instructions already in conversation may
 need a new session to refresh. Do not reload hosts or change native permissions.

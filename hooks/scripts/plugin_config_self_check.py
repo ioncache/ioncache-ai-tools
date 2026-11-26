@@ -207,7 +207,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(self.tree_state(), before)
 
     @pytest.mark.process
-    def test_native_claude_settings_command_coexists_with_skill_and_persists_changes(self):
+    def test_native_claude_settings_command_uses_namespaced_skill_and_persists_changes(self):
         cli = ROOT / 'node_modules/.bin/claude'
         self.assertTrue(cli.exists(), 'Install contributor tooling with npm ci')
         home = self.root / 'native-home'
@@ -226,13 +226,16 @@ class ConfigurationTests(unittest.TestCase):
             str(cli), '--plugin-dir', str(ROOT), '--setting-sources', '',
             '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
         ]
-        for arguments in ('--list', '--hook:docs-cache=disabled'):
+        for arguments in ('', '--list', '--hook:docs-cache=disabled',
+                          '--hook:plugin-settings-ui=disabled', ''):
             result = subprocess.run(
-                [*command, '-p', '/plugin-settings-ui ' + arguments],
+                [*command, '-p', '/ioncache-ai-tools:plugin-settings ' + arguments],
                 cwd=self.project, env=env, text=True, capture_output=True, timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('hook:docs-cache', result.stdout)
+            setting = ('hook:plugin-settings-ui' if arguments == '--hook:plugin-settings-ui=disabled'
+                       else 'hook:docs-cache')
+            self.assertIn(setting, result.stdout)
             self.assertNotIn('Native settings command unavailable', result.stdout)
         for _, path in config.paths(self.project).values():
             self.assertFalse(json.loads(path.read_text())['features']['docs-cache'])
