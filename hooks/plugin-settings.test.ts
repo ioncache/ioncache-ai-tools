@@ -75,6 +75,37 @@ function backend(on, clock?) {
   return state;
 }
 
+async function expectSettingStatus(ui, key, enabled) {
+  const boxes = await ui.findAll({ type: 'Box' });
+  const row = boxes.find(box => box.children.some(child =>
+    child?.type === 'Button' && child.props.key === key));
+  expect(row).toBeDefined();
+  const status = row.children.find(child => child?.type === 'Text');
+  expect(status).toBeDefined();
+  expect(status.children).toEqual([enabled ? 'enabled' : 'disabled']);
+  expect(status.props.color).toBe(enabled ? 'green' : 'red');
+}
+
+async function expectScopeEmphasis(ui, active) {
+  for (const scope of ['project', 'global']) {
+    expect((await ui.find({ key: scope })).props.variant)
+      .toBe(scope === active ? 'primary' : 'secondary');
+  }
+}
+
+async function expectCatalogSummary(ui, available) {
+  const count = await ui.find({ type: 'Text', text: /^\d+ settings below\./ });
+  const groups = await ui.find({ type: 'Text', text: /^Hooks \| Skills$/ });
+  if (!available) {
+    expect(count).toBeUndefined();
+    expect(groups).toBeUndefined();
+    return;
+  }
+  expect(count).toBeDefined();
+  expect(count.text).toMatch(/^3 settings below\./);
+  expect(groups).toBeDefined();
+}
+
 test('opens native panes and saves toggles without a model or shell', async ($, on) => {
   const state = backend(on);
   for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
@@ -83,14 +114,15 @@ test('opens native panes and saves toggles without a model or shell', async ($, 
     expect(await ui.find({ type: 'Text', text: 'Hooks (2)' })).toBeDefined();
     expect(await ui.find({ type: 'Text', text: 'ioncache-ai-tools | Settings' })).toBeDefined();
     expect(await ui.find({ key: 'skill:answer-questions' })).toBeDefined();
-    const previous = state.enabled;
-    await ui.press({ key: 'hook:answer-questions' });
-    expect(state.enabled).toBe(!previous);
-    const row = await ui.find({ key: 'hook:answer-questions' });
-    expect(row.props.label).toBe('hook:answer-questions' + (previous ? ' [ ]' : ' [x]'));
-    const status = await ui.find({ type: 'Text', text: previous ? 'disabled' : 'enabled' });
-    expect(status.props.color).toBe(previous ? 'red' : 'green');
-    expect((await ui.find({ type: 'Text', text: /^Saved and verified/ })).props.color).toBe('green');
+    for (const enabled of [false, true]) {
+      await ui.press({ key: 'hook:answer-questions' });
+      expect(state.enabled).toBe(enabled);
+      const row = await ui.find({ key: 'hook:answer-questions' });
+      expect(row.props.label).toBe('hook:answer-questions' + (enabled ? ' [x]' : ' [ ]'));
+      await expectSettingStatus(ui, 'hook:answer-questions', enabled);
+      await expectSettingStatus(ui, 'skill:answer-questions', true);
+      expect((await ui.find({ type: 'Text', text: /^Saved and verified/ })).props.color).toBe('green');
+    }
     await ui.press({ key: 'close' });
     await ui.unmount();
   }
@@ -143,7 +175,9 @@ test('global edits show project overrides and switching scopes does not write', 
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
   expect((await ui.find({ key: 'project' })).props.label).toBe('Project (editing)');
+  await expectScopeEmphasis(ui, 'project');
   await ui.press({ key: 'global' });
+  await expectScopeEmphasis(ui, 'global');
   expect((await ui.find({ key: 'project' })).props.label).toBe('Project');
   expect((await ui.find({ key: 'global' })).props.label).toBe('Global (editing)');
   expect(await ui.find({
@@ -164,6 +198,7 @@ test('global edits show project overrides and switching scopes does not write', 
   await ui.press({ key: 'refresh' });
   expect(await ui.find({ type: 'Text', text: /Effective project:/ })).toBeUndefined();
   await ui.press({ key: 'project' });
+  await expectScopeEmphasis(ui, 'project');
   expect(state.requests[state.requests.length - 1].includes('--global')).toBe(false);
   await ui.unmount();
 });
@@ -173,11 +208,13 @@ test('reopening after Global mode restores project-scoped reads and writes', asy
   await $.command.run({ command: COMMAND, args: '' });
   const first = await $.ui.mount({ ...PANE, surface: 'terminal' });
   await first.press({ key: 'global' });
+  await expectScopeEmphasis(first, 'global');
   await first.press({ key: 'close' });
   await first.unmount();
 
   await $.command.run({ command: COMMAND, args: '' });
   const reopened = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectScopeEmphasis(reopened, 'project');
   expect(await reopened.find({ type: 'Text', text: 'Editing: project settings (Claude, Copilot, Codex)' })).toBeDefined();
   expect(state.requests[2].slice(2)).toEqual(['--json', '--ui']);
   await reopened.press({ key: 'hook:answer-questions' });
@@ -192,6 +229,7 @@ test('pending operations hide stale controls, serialize commands, and recover', 
   const state = backend(on, clock);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectCatalogSummary(ui, true);
 
   for (const failSave of [false, true]) {
     state.failSave = failSave;
@@ -201,6 +239,8 @@ test('pending operations hide stale controls, serialize commands, and recover', 
     try {
       await clock.settle();
       expect(state.requests.length).toBe(before + 1);
+      await expectCatalogSummary(ui, false);
+      expect((await ui.find({ type: 'Text', text: /^Reading settings\.\.\.$/ })).props.color).toBe('cyan');
       for (const key of ['hook:answer-questions', 'hook:plugin-settings-ui', 'project', 'global', 'refresh']) {
         expect(await ui.find({ key })).toBeUndefined();
       }
@@ -218,9 +258,21 @@ test('pending operations hide stale controls, serialize commands, and recover', 
     if (failSave) {
       expect(await ui.find({ key: 'hook:answer-questions' })).toBeUndefined();
       expect((await ui.find({ type: 'Text', text: /No success confirmed.*Partial write/ })).props.color).toBe('red');
+      await expectCatalogSummary(ui, false);
       state.failSave = false;
-      await ui.press({ key: 'refresh' });
+      state.delayMs = 1000;
+      const refresh = ui.press({ key: 'refresh' });
+      try {
+        await clock.settle();
+        expect((await ui.find({ type: 'Text', text: /^Reading settings\.\.\.$/ })).props.color).toBe('cyan');
+        await expectCatalogSummary(ui, false);
+      } finally {
+        state.delayMs = 0;
+        await clock.advance(1000);
+        await refresh;
+      }
     }
+    await expectCatalogSummary(ui, true);
     expect(await ui.find({ key: 'hook:answer-questions' })).toBeDefined();
     expect(await ui.find({ key: 'global' })).toBeDefined();
     await ui.press({ key: 'hook:answer-questions' });
@@ -233,8 +285,10 @@ test('a mounted pane can disable itself and recover through the same command', a
   const state = backend(on);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectCatalogSummary(ui, true);
   await ui.press({ key: 'hook:plugin-settings-ui' });
   expect(state.uiEnabled).toBe(false);
+  await expectCatalogSummary(ui, false);
   expect(await ui.find({ key: 'hook:answer-questions' })).toBeUndefined();
   expect(await ui.find({ key: 'hook:plugin-settings-ui' })).toBeUndefined();
   expect(await ui.find({
@@ -253,6 +307,7 @@ test('a mounted pane can disable itself and recover through the same command', a
   expect(state.uiEnabled).toBe(true);
   await $.command.run({ command: COMMAND, args: '' });
   const reopened = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectCatalogSummary(reopened, true);
   await reopened.press({ key: 'hook:answer-questions' });
   expect(state.enabled).toBe(false);
   expect(await reopened.find({ type: 'Text', text: /^Saved and verified/ })).toBeDefined();

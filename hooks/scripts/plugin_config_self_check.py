@@ -7,6 +7,7 @@ from itertools import product
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import subprocess
@@ -18,6 +19,7 @@ from unittest import mock
 import uuid
 
 import pytest
+import yaml
 
 import plugin_config as config
 import plugin_settings
@@ -667,6 +669,24 @@ class ConfigurationTests(unittest.TestCase):
                          {'answer-questions': False, 'docs-cache': False})
         with mock.patch.object(config, 'acquire_lock', side_effect=AssertionError('unnecessary lock')):
             self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
+
+    def test_settings_skill_metadata_advertises_command_flags(self):
+        source = (ROOT / 'skills/plugin-settings/SKILL.md').read_text()
+        self.assertTrue(source.startswith('---\n'))
+        header, separator, _ = source.partition('\n---\n')
+        self.assertTrue(separator, 'Skill frontmatter must have a closing delimiter')
+        metadata = yaml.safe_load(header)
+        for path in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json',
+                     '.github/plugin/plugin.json'):
+            manifest = json.loads((ROOT / path).read_text())
+            self.assertEqual(f'{manifest["name"]}:{metadata["name"]}',
+                             'ioncache-ai-tools:plugin-settings')
+        hint = metadata['argument-hint']
+        self.assertIsInstance(hint, str)
+        flags = set(re.findall(r'--[a-z]+(?:-[a-z]+)*', hint))
+        self.assertTrue({'--list', '--help', '--global', '--project'} <= flags, hint)
+        self.assertRegex(hint, r'--project(?:\s+|=)[^\]\s]+')
+        self.assertRegex(hint, r'--[^=\s]+=(?:enabled\|disabled|disabled\|enabled)')
 
     @pytest.mark.process
     def test_installed_settings_helper_runs_from_an_unrelated_project(self):
