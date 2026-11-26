@@ -4,9 +4,10 @@ The manifest is a normalized interpretation of the human plan, not a second
 source of requirements. JSON is used for deterministic validation. Approval
 identifies its canonical JSON digest and every referenced artifact digest.
 It is an approval record, not authentication or a native permission grant.
-Authorization the human already gave is reused and recorded in `constraints`
-before the identity is computed, as [SKILL.md](SKILL.md) Prepare step 6
-defines. It then needs no repeated consent or manually transcribed hash.
+Explicit authorization the human already gave for this content and its
+execution is reused and recorded in `constraints` before the identity is
+computed, as [SKILL.md](SKILL.md) Prepare step 6 defines. It then needs no
+repeated consent or manually transcribed hash.
 
 ## Manifest schema 1
 
