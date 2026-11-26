@@ -1,6 +1,7 @@
 ---
 name: plugin-settings
-description: Manages plugin settings through the namespaced plugin-settings command, with a native Claude pane or grouped text and typed flags. Use when the user invokes plugin-settings to inspect settings or explicitly enable or disable plugin features.
+description: "Configure ioncache-ai-tools: open settings, --list, --help, or --hook:answer-questions=enabled|disabled. Use to inspect or toggle plugin features; --global changes global defaults."
+argument-hint: "[--list] [--help] [--global] [--project PATH] [--<setting>=enabled|disabled ...]"
 ---
 
 # Plugin settings

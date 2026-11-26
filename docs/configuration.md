@@ -15,6 +15,13 @@ it. Each toggle saves immediately across all three hosts, using the existing
 settings helper and its readback verification. Opening, switching scopes, and
 refreshing do not write settings.
 
+The pane names `ioncache-ai-tools` and highlights the scope being edited.
+Rows show the setting name first, then `[x]` or `[ ]`, with green `enabled`
+or red `disabled` text so state remains readable without colour.
+The setting count, category summary, and scroll-key hints reveal the rest of
+the catalog even when it is below the visible area. The host owns scrolling;
+the pane does not add a custom scrollbar.
+
 Tab moves between controls, Enter activates one, Page Up/Down scrolls, and Esc
 closes the pane. Global mode shows the effective project value wherever an
 override differs. Refresh reloads external changes. During an operation,
@@ -58,6 +65,10 @@ Claude pane where available; otherwise it lists every shipped setting and its
 effective `enabled` or `disabled` state in separate groups. `--list` requests
 the listing on every host. Opening or listing does not write settings or lock
 files.
+
+The command description advertises flags alongside the interactive mode.
+Claude's autocomplete also shows an argument hint for `--list`, `--help`,
+`--global`, `--project PATH`, and `--<setting>=enabled|disabled`.
 
 ```text
 /ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
