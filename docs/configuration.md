@@ -48,6 +48,10 @@ tool denial rather than merely instructing the assistant.
 The current directory is the default project. `--project /absolute/project`
 selects another existing directory. Changes update all three hosts' project
 files; they stay sparse and leave global files untouched.
+If any project destination resolves to a global settings file, the command
+refuses the update before writing. Choose a distinct `--project` directory,
+or use `--global` if you intend to change global settings. Read-only listing
+remains available.
 `--global` instead updates all three global files, preserving both embedded
 and file-based project overrides. Its listing shows global and effective
 project states separately. A project override can still win after a global
@@ -57,10 +61,11 @@ Global changes do not affect existing project overrides in other projects.
 The helper uses the shared configuration resolver and locked, atomic file
 writes. It re-reads each target under its lock, preserving unrelated settings
 and intentional symlinks. It validates existing settings before updates and
-re-reads the result afterward. The three files are not one transaction:
-if a write fails after another succeeded, the command exits nonzero and reports
-that the update may be partial. Inspect the listing and correct the reported
-problem before retrying. Malformed preferences are never replaced with defaults.
+checks each target's requested stored values afterward. The three files are
+not one transaction: a failed write, failed readback, or mismatched stored
+value makes the command exit nonzero and report that the update may be partial.
+Inspect the listing and correct the reported problem before retrying. Malformed
+preferences are never replaced with defaults.
 
 `skill:plugin-settings` controls the skill itself. The standalone helper remains
 available for explicitly requested settings management when the skill is off:

@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,17 @@ class ConfigurationTests(unittest.TestCase):
                 code = error.code
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def tree_state(self):
+        result = {}
+        for path in self.root.rglob('*'):
+            if path.is_symlink():
+                result[path] = ('link', path.readlink())
+            elif path.is_file():
+                result[path] = ('file', path.read_bytes())
+            else:
+                result[path] = ('directory',)
+        return result
+
     def test_settings_listing_is_complete_effective_and_read_only(self):
         paths = config.paths(self.project)
         self.write(paths['claude'][0], {'features': {'answer-questions': False}})
@@ -67,7 +79,7 @@ class ConfigurationTests(unittest.TestCase):
         legacy = paths['codex'][0].with_name('config.toml')
         legacy.parent.mkdir(parents=True)
         legacy.write_text('[ioncache-ai-tools]\ndisabled_rules = ["docs-cache"]\n')
-        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        before = self.tree_state()
 
         code, output, error = self.settings_command()
 
@@ -93,7 +105,20 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('hook:autonomous-development:explicit-only', hooks)
         self.assertNotIn('instruction:', hooks)
         self.assertNotIn('skill:', hooks)
-        self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
+        self.assertEqual(self.tree_state(), before)
+
+        code, output, error = self.settings_command('--global')
+
+        self.assertEqual(code, 0, error)
+        self.assertIn('Effective project', output)
+        rows = [line.split() for line in output.splitlines()
+                if len(line.split()) == 3 and line.split()[1] in ('enabled', 'disabled')]
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertIn(['hook:answer-questions', 'disabled', 'enabled'], rows)
+        self.assertIn(['skill:review-code', 'enabled', 'disabled'], rows)
+        self.assertIn(['hook:docs-cache', 'disabled', 'disabled'], rows)
+        self.assertNotIn('Saved:', output)
+        self.assertEqual(self.tree_state(), before)
 
     def test_settings_grouped_flags_update_existing_storage_keys(self):
         flags = {
@@ -167,6 +192,70 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
         self.assertIn('answer-questions', config.synchronize(str(self.project), persist=False))
 
+    def test_settings_home_project_collision_preserves_globals_and_recovers(self):
+        paths = config.paths(self.project)
+        for global_path, _ in paths.values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        originals = {path: path.read_bytes() for path, _ in paths.values()}
+        before = self.tree_state()
+        home_args = ('--project', str(Path.home()))
+
+        code, output, error = self.settings_command(*home_args, '--hook:answer-questions=disabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('Saved:', output)
+        self.assertIn('--project', error)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+        code, _, error = self.settings_command(*home_args)
+        self.assertEqual(code, 0, error)
+        self.assertEqual(self.tree_state(), before)
+
+        code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        for global_path, project_path in paths.values():
+            self.assertEqual(global_path.read_bytes(), originals[global_path])
+            self.assertFalse(json.loads(project_path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+        code, _, error = self.settings_command(*home_args, '--hook:answer-questions=disabled')
+        self.assertNotEqual(code, 0)
+        self.assertIn('--project', error)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_settings_later_host_global_link_is_rejected_before_writes(self):
+        paths = config.paths(self.project)
+        for global_path, _ in paths.values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        link = paths['codex'][1]
+        link.parent.mkdir()
+        link.symlink_to(paths['claude'][0])
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('Saved:', output)
+        self.assertIn(str(paths['claude'][0]), error)
+        self.assertIn('--project', error)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+        code, _, error = self.settings_command()
+        self.assertEqual(code, 0, error)
+        self.assertEqual(self.tree_state(), before)
+
+        code, _, error = self.settings_command('--global', '--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertTrue(link.is_symlink())
+        for global_path, _ in paths.values():
+            self.assertFalse(json.loads(global_path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+        code, _, error = self.settings_command('--hook:answer-questions=enabled')
+        self.assertNotEqual(code, 0)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+
     def test_settings_global_updates_preserve_and_display_project_overrides(self):
         paths = config.paths(self.project)
         self.write(paths['claude'][0], {
@@ -222,6 +311,48 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(code, 0, error)
         self.assertNotIn('docs-cache', config.synchronize(str(self.project), persist=False))
 
+    def test_settings_reject_invalid_project_paths_without_side_effects(self):
+        for global_path, _ in config.paths(self.project).values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        regular_file = self.root / 'not-a-directory'
+        regular_file.write_text('unchanged')
+        for project in (self.root / 'missing', regular_file):
+            with self.subTest(project=project):
+                before = self.tree_state()
+                code, output, error = self.settings_command(
+                    '--project', str(project), '--hook:answer-questions=disabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Saved:', output)
+                self.assertIn('project directory', error)
+                self.assertEqual(self.tree_state(), before)
+
+                code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+                self.assertEqual(code, 0, error)
+                for global_path, project_path in config.paths(self.project).values():
+                    self.assertTrue(json.loads(global_path.read_text())['features']['answer-questions'])
+                    self.assertFalse(json.loads(project_path.read_text())['features']['answer-questions'])
+
+    def test_sync_file_rejects_invalid_updates_before_filesystem_changes(self):
+        catalog = config.defaults()
+        existing = self.root / 'existing.json'
+        self.write(existing, {'features': {'answer-questions': True, 'docs-cache': False}})
+        missing = self.root / 'missing' / 'settings.json'
+        invalid = ({'unknown': True}, {'answer-questions': 'disabled'}, {'answer-questions': 0})
+        before = self.tree_state()
+        for path, updates in product((existing, missing), invalid):
+            with self.subTest(path=path, updates=updates):
+                with self.assertRaisesRegex(ValueError, 'shipped feature IDs and boolean values'):
+                    config.sync_file(path, catalog, updates=updates)
+                self.assertEqual(self.tree_state(), before)
+
+        config.sync_file(existing, catalog, updates={'answer-questions': False})
+
+        features = json.loads(existing.read_text())['features']
+        self.assertFalse(features['answer-questions'])
+        self.assertFalse(features['docs-cache'])
+
     def test_settings_validate_every_host_before_writes(self):
         path = config.paths(self.project)['codex'][1]
         path.parent.mkdir(parents=True)
@@ -259,6 +390,83 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(code, 0, error)
         for _, path in paths.values():
             self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+
+    def test_settings_post_write_divergence_is_reported_and_retry_completes(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        for global_scope, enabled, host in product((False, True), (False, True), paths):
+            with self.subTest(global_scope=global_scope, enabled=enabled, host=host):
+                targets = {name: pair[0 if global_scope else 1] for name, pair in paths.items()}
+                scope = ('--global',) if global_scope else ()
+                flag = '--hook:answer-questions=' + ('enabled' if enabled else 'disabled')
+
+                def competing_update(*args, **kwargs):
+                    result = update(*args, **kwargs)
+                    document = json.loads(targets[host].read_text())
+                    document['features']['answer-questions'] = not enabled
+                    self.write(targets[host], document)
+                    return result
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=competing_update):
+                    code, output, error = self.settings_command(*scope, flag)
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('concurrently', error)
+                self.assertIn('No success confirmed', error)
+                for name, path in targets.items():
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'],
+                                     not enabled if name == host else enabled)
+                code, _, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+
+                code, output, error = self.settings_command(*scope, flag)
+
+                self.assertEqual(code, 0, error)
+                self.assertIn('Scope:', output)
+                for path in targets.values():
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'], enabled)
+
+    def test_settings_final_read_failure_preserves_writes_and_retry_completes(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        read_text = Path.read_text
+        for global_scope in (False, True):
+            with self.subTest(global_scope=global_scope):
+                scope = ('--global',) if global_scope else ()
+                targets = [pair[0 if global_scope else 1] for pair in paths.values()]
+                written = False
+
+                def completed_update(*args, **kwargs):
+                    nonlocal written
+                    result = update(*args, **kwargs)
+                    written = True
+                    return result
+
+                def fail_final_read(path, *args, **kwargs):
+                    if written and path == targets[-1]:
+                        raise OSError('post-write settings read unavailable')
+                    return read_text(path, *args, **kwargs)
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=completed_update), \
+                        mock.patch.object(Path, 'read_text', fail_final_read):
+                    code, output, error = self.settings_command(*scope, '--hook:answer-questions=disabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('post-write settings read unavailable', error)
+                self.assertIn('No success confirmed', error)
+                for path in targets:
+                    self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+                code, _, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+
+                code, output, error = self.settings_command(*scope, '--hook:answer-questions=disabled')
+
+                self.assertEqual(code, 0, error)
+                self.assertIn('Scope:', output)
+                for path in targets:
+                    self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
 
     def test_settings_update_rereads_symlink_target_under_lock(self):
         target = self.root / 'shared.json'
