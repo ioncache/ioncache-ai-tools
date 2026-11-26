@@ -40,8 +40,13 @@ Responses without text or supported message payloads do not need a model call.
 Ordinary text, including acknowledgements, goes through the reviewer.
 Thinking blocks and unrelated tool arguments are not rewritten.
 
-On a reviewer timeout, error, invalid edit, unavailable history, or unreadable
-configuration, the mod replaces the affected drafts with:
+Malformed or unreadable host settings pause validation. The configuration helper
+warns on stderr without changing the settings, and drafts pass through unchanged,
+including when validation was already off. The next response checks the settings
+again, so repair restores the configured behavior.
+
+On a reviewer timeout, error, invalid edit, unavailable history, or failure to
+run the configuration query, the mod replaces the affected drafts with:
 
 > Response validation is unavailable. The unvalidated draft was not delivered.
 > This does not block further work.

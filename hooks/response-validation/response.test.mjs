@@ -1,8 +1,73 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { evidencePacket, parseEdits, MAX_DRAFT_CHARACTERS } from './reviewer.mjs';
 import { responseDrafts, rewriteResponse, rewrittenResult } from './response.mjs';
 import { validateResponse } from './register.mjs';
+
+test('malformed host settings pass drafts through and repaired opt-ins resume review', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'response-config-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = {
+    ...process.env, HOME: join(root, 'home'),
+    COPILOT_HOME: join(root, 'copilot'), CODEX_HOME: join(root, 'codex'),
+  };
+  const paths = [join(env.HOME, '.claude'), env.COPILOT_HOME, env.CODEX_HOME]
+    .map(directory => {
+      mkdirSync(directory, { recursive: true });
+      return join(directory, 'ioncache-ai-tools.local.json');
+    });
+  writeFileSync(paths[1], '{broken');
+  const diagnostics = [];
+  let reviews = 0;
+  let historyReads = 0;
+  const api = {
+    plugin: { root: fileURLToPath(new URL('../../', import.meta.url)) },
+    process: { run: async (command, options) => {
+      const result = spawnSync(command[0], command.slice(1), {
+        cwd: options.cwd, env, encoding: 'utf8', timeout: options.timeoutMs,
+      });
+      assert.ifError(result.error);
+      diagnostics.push(result.stderr);
+      return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr, isStdoutTruncated: false };
+    } },
+    session: {
+      cwd: async () => root,
+      messages: async () => {
+        historyReads++;
+        return [{ role: 'user', text: 'Only the local key was tested.' }];
+      },
+    },
+    model: { complete: async () => {
+      reviews++;
+      return { isAnswered: true, text: '{"edits":[{"id":"text:0","text":"Only the local key was tested."}]}' };
+    } },
+  };
+  const draft = { kind: 'text', index: 0, text: 'The deployed key was tested.' };
+  const next = async function* () {
+    yield draft;
+    return { answer: draft.text, toolUses: [], stopReason: 'end_turn' };
+  };
+  const paused = validateResponse(api, { turnId: 'turn', index: 0 }, next);
+  assert.deepEqual(await paused.next(), { done: false, value: draft });
+  assert.equal((await paused.next()).value.answer, draft.text);
+  assert.equal(reviews, 0);
+  assert.equal(historyReads, 0);
+  assert.match(diagnostics[0], /failed to read\/sync copilot settings/);
+  assert.equal(readFileSync(paths[1], 'utf8'), '{broken');
+
+  for (const path of paths) writeFileSync(path, '{"features":{"response-validation":true}}');
+  const resumed = validateResponse(api, { turnId: 'turn', index: 1 }, next);
+  assert.equal((await resumed.next()).value.text, 'Only the local key was tested.');
+  assert.equal((await resumed.next()).value.answer, 'Only the local key was tested.');
+  assert.equal(reviews, 1);
+  assert.equal(historyReads, 1);
+  assert.equal(diagnostics[1], '');
+});
 
 test('reviewer edits must target each existing draft at most once', () => {
   const drafts = [{ id: 'text:0', text: 'The deployed key was tested.' }];

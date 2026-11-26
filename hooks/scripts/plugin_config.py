@@ -230,7 +230,7 @@ def main():
             raise ValueError('unknown feature')
         disabled = synchronize(
             str(Path(args.project).resolve()), args.host,
-            strict=True, catalog=catalog, persist=not args.feature,
+            strict=not args.feature, catalog=catalog, persist=not args.feature,
         )
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-config: synchronization failed: {error}', file=sys.stderr)

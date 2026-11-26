@@ -343,6 +343,9 @@ Its configuration reader uses
 `plugin_config.py claude --project /absolute/project --feature response-validation`;
 the JSON output contains an `enabled` boolean. This query resolves settings
 without writing, so a readable opt-out still works when reconciliation cannot
-persist. Malformed or unreadable settings still fail. Without `--feature`, the
-synchronization command remains strict and prints the global settings path.
+persist. Malformed or unreadable settings produce a warning on stderr and return
+`enabled: false`, pausing validation without replacing outgoing drafts. Settings
+remain untouched and the next response retries the lookup. Without `--feature`,
+synchronization remains strict: failures exit nonzero, and success prints the
+global settings path.
 See [response-validation.md](response-validation.md).

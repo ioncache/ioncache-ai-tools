@@ -58,14 +58,51 @@ class ResponseValidationSettingsTests(unittest.TestCase):
             self.assertTrue(json.loads(global_path.read_text())['features']['response-validation'])
         self.assertEqual(json.loads(self.invoke()), {'enabled': True})
 
-    def test_bad_settings_fail_without_rewriting_them(self):
-        path = config.paths(self.project)['claude'][1]
-        path.parent.mkdir(parents=True)
-        path.write_text('{broken')
-        with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as error:
-            self.invoke()
-        self.assertEqual(error.exception.code, 1)
-        self.assertEqual(path.read_text(), '{broken')
+    def test_bad_settings_pause_feature_queries_without_rewriting_them(self):
+        for host, paths in config.paths(self.project).items():
+            for path in paths:
+                with self.subTest(host=host, path=path):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('{broken')
+                    with (
+                        mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
+                        mock.patch.object(config, 'write_atomic') as writer,
+                    ):
+                        self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+                        self.assertIn(f'failed to read/sync {host} settings', stderr.getvalue())
+                        self.assertIn('plugin features paused', stderr.getvalue())
+                        writer.assert_not_called()
+                    self.assertEqual(path.read_text(), '{broken')
+                    with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as error:
+                        self.invoke(None)
+                    self.assertEqual(error.exception.code, 1)
+                    self.assertEqual(path.read_text(), '{broken')
+                    path.unlink()
+
+    def test_unreadable_other_host_settings_preserve_an_explicit_opt_out(self):
+        paths = config.paths(self.project)
+        for host in ('claude', 'copilot'):
+            path = paths[host][0]
+            path.parent.mkdir(parents=True)
+            path.write_text('{"features":{"response-validation":false}}')
+        unreadable = paths['copilot'][0]
+        read_settings = config.read_settings
+
+        def read(path, *args, **kwargs):
+            if path == unreadable:
+                raise PermissionError('unreadable settings')
+            return read_settings(path, *args, **kwargs)
+
+        with (
+            mock.patch.object(config, 'read_settings', side_effect=read),
+            mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
+        ):
+            self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+            self.assertIn('unreadable settings', stderr.getvalue())
+            with self.assertRaises(SystemExit) as error:
+                self.invoke(None)
+            self.assertEqual(error.exception.code, 1)
+        self.assertEqual(json.loads(self.invoke()), {'enabled': False})
 
     def test_feature_query_keeps_opt_out_when_reconciliation_cannot_write(self):
         path = config.paths(self.project)['claude'][0]
