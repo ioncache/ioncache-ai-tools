@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.14.1 (2026-11-26)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* correlate question turns across skill invocations on all hosts ([#87](https://github.com/ioncache/ioncache-ai-tools/issues/87)) ([14da323](https://github.com/ioncache/ioncache-ai-tools/commit/14da32364fe432987c93f6d2783ea9f36367cece))
+
 ## 1.14.0 (2026-11-26)
 
 ### New
