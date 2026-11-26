@@ -75,6 +75,11 @@ their parent are not treated as user questions, and their work is not
 blocked. Host-started turns, such as worker hand-backs and task
 notifications, end the question turn instead of starting one.
 
+A prompt that starts by explicitly invoking a skill, such as
+`/plugin:skill why?` or Codex `$plugin:skill why?`, asks the skill to run and
+is not fenced. A skill mentioned later in a question leaves it a question.
+Skills or images loaded during a question turn do not end it.
+
 Host reminders are not user question text. Claude's observed notification
 and agent-message framing identifies host turns even behind reminders or
 inside a batch. Without a question mark, the classifier considers only a

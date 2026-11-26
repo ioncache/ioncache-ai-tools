@@ -20,7 +20,8 @@ BOOTSTRAP = {
         'and do not decide or implement next steps in that turn, even for an existing '
         'assignment. A question to one agent does not pause, cancel, or stop other agents '
         'or their authorized work. A question about stopping workers is not permission '
-        'to stop them.'
+        'to stop them. A prompt that starts by explicitly invoking a skill asks to run '
+        'that skill, even when its arguments are question-shaped.'
     ),
 }
 # Child identities receive prompts from their parent, not only from the user.

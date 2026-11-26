@@ -49,7 +49,16 @@ Copilot verifies native question turns at tool time, not from the prompt-hook
 payload alone. It correlates the current root `userPromptTransformed` with
 the subsequent native `user.message`, including delivery and provenance.
 An intervening memory-context message is skipped only when it belongs to
-that same interaction.
+that same interaction. A user-invoked skill expands the prompt but not the
+emitted message. A leading `/plugin:skill [arguments]` invocation matches only
+when the expansion names that command and repeats its arguments. An inline
+mention matches when the user's text follows the expansion unchanged. Older
+skill-sourced messages that deliver model-loaded skill text are skipped.
+Prompt mode (`-p`) delivers a typed command unexpanded, and the model then
+loads the skill, so a prompt starting with `/name` or `/plugin:name` followed
+by whitespace is an instruction. A prompt starting with a single-segment path
+followed by a space, such as `/tmp why is it full?`, is also treated as an
+instruction; a path containing another `/` remains a question.
 Agent-authored, automation and autopilot messages do not start a question
 restriction. Child events and tool-result handbacks cannot create a root
 question. A new instruction or a completed root answer ends the restriction.
@@ -60,14 +69,28 @@ whose explicit `origin.kind` is `human`. The session and prompt must match,
 and sidechain, metadata, host-message framing and completed answers cannot
 create a question restriction. Native typed prompts and SDK messages declared
 as human input carry this origin. An SDK prompt without declared origin does not.
+Metadata records with the current `promptId` are skipped only for Skill tool
+content, which names its `sourceToolUseID`, and image-read size notes. Other
+metadata, such as peer messages or Stop hook feedback, still releases the
+restriction. A typed slash command records command framing in the human
+message and is an instruction.
 
 Codex requires the current `turn_id` to have explicit `turn_trigger: "user"`
 attribution without a parent turn or initiating agent, followed by its original
 `user.text` message. This is the trigger assigned by the interactive TUI.
 Completed, interrupted, delegated and automated turns do not qualify.
-Additional user-role input in the same turn makes the original attribution
-ambiguous and releases the restriction; it does not inherit the original
-question. `codex exec` has an `exec` trigger, not verified human origin.
+User-role items made entirely of `environments.environment_context` or
+`skills.selected_skill_instructions` are host context, not user input.
+Any other additional user-role input in the same turn makes the original
+attribution ambiguous and releases the restriction; it does not inherit the
+original question. Text starting with a `$plugin:skill` mention, or its linked
+form, is an instruction when that skill was injected in the turn.
+`codex exec` has an `exec` trigger, not verified human origin.
+
+An explicit leading skill invocation is an instruction to run that skill on
+every host, even when its arguments are question-shaped. A skill mentioned
+inside a question leaves the turn a question. Skill or image content loaded
+during the turn does not end the question turn.
 
 All hosts use bounded local history at tool time, without another persisted
 permission state. Unknown origin, older formats and transcripts that have not
@@ -130,6 +153,9 @@ and [../hooks/fixtures/codex-question-events.json](../hooks/fixtures/codex-quest
 | Copilot CLI 1.0.115-8 (2026-11-24) | Human questions and autopilot reminders have the same prompt-hook fields, but subsequent `user.message` records distinguish autopilot provenance. Synchronous and background assignments carry child identities and an agent source. Question-shaped handbacks arrive as tool results; completion arrives as a system notification, not a root prompt hook. | Prompt-hook fields alone do not establish origin. Peer-message, scheduled-prompt and batched-prompt routing remain unverified. |
 | Copilot CLI 1.0.116-1 (2026-11-24) | A fresh CLI invocation with this plugin denied a question-turn file redirect through the native pre-tool hook. Its emitted root message matches the earlier user-delivery evidence. Native pre-tool history records summarize a `toolCalls` batch; command hooks still receive individual tool inputs. | Resuming that disposable session with `--plugin-dir` emitted no hook events, so that invocation does not establish resumed enforcement. Custom callers that omit provenance cannot be distinguished from ordinary user delivery. |
 | Copilot CLI 1.0.116-2 (2026-11-24) | One interactive process allowed read-only research and denied a write during a user question. The next instruction launched a child with a question-shaped assignment; the child wrote its fixture and returned a question, after which the parent wrote its own fixture. Native hooks ran for both identities throughout. The prompt sequence included memory context with the same interaction identity. | Live interleaving of a new root question while a child is actively writing remains covered by isolated adapter tests, not this interactive run. Peer messages, scheduled prompts and other batching formats remain unverified. |
+| Copilot CLI 1.0.63-1.0.117-2 (2026-11-26) | A replay of every local root `user.message` found 124 skill expansions that did not equal the emitted message, all reported as unavailable before this change. They had the preamble `The user explicitly invoked the "/command" skill.`: 120 leading invocations and 4 inline mentions, all now matched. Model skill loads in 1.0.89 and later emit no `user.message`; 1.0.63 emitted a `skill-<name>` source. In live 1.0.117-2 interactive runs, the previous code allowed a write after an inline skill mention in a question and showed the unavailability notice twice; this change denied it with no notice. Leading, bare, and prompt-mode invocations ran the skill's write, and the next instruction resumed work. | Steering before 1.0.115-7 and some queued messages had no prompt hook. A 1.0.116-1 resumed prompt and a 1.0.117-1 message after `task_complete` also had none. These still report unavailability without a restriction. Multiple inline skill mentions in one prompt were not observed. |
+| Claude Code 2.1.306-2.1.332 (2026-11-26) | A replay of local transcripts found 588 root tool calls in question turns that the restriction released early. Skill tool content and image-read notes used the current `promptId`. Peer messages could also use the current `promptId`. A live 2.1.332 SDK sequence with declared human origin showed the previous code allowing a write after a question loaded a skill and denying a typed plugin slash command's write. This change denied the question's write, allowed the slash command, denied writes after an image read and a plain question, and resumed on the next instruction. | Compaction summaries in the middle of a turn were not examined. |
+| Codex 0.163.0 TUI skill capture (2026-11-26) | A question containing a `$skill` mention recorded host environment context, the user text, then a user-role `skills.selected_skill_instructions` item. Before this change, that item released the restriction and the redirect was written. Plugin skills are named `plugin:skill`. Replaying pre-tool payloads against three live rollouts denied that write with this change and allowed it with the previous code. Live, the previous guidance led the model to skip a leading `$skill` invocation's write; with this change it ran. | Text with an attached image is wrapped in host framing items and is not fenced. Steering in the middle of a turn still releases the restriction. In the live sequences, the model declined question-turn writes itself, so the denial was verified by replay rather than a live hook decision. |
 | Codex 0.163.0 (2026-11-25) | The interactive CLI supplied matching `task_started.turn_attribution` and original `user.text` metadata. It allowed a read, denied a file redirect with the plugin's answer-only reason, then allowed the next user instruction to write its fixture in the same process. An app-server capture had the same user attribution. A separate exec capture used `exec`, which does not establish human origin. | The transcript format is not a stable hook API. Unknown triggers, steering, missing attribution and exec prompts remain guidance-only. Native child/peer routing is covered by offline adapter fixtures, not this live sequence. |
 
 Claude's hook documentation explicitly warns that transcripts are asynchronous

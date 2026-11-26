@@ -1,5 +1,5 @@
 {
-  "description": "Codex 0.163.0 native TUI capture: a user-triggered question allowed a read and denied a file redirect. The app-server capture had the same turn/message attribution. IDs, paths and prompt text replaced; unrelated fields omitted.",
+  "description": "Codex 0.163.0 native TUI capture: a user-triggered question allowed a read and denied a file redirect. The app-server capture had the same turn/message attribution. IDs, paths and prompt text replaced; unrelated fields omitted. The Codex 0.163.0 TUI skill capture recorded user-role environment context before the typed text and, after it, one user-role skills.selected_skill_instructions item per explicitly mentioned skill; plugin skills are named plugin:skill.",
   "hook": {
     "session_id": "codex-question-session",
     "turn_id": "codex-question-turn",
@@ -38,5 +38,43 @@
         }
       }
     }
-  ]
+  ],
+  "environment_context": {
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "<environment_context>\n  <cwd>/project</cwd>\n  <shell>zsh</shell>\n</environment_context>"
+        }
+      ],
+      "internal_chat_message_metadata_passthrough": {
+        "turn_id": "codex-question-turn",
+        "content_item_kinds": [
+          "environments.environment_context"
+        ]
+      }
+    }
+  },
+  "skill_injection": {
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "<skill>\n<name>ioncache-ai-tools:investigate</name>\n<path>/plugin/skills/investigate/SKILL.md</path>\n---\nname: investigate\ndescription: Traces how a feature works.\n---\n\n# Investigate\n\nWhat calls this? Trace it.\n\n</skill>"
+        }
+      ],
+      "internal_chat_message_metadata_passthrough": {
+        "turn_id": "codex-question-turn",
+        "content_item_kinds": [
+          "skills.selected_skill_instructions"
+        ]
+      }
+    }
+  }
 }

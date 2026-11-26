@@ -1,9 +1,13 @@
 """Correlate Claude's current prompt with explicitly human-authored transcript input."""
 import json
+import re
 
 from classify_question import has_question, is_root
 from claude_prompt import normalize_prompt
 from question_history import history_tail
+
+COMMAND_FRAMING = re.compile(r'\s*<command-(?:message|name)>')
+IMAGE_NOTE = re.compile(r'\[Image: original \d+x\d+, displayed at \d+x\d+\.')
 
 
 def prompt_text(message):
@@ -27,10 +31,20 @@ def human_question(event, data):
             or event.get('turnPromptId', data['prompt_id']) != data['prompt_id']):
         return False
     text = prompt_text(event['message'])
-    if text is None:
+    if text is None or COMMAND_FRAMING.match(text):
         return False
     normalized = normalize_prompt({'prompt': text, '_ioncache_prompt_origin': 'user'})
     return normalized['_ioncache_prompt_origin'] == 'user' and has_question(normalized['prompt'])
+
+
+def same_prompt_host_content(event, data):
+    """Return whether Claude attached tool-loaded skill or image content to this prompt."""
+    if not event.get('isMeta') or event.get('promptId') != data['prompt_id']:
+        return False
+    if event.get('sourceToolUseID'):
+        return True
+    text = prompt_text(event['message'])
+    return text is not None and IMAGE_NOTE.match(text) is not None
 
 
 def question_from_events(lines, data):
@@ -53,6 +67,8 @@ def question_from_events(lines, data):
         if isinstance(content, list) and any(
             isinstance(block, dict) and block.get('type') == 'tool_result' for block in content
         ):
+            continue
+        if same_prompt_host_content(event, data):
             continue
         return human_question(event, data)
     return None

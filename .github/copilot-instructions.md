@@ -78,11 +78,16 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   to the shared guard. It reads bounded local history without storing another
   permission state. Child identities, agent/automation/autopilot messages,
   completed root answers, and unknown or failed evidence must not fence work.
+  It matches skill expansions only in their recorded leading or inline form;
+  prompt mode's unexpanded leading `/command` is an instruction.
   `claude_question.py` correlates `prompt_id` with a root transcript message's
   explicit `origin.kind: "human"`; completed answers and newer prompts release it.
+  Same-prompt Skill tool content and image-read notes do not.
   `codex_question.py` requires a matching explicitly user-triggered turn without
   delegated lineage and its original `user.text` input. Later user-role input
-  makes that attribution ambiguous and releases it. Exec and automated triggers
+  other than environment or selected-skill context makes that attribution
+  ambiguous and releases it. Explicit leading skill invocations are instructions
+  on every host; inline mentions keep a question. Exec and automated triggers
   do not establish human origin. Both re-read bounded native history at tool time,
   never persist another permission state or fall back to markers on missing evidence.
   `question_history.py` owns the shared bounded, regular-file-only reader.
