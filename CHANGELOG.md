@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.14.0 (2026-11-26)
+
+### New
+
+* add grouped plugin settings controls ([#85](https://github.com/ioncache/ioncache-ai-tools/issues/85)) ([8756c92](https://github.com/ioncache/ioncache-ai-tools/commit/8756c929f333ad89bdd6f2da45e1b3107ec74f4c))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* None.
+
 ## 1.13.9 (2026-11-25)
 
 ### New
