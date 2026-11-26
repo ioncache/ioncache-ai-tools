@@ -126,6 +126,7 @@ class ConfigurationTests(unittest.TestCase):
         flags = {
             'hook:answer-questions': 'answer-questions',
             'hook:autonomous-development:explicit-only': 'autonomous-development-explicit-only',
+            'hook:response-validation': 'response-validation',
             'instruction:documentation-first': 'documentation-first',
             'autonomous-development:execution': 'autonomous-development',
             'autonomous-development:audit': 'autonomous-development-audit',
@@ -142,6 +143,26 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())['features'],
                              {stored: False for stored in flags.values()})
         self.assertEqual(config.synchronize(str(self.project), persist=False), set(flags.values()))
+
+    def test_response_validation_defaults_and_opt_in_in_the_settings_view(self):
+        before = self.tree_state()
+        for scope in ((), ('--global',)):
+            with self.subTest(scope=scope):
+                code, output, error = self.settings_command('--json', *scope)
+                self.assertEqual(code, 0, error)
+                rows = {row['name']: row for group in json.loads(output)['groups'] for row in group['settings']}
+                self.assertEqual(rows['hook:response-validation'], {
+                    'name': 'hook:response-validation', 'enabled': False, 'effective': False,
+                })
+                self.assertEqual(self.tree_state(), before)
+
+        code, output, error = self.settings_command('--json', '--global', '--hook:response-validation=enabled')
+        self.assertEqual(code, 0, error)
+        rows = {row['name']: row for group in json.loads(output)['groups'] for row in group['settings']}
+        self.assertEqual(rows['hook:response-validation'], {
+            'name': 'hook:response-validation', 'enabled': True, 'effective': True,
+        })
+        self.assertNotIn('response-validation', config.synchronize(str(self.project), persist=False))
 
     def test_settings_json_view_is_read_only_and_shares_effective_states(self):
         paths = config.paths(self.project)
@@ -184,13 +205,14 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(output, '')
         self.assertIn('--hook:plugin-settings-ui=enabled', error)
         self.assertEqual(self.tree_state(), before)
-        self.assertEqual(config.synchronize(str(self.project), persist=False), {'plugin-settings-ui'})
+        self.assertEqual(config.synchronize(str(self.project), persist=False),
+                         {'plugin-settings-ui', 'response-validation'})
 
         self.assertEqual(self.settings_command('--hook:plugin-settings-ui=enabled')[0], 0)
         code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
         self.assertEqual(code, 0, error)
         self.assertTrue(json.loads(output)['uiEnabled'])
-        self.assertEqual(config.synchronize(str(self.project), persist=False), {'docs-cache'})
+        self.assertEqual(config.synchronize(str(self.project), persist=False), {'docs-cache', 'response-validation'})
 
     def test_settings_native_command_parses_arguments_without_shell_execution(self):
         project = self.root / 'project with spaces; literal'
@@ -289,7 +311,7 @@ class ConfigurationTests(unittest.TestCase):
                 expected['docs-cache'] = False
             self.assertEqual(features, expected)
         self.assertEqual(config.synchronize(str(self.project), persist=False),
-                         {'docs-cache', 'skill:review-code'})
+                         {'docs-cache', 'skill:review-code', 'response-validation'})
         self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
         self.assertIn('answer-questions', config.synchronize(str(self.project), persist=False))
 
@@ -382,7 +404,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(json.loads(paths['claude'][0].read_text())['projects'],
                          {str(self.project): {'features': {'answer-questions': False}}})
         self.assertEqual(paths['copilot'][1].read_bytes(), project_original)
-        self.assertEqual(config.synchronize(str(self.root), persist=False), set())
+        self.assertEqual(config.synchronize(str(self.root), persist=False), {'response-validation'})
 
     def test_settings_global_update_preserves_legacy_codex_preferences(self):
         path = config.paths(self.project)['codex'][0]
@@ -874,7 +896,7 @@ class ConfigurationTests(unittest.TestCase):
             self.write(path, {'features': {'fix_emdash': False}})
             original = path.read_text()
             with self.subTest(boundary=boundary), failure, mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
-                self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash'})
+                self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash', 'response-validation'})
                 self.assertIn('could not persist', stderr.getvalue())
                 self.assertNotIn('features paused', stderr.getvalue())
             self.assertEqual(path.read_text(), original)
@@ -1071,7 +1093,7 @@ class ConfigurationTests(unittest.TestCase):
         before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
         with mock.patch.object(config, 'write_atomic', side_effect=AssertionError('unexpected write')):
             disabled = config.synchronize(str(self.project), 'copilot', strict=True, persist=False)
-        self.assertEqual(disabled, {'review-auto-model-selection'})
+        self.assertEqual(disabled, {'review-auto-model-selection', 'response-validation'})
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}, before)
         self.assertEqual(config.synchronize(str(self.project), 'copilot', strict=True), disabled)
 
@@ -1188,7 +1210,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(config.synchronize(str(self.project), 'claude'), set(config.defaults()))
         self.assertEqual(path.read_text(), '{bad')
         self.write(path, {'features': {'fix_emdash': False}})
-        self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash'})
+        self.assertEqual(config.synchronize(str(self.project), 'claude'), {'fix_emdash', 'response-validation'})
 
     def test_question_and_scope_opt_out_do_not_disable_process_guard(self):
         guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Why?'})

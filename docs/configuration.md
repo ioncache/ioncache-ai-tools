@@ -3,7 +3,9 @@
 Installation and basic usage: [../README.md](../README.md).
 
 [../config/defaults.json](../config/defaults.json) is the complete catalog of
-active guards, services, and skills. Every entry ships as `true`.
+active guards, services, and skills. Entries ship as `true` except
+`response-validation`, which ships as `false` to avoid extra model usage and
+latency unless enabled.
 
 ## Native Claude settings pane
 
@@ -194,7 +196,7 @@ remain after synchronization finishes.
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `plugin-settings-ui` | Native Claude settings pane; the CLI helper and settings skill remain independent |
-| `response-validation` | Claude-only pre-delivery response validation and rewriting, including supported agent-message payloads; adds small-model usage |
+| `response-validation` | Opt-in Claude-only pre-delivery response validation and rewriting, including supported agent-message payloads; adds small-model usage and latency |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
 | `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |
@@ -334,7 +336,10 @@ Settings edits need no reinstall. Start a new session to refresh instructions
 already delivered to the conversation.
 
 Claude's response mod reads the current effective `response-validation` setting
-before each response. Its configuration reader uses
+before each response. It is off by default. Enabling it requires `true` in all
+three hosts' effective settings because cross-host disables include inherited
+defaults. Existing saved values remain unchanged during synchronization.
+Its configuration reader uses
 `plugin_config.py claude --project /absolute/project --feature response-validation`;
 the JSON output contains an `enabled` boolean. This query resolves settings
 without writing, so a readable opt-out still works when reconciliation cannot

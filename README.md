@@ -29,12 +29,12 @@ Choose user scope to make the plugin available across projects. Reload plugins
 or start a new session when prompted. Manage updates and removal through `/plugin`.
 
 **Response validation is currently Claude Code only** (2.1.332 or later).
-It holds supported responses while a small model checks factual support and rewrites
-overclaims before the text is displayed and recorded. This adds model usage and
-latency. If checking fails, an unavailability notice replaces the draft without
-blocking further work. Set `response-validation: false` in the plugin's feature
-settings to opt out. See [docs/response-validation.md](docs/response-validation.md)
-for coverage, costs, and limitations.
+It is off by default because it adds model usage and latency. When enabled,
+it holds supported responses while a small model checks factual support and
+rewrites overclaims before the text is displayed and recorded. If checking fails,
+an unavailability notice replaces the draft without blocking further work.
+See [docs/response-validation.md](docs/response-validation.md) for opt-in steps,
+coverage, costs, and limitations.
 
 This requires Claude's native plugin interface to hold and rewrite response
 streams before display and conversation recording. Codex and Copilot currently
@@ -334,7 +334,8 @@ usage.** Disable `docs-cache` to opt out.
 
 ## Configuration
 
-Every shipped guard and skill is enabled by default.
+Shipped guards and skills are enabled by default. Response validation is the
+exception: it is off by default to avoid extra model usage and latency.
 
 ### Using plugin settings
 

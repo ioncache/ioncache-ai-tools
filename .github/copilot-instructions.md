@@ -17,6 +17,7 @@ settings mod in `hooks/plugin-settings.mjs` uses the host-required ES module
 format and the shared Python settings helper, not a separate preference store.
 Its native `.test.ts` tests run offline with the contributor Claude CLI.
 Claude's response-validation mod also uses the native ES module format.
+The single `hooks/register.mjs` entry registers both native mods.
 The release helper
 dynamically imports the ESM-only `conventional-changelog` packages from
 contributor dev dependencies; the worktree helper uses Node built-ins.
@@ -71,7 +72,8 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   validation replaces the draft with an unavailability notice without denying
   subsequent work. Keep stream text and returned metadata consistent, preserve
   unrelated tool calls and opaque chunk handles, and never leak drafts on
-  cancellation or hook failure. `response-validation` independently opts out.
+  cancellation or hook failure. `response-validation` is off by default because
+  it adds model usage and latency; it remains independently configurable.
   Copilot and Codex do not run this mod. Stop hooks only deliver cache notices.
   `block_emdash_turn.py` is retained inactive source.
   Question markers (`classify_question.marker_path`) are keyed by session and
@@ -277,9 +279,10 @@ construct the character with `chr(0x2014)` to pass this source check.
 ## Hook and rule conventions
 
 - Every active feature must have an independent opt-out in the shipped
-  `config/defaults.json`, enabled by default. Configuration is part of every
-  feature change, not optional follow-up work. Synchronization preserves local
-  values for retained settings, adds new defaults, and removes retired settings.
+  `config/defaults.json`, enabled by default except `response-validation`, which
+  is opt-in because of its model usage and latency. Configuration is part of
+  every feature change, not optional follow-up work. Synchronization preserves
+  local values for retained settings, adds new defaults, and removes retired settings.
   Add coverage for the opt-out and keep unrelated safeguards independent.
 - Retained inactive implementations must not be imported or registered by
   active hooks. Their retired settings must not appear in the shipped catalog.

@@ -24,8 +24,8 @@ class FeatureSettings:
 
 def defaults():
     values = json.loads(DEFAULTS.read_text(encoding='utf-8'))['features']
-    if not isinstance(values, dict) or not values or any(value is not True for value in values.values()):
-        raise ValueError('shipped feature defaults must all be true')
+    if not isinstance(values, dict) or not values or any(type(value) is not bool for value in values.values()):
+        raise ValueError('shipped feature defaults must be booleans')
     return values
 
 
@@ -179,6 +179,8 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                         read_observer(path, original, global_config, True)
             else:
                 global_config = {'features': catalog}
+                if not persist and read_observer is not None:
+                    read_observer(global_path.resolve(), None, global_config, True)
             values = dict(global_config['features'])
             if not global_only:
                 values.update(global_config.get('projects', {}).get(str(project), {}).get('features', {}))

@@ -20,7 +20,7 @@
     "no-manual-lockfile-edit": true,
     "no_manual_lockfile_edit_bash": true,
     "plugin-settings-ui": true,
-    "response-validation": true,
+    "response-validation": false,
     "review-auto-model-selection": true,
     "review-code-complexity": true,
     "review-comments": true,

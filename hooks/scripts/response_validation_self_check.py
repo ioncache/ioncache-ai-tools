@@ -33,15 +33,30 @@ class ResponseValidationSettingsTests(unittest.TestCase):
             config.main()
         return stdout.getvalue().strip()
 
-    def test_opt_out_changes_are_read_on_the_next_invocation(self):
+    def test_default_off_and_cross_host_opt_in_changes_are_read_on_the_next_invocation(self):
+        self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+        for _, path in config.paths(self.project).values():
+            path.parent.mkdir(parents=True)
+            path.write_text('{"features":{"response-validation":true}}')
         self.assertEqual(json.loads(self.invoke()), {'enabled': True})
         path = config.paths(self.project)['copilot'][1]
-        path.parent.mkdir(parents=True)
         path.write_text('{"features":{"response-validation":false}}')
         self.assertEqual(json.loads(self.invoke()), {'enabled': False})
         path.write_text('{"features":{"response-validation":true}}')
         self.assertEqual(json.loads(self.invoke()), {'enabled': True})
         self.assertEqual(json.loads(self.invoke('no_broad_process_kill')), {'enabled': True})
+
+    def test_synchronization_adds_the_off_default_without_resetting_saved_opt_ins(self):
+        self.invoke(None)
+        path = config.paths(self.project)['claude'][0]
+        self.assertFalse(json.loads(path.read_text())['features']['response-validation'])
+        self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+        for host, (global_path, _) in config.paths(self.project).items():
+            global_path.parent.mkdir(parents=True, exist_ok=True)
+            global_path.write_text('{"features":{"response-validation":true}}')
+            config.synchronize(str(self.project), host)
+            self.assertTrue(json.loads(global_path.read_text())['features']['response-validation'])
+        self.assertEqual(json.loads(self.invoke()), {'enabled': True})
 
     def test_bad_settings_fail_without_rewriting_them(self):
         path = config.paths(self.project)['claude'][1]
