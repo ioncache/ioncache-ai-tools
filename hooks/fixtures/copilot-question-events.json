@@ -1,8 +1,8 @@
 {
   "capture": {
-    "versions": ["1.0.115-8", "1.0.116-2"],
+    "versions": ["1.0.63", "1.0.109", "1.0.115-8", "1.0.116-2", "1.0.117-2"],
     "date": "2026-11-24",
-    "notes": "Projected native session events from live user input, autopilot continuation, synchronous explore and background general-purpose workers, plus a 1.0.116-2 interactive prompt with memory context. Only fields used to establish question provenance and delivery are retained. Native identities are replaced consistently; omitted optional source fields remain absent."
+    "notes": "Projected native session events from live user input, autopilot continuation, synchronous explore and background general-purpose workers, plus a 1.0.116-2 interactive prompt with memory context. Skill groups project 1.0.117-2 leading slash invocations with and without arguments, a 1.0.109 inline skill mention, a 1.0.117-2 prompt-mode invocation delivered unexpanded, a path-led question, and a 1.0.63 model skill load emitted as a skill-sourced user message; skill bodies are shortened. Only fields used to establish question provenance and delivery are retained. Native identities are replaced consistently; omitted optional source fields remain absent."
   },
   "question": [
     {
@@ -169,6 +169,173 @@
       "data": {
         "hookType": "agentStop",
         "success": true
+      }
+    }
+  ],
+  "skill_instruction": [
+    {
+      "type": "skill.invoked",
+      "data": {
+        "name": "review-code",
+        "source": "plugin",
+        "trigger": "user-invoked"
+      }
+    },
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "The user explicitly invoked the \"/ioncache-ai-tools:review-code\" skill. Follow its instructions now.\n\n<skill-context name=\"review-code\">\nBase directory for this skill: /plugin/skills/review-code\n\n# Read-only code review\n\nWhat changed, and is it correct? Report findings to the caller.\n\n\nARGUMENTS: PR 86 --post-comments\n</skill-context>"
+        }
+      }
+    },
+    {
+      "type": "hook.end",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "success": true
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "/ioncache-ai-tools:review-code PR 86 --post-comments",
+        "delivery": "idle",
+        "interactionId": "capture-skill-arguments"
+      }
+    }
+  ],
+  "skill_instruction_bare": [
+    {
+      "type": "skill.invoked",
+      "data": {
+        "name": "plugin-settings",
+        "source": "plugin",
+        "trigger": "user-invoked"
+      }
+    },
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "The user explicitly invoked the \"/ioncache-ai-tools:plugin-settings\" skill. Follow its instructions now.\n\n<skill-context name=\"plugin-settings\">\nBase directory for this skill: /plugin/skills/plugin-settings\n\n# Plugin settings\n\nWhich settings are enabled? Show them before changing anything.\n\n</skill-context>"
+        }
+      }
+    },
+    {
+      "type": "hook.end",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "success": true
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "",
+        "source": "memory",
+        "interactionId": "capture-skill-bare"
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "/ioncache-ai-tools:plugin-settings",
+        "delivery": "idle",
+        "interactionId": "capture-skill-bare"
+      }
+    }
+  ],
+  "skill_question": [
+    {
+      "type": "skill.invoked",
+      "data": {
+        "name": "engineering-judgment",
+        "source": "plugin",
+        "trigger": "user-invoked"
+      }
+    },
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "The user explicitly invoked the \"/ioncache-ai-tools:engineering-judgment\" skill. Follow its instructions now.\n\n<skill-context name=\"engineering-judgment\">\nBase directory for this skill: /plugin/skills/engineering-judgment\n\n# Engineering judgment\n\nPrefer the simplest coherent solution.\n\n</skill-context>\n\nwhy are you assessing them locally at all in any way? wehat does /ioncache-ai-tools:engineering-judgment say?"
+        }
+      }
+    },
+    {
+      "type": "hook.end",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "success": true
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "why are you assessing them locally at all in any way? wehat does /ioncache-ai-tools:engineering-judgment say?",
+        "delivery": "idle",
+        "interactionId": "capture-skill-inline"
+      }
+    }
+  ],
+  "skill_load_legacy": [
+    {
+      "type": "skill.invoked",
+      "data": {
+        "name": "diagnose"
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "<skill-context name=\"diagnose\">\nBase directory for this skill: /skills/diagnose\n\nWhat fails first? Reproduce before changing code.\n</skill-context>",
+        "source": "skill-diagnose",
+        "interactionId": "capture-legacy-skill"
+      }
+    }
+  ],
+  "skill_prompt_mode": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "/qg-probe-skill why does this probe exist?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "/qg-probe-skill why does this probe exist?",
+        "delivery": "idle"
+      }
+    }
+  ],
+  "path_question": [
+    {
+      "type": "hook.start",
+      "data": {
+        "hookType": "userPromptTransformed",
+        "input": {
+          "sessionId": "capture-root",
+          "prompt": "/tmp/probe why is this file here?"
+        }
+      }
+    },
+    {
+      "type": "user.message",
+      "data": {
+        "content": "/tmp/probe why is this file here?",
+        "delivery": "idle"
       }
     }
   ]

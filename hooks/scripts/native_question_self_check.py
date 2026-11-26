@@ -159,6 +159,58 @@ def test_claude_question_opt_out(claude_question):
     assert tool(data) == {}
 
 
+def claude_group(data, *names):
+    fixture = json.loads((ROOT / 'hooks/fixtures/claude-question-events.json').read_text())
+    events = [event for name in names for event in fixture[name]]
+    for event in events:
+        event['sessionId'] = data['session_id']
+    return events
+
+
+@pytest.mark.parametrize('groups', [
+    ('skill_tool_load',), ('skill_tool_load', 'skill_tool_reload'), ('image_read',),
+    ('skill_tool_load', 'image_read'),
+])
+def test_claude_skill_and_image_loads_keep_the_question_turn(claude_question, groups):
+    data, events = claude_question
+    save_events(data, [*events, *claude_group(data, *groups)])
+    assert tool(data)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert tool(data, 'cat seed.txt') == {}
+    instruction = {**events[0], 'promptId': 'next-prompt', 'turnPromptId': 'next-prompt',
+                   'message': {'role': 'user', 'content': 'Implement the change'}}
+    later = claude_group(data, *groups)
+    for event in later:
+        event['promptId'] = 'next-prompt'
+    save_events(data, [*events, *claude_group(data, *groups), instruction, *later])
+    assert tool({**data, 'prompt_id': 'next-prompt'}) == {}
+
+
+def test_claude_slash_command_with_question_arguments_is_an_instruction(claude_question):
+    data, events = claude_question
+    marker_path(data).write_text('')
+    for groups in (('slash_command',), ('slash_command', 'skill_tool_load')):
+        save_events(data, claude_group(data, *groups))
+        assert tool(data) == {}
+    question = {**events[0], 'promptId': 'next-prompt', 'turnPromptId': 'next-prompt'}
+    save_events(data, [*claude_group(data, 'slash_command', 'skill_tool_load'), question])
+    assert tool({**data, 'prompt_id': 'next-prompt'})['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+@pytest.mark.parametrize('change', [
+    {'message': {'role': 'user', 'content': 'Another Claude session sent a message:\n<agent>Continue?</agent>'}},
+    {'message': {'role': 'user', 'content': 'Stop hook feedback:\nWhy did this stop?'}},
+    {'message': {'role': 'user', 'content': '[Image #1] What is shown?'}},
+    {'sourceToolUseID': 'claude-skill-call', 'promptId': 'another-prompt'},
+    {'message': {'role': 'user', 'content': '[Image: original 10x10, displayed at 10x10.]'},
+     'promptId': 'another-prompt'},
+])
+def test_claude_other_meta_input_still_releases_the_question(claude_question, change):
+    data, events = claude_question
+    meta = {**claude_group(data, 'skill_tool_load')[-1], 'sourceToolUseID': None, **change}
+    save_events(data, [*events, meta])
+    assert tool(data) == {}
+
+
 @pytest.fixture
 def codex_question(tmp_path):
     fixture = json.loads((ROOT / 'hooks/fixtures/codex-question-events.json').read_text())
@@ -281,4 +333,82 @@ def test_codex_unavailable_evidence_and_opt_out(codex_question):
     config = Path(data['cwd']) / '.codex/ioncache-ai-tools.local.json'
     config.parent.mkdir(exist_ok=True)
     config.write_text(json.dumps({'features': {'answer-questions': False}}))
+    assert codex_tool(data) == {}
+
+
+def codex_item(name, **changes):
+    fixture = json.loads((ROOT / 'hooks/fixtures/codex-question-events.json').read_text())
+    item = fixture[name]
+    metadata = item['payload']['internal_chat_message_metadata_passthrough']
+    metadata.update(changes)
+    return item
+
+
+def codex_text(events, text):
+    events[-1]['payload']['content'][0]['text'] = text
+
+
+@pytest.mark.parametrize('text', [
+    'Why does $ioncache-ai-tools:investigate fail here?',
+    'Use [$ioncache-ai-tools:investigate](/plugin/skills/investigate/SKILL.md). Why does it fail?',
+    '$other-skill why does it fail?',
+])
+def test_codex_skill_context_keeps_the_question_turn(codex_question, text):
+    data, events = codex_question
+    codex_text(events, text)
+    events.insert(2, codex_item('environment_context'))
+    events.extend([codex_item('skill_injection'), codex_item('environment_context'),
+                   codex_item('skill_injection')])
+    save_events(data, events)
+    assert codex_tool(data)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    assert codex_tool(data, tool_input={'command': 'cat seed.txt'}) == {}
+    next_turn = 'next-user-turn'
+    start, message = copy.deepcopy(events[1]), copy.deepcopy(events[3])
+    start['payload']['turn_id'] = next_turn
+    start['payload']['turn_attribution'].update(turn_id=next_turn, root_turn_id=next_turn)
+    message['payload']['internal_chat_message_metadata_passthrough']['turn_id'] = next_turn
+    codex_text([message], 'Implement the change')
+    events.extend([
+        {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': data['turn_id']}},
+        start, message, codex_item('skill_injection', turn_id=next_turn),
+    ])
+    save_events(data, events)
+    assert codex_tool(data, turn_id=next_turn) == {}
+
+
+@pytest.mark.parametrize('text', [
+    '$ioncache-ai-tools:investigate why does it fail?',
+    '  [$ioncache-ai-tools:investigate](skill:///plugin/skills/investigate/SKILL.md) why does it fail?',
+])
+def test_codex_leading_skill_invocation_is_an_instruction(codex_question, text):
+    data, events = codex_question
+    codex_text(events, text)
+    events.append(codex_item('skill_injection'))
+    save_events(data, events)
+    marker_path(data).write_text('')
+    assert codex_tool(data) == {}
+
+
+@pytest.mark.parametrize('item', [
+    {'content_item_kinds': ['skills.selected_skill_instructions', 'user.text']},
+    {'content_item_kinds': []},
+    {'content_item_kinds': None},
+    {'turn_id': 'other-turn'},
+])
+def test_codex_unrecognized_later_input_releases_the_question(codex_question, item):
+    data, events = codex_question
+    assert codex_tool(data)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    events.append(codex_item('skill_injection', **item))
+    save_events(data, events)
+    assert codex_tool(data) == {}
+
+
+def test_codex_first_authored_input_owns_the_turn(codex_question):
+    data, events = codex_question
+    image = copy.deepcopy(events[-1])
+    image['payload']['internal_chat_message_metadata_passthrough']['content_item_kinds'] = ['user.image']
+    image['payload']['content'] = [{'type': 'input_image', 'image_url': 'data:image/png;base64,AA=='}]
+    events.insert(2, image)
+    save_events(data, events)
+    marker_path(data).write_text('')
     assert codex_tool(data) == {}

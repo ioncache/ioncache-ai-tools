@@ -269,6 +269,63 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(self.tool('task', {'prompt': 'Change files'}), {})
         self.assertTrue(any('do not match' in message for message in self.progress))
 
+    def assert_available(self, groups, decision):
+        self.progress.clear()
+        self.native_history(*groups)
+        output = self.tool('create', {'path': 'skill.txt', 'file_text': 'yes'})
+        self.assertEqual(output.get('permissionDecision'), decision)
+        self.assertFalse([message for message in self.progress if 'unavailable' in message])
+
+    def test_native_skill_invocations_correlate_and_preserve_the_question_turn(self):
+        for groups in (('question', 'skill_instruction'), ('skill_instruction_bare',),
+                       ('question', 'skill_prompt_mode')):
+            with self.subTest(groups=groups):
+                self.assert_available(groups, None)
+        self.assert_available(('instruction', 'path_question'), 'deny')
+        self.assert_available(('instruction', 'skill_question'), 'deny')
+        self.assertEqual(self.tool('view', {'path': 'skill.txt'}), {})
+        self.assert_available(('question', 'skill_load_legacy'), 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'cat seed.txt'}), {})
+        self.assert_available(('skill_question', 'instruction'), None)
+        command = 'printf resumed > resumed.txt'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+        self.assertEqual((self.project / 'resumed.txt').read_text(), 'resumed')
+
+    def test_native_skill_expansion_mismatches_report_unavailability(self):
+        def replace_prompt(group, old, new):
+            def change(events):
+                hook = next(event for event in reversed(events) if event['type'] == 'hook.start')
+                hook['data']['input']['prompt'] = hook['data']['input']['prompt'].replace(old, new)
+            return group, change
+
+        def replace_content(group, content):
+            def change(events):
+                events[-1]['data']['content'] = content
+            return group, change
+
+        cases = [
+            replace_prompt('skill_instruction', 'ARGUMENTS: PR 86', 'ARGUMENTS: PR 87'),
+            replace_prompt('skill_instruction', '\n\nARGUMENTS: PR 86 --post-comments', ''),
+            replace_prompt('skill_instruction', '</skill-context>', '</skill-context>\n\nWhy?'),
+            replace_prompt('skill_instruction', 'The user explicitly invoked', 'The agent invoked'),
+            replace_content('skill_instruction', '/ioncache-ai-tools:other PR 86 --post-comments'),
+            replace_content('skill_instruction_bare', '/ioncache-ai-tools:plugin-settings why?'),
+            replace_content('skill_question', 'why are you assessing them? what does it say?'),
+            replace_prompt('skill_question', '\n\nwhy are you', '\n\nwhy were you'),
+        ]
+        for index, (group, change) in enumerate(cases):
+            with self.subTest(group=group, case=index):
+                path = self.native_history('question', group)
+                events = [json.loads(line) for line in path.read_text().splitlines()]
+                change(events)
+                path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+                self.progress.clear()
+                self.marker.write_text('')
+                self.assertEqual(self.tool('create', {'path': 'skill.txt', 'file_text': 'yes'}), {})
+                self.assertTrue(any('do not match' in message for message in self.progress))
+                self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+
     def test_unverified_prompt_origins_release_existing_question_state(self):
         fixtures = json.loads((ROOT / 'hooks/fixtures/prompt-origins.json').read_text())['copilot']
         prompts = [item['payload'] for item in fixtures]

@@ -1,5 +1,5 @@
 {
-  "description": "Claude Code 2.1.332 native captures: interactive typed input and SDK input declared as human both supplied origin.kind=human. Paths, IDs and prompt text replaced; unrelated fields omitted. Unmarked SDK input had no origin and turnOrigin=sdk.",
+  "description": "Claude Code 2.1.332 native captures: interactive typed input and SDK input declared as human both supplied origin.kind=human. Paths, IDs and prompt text replaced; unrelated fields omitted. Unmarked SDK input had no origin and turnOrigin=sdk. Skill groups project Claude Code 2.1.312-2.1.331 transcript records: a model Skill tool load and image read add isMeta user records with the current promptId (the skill load also names sourceToolUseID), and a typed slash command records command framing followed by an isMeta skill body. Skill text is shortened.",
   "hook": {
     "session_id": "claude-question-session",
     "prompt_id": "claude-question-prompt",
@@ -19,6 +19,168 @@
       "turnOrigin": "human",
       "promptSource": "typed",
       "message": {"role": "user", "content": "Why did this change?"}
+    }
+  ],
+  "skill_tool_load": [
+    {
+      "type": "assistant",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "message": {
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "claude-skill-call",
+            "name": "Skill",
+            "input": {
+              "skill": "ioncache-ai-tools:answer-questions"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "claude-skill-call",
+            "content": "Launching skill: ioncache-ai-tools:answer-questions"
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "isMeta": true,
+      "sourceToolUseID": "claude-skill-call",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Base directory for this skill: /plugin/skills/answer-questions\n\n# Answer questions\n\nWhat was asked? Answer it directly."
+          }
+        ]
+      }
+    }
+  ],
+  "skill_tool_reload": [
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "isMeta": true,
+      "sourceToolUseID": "claude-skill-call",
+      "message": {
+        "role": "user",
+        "content": "Skill /ioncache-ai-tools:answer-questions is already loaded above; follow its instructions."
+      }
+    }
+  ],
+  "image_read": [
+    {
+      "type": "assistant",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "message": {
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "claude-image-call",
+            "name": "Read",
+            "input": {
+              "file_path": "/project/screen.png"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "claude-image-call",
+            "content": [
+              {
+                "type": "text",
+                "text": "image"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "isMeta": true,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "[Image: original 1082x2202, displayed at 983x2000. Multiply coordinates by 1.10 to map to original image.]"
+          }
+        ]
+      }
+    }
+  ],
+  "slash_command": [
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "turnPromptId": "claude-question-prompt",
+      "origin": {
+        "kind": "human"
+      },
+      "turnOrigin": "human",
+      "promptSource": "typed",
+      "message": {
+        "role": "user",
+        "content": "<command-message>ioncache-ai-tools:investigate</command-message>\n<command-name>/ioncache-ai-tools:investigate</command-name>\n<command-args>why does the hook fail?</command-args>"
+      }
+    },
+    {
+      "type": "user",
+      "sessionId": "claude-question-session",
+      "promptId": "claude-question-prompt",
+      "isSidechain": false,
+      "isMeta": true,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Base directory for this skill: /plugin/skills/investigate\n\n# Investigate\n\nWhat calls this? Trace it.\n\nARGUMENTS: why does the hook fail?"
+          }
+        ]
+      }
     }
   ]
 }
