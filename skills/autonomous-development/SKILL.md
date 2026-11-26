@@ -63,7 +63,11 @@ the assignment or stop workers. Hand-backs are not user questions.
    it states that permission, or when it approves a presented plan that showed
    the permission's value together with any explanation below for it. Model
    choices and finite limits are named the same way: the authorization states
-   them, or approves a presented plan that showed them. Reuse covers only what it
+   them, or approves a presented plan that showed them. An instruction to
+   implement with the required permissions names what delivering the plan needs:
+   `commit`, PR publication and the model choices and finite limits the
+   presented plan shows. It does not name `publish_audit`,
+   `create_follow_up_issues` or `screenshots`. Reuse covers only what it
    names. Ask about anything it does not name, with the explanations below for
    audit and follow-up publication, and about content changed outside the
    authorization's scope.
@@ -215,8 +219,9 @@ ignore them and use only their explicitly assigned ruleset. Disclose observed
 ambient sources; their presence must not stop execution, make coverage partial,
 or trigger replacements.
 
-Explicit authorization recorded under Prepare step 6 covers ordinary execution:
-do not request a separate trial approval, repeated consent or a trial budget.
+Explicit approval of the returned identity, or authorization recorded under
+Prepare step 6, covers ordinary execution: do not request a separate trial
+approval, repeated consent or a trial budget.
 Keep the approved finite logical limits, honor available native resource
 controls, and disclose that logical limits are not time or spending caps.
 When an operation fails because a capability is missing or a host permission is
