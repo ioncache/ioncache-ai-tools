@@ -5,6 +5,126 @@ Installation and basic usage: [../README.md](../README.md).
 [../config/defaults.json](../config/defaults.json) is the complete catalog of
 active guards, services, and skills. Every entry ships as `true`.
 
+## Native Claude settings pane
+
+In Claude Code with mods enabled, `/ioncache-ai-tools:plugin-settings` opens an
+interactive pane when available, or prints the grouped listing otherwise.
+It groups the complete catalog under the same headings and typed names
+as the CLI. Select Project or Global, then select a setting to enable or disable
+it. Each toggle saves immediately across all three hosts, using the existing
+settings helper and its readback verification. Opening, switching scopes, and
+refreshing do not write settings.
+
+Tab moves between controls, Enter activates one, Page Up/Down scrolls, and Esc
+closes the pane. Global mode shows the effective project value wherever an
+override differs. Refresh reloads external changes. During an operation,
+setting controls are unavailable. A failed save clears stale controls and shows
+the error; Refresh inspects any partial update before another toggle.
+
+`/ioncache-ai-tools:plugin-settings --list` always prints the grouped listing.
+Arguments such as
+`/ioncache-ai-tools:plugin-settings --global --hook:docs-cache=disabled` run the existing CLI
+operation without opening the pane. Arguments are parsed as data, never
+executed by a shell. Native commands and controls do not call a model.
+This pane is separate from Claude's built-in `/config`; there is no second
+settings store to reconcile.
+The mod handles the existing namespaced skill command rather than registering
+another command. Without mods, the same invocation runs the skill's text
+interface. No unnamespaced alias is registered.
+
+`hook:plugin-settings-ui` (JSON key `plugin-settings-ui`) controls the pane
+independently of `skill:plugin-settings`. Disable either without disabling the
+other. A disabled pane can be re-enabled with:
+
+```text
+/ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled
+```
+
+When the pane is disabled or cannot be displayed, the command automatically
+prints the listing. If the backend also fails, it reports the error and the
+explicit `--list` recovery command without blocking the session.
+The standalone helper remains usable with both UI and skill disabled.
+
+Copilot and Codex use the settings skill below. This plugin does not yet ship
+a native pane for either host. The shared helper's `--json` output
+provides the complete grouped view, scope, effective states, and verified saved
+paths for native callers without duplicating the catalog or persistence rules.
+
+## Settings command
+
+Invoke `/ioncache-ai-tools:plugin-settings` in Claude or Copilot, or
+`$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it opens the
+Claude pane where available; otherwise it lists every shipped setting and its
+effective `enabled` or `disabled` state in separate groups. `--list` requests
+the listing on every host. Opening or listing does not write settings or lock
+files.
+
+```text
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
+/ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
+/ioncache-ai-tools:plugin-settings --instruction:documentation-first=enabled
+/ioncache-ai-tools:plugin-settings --autonomous-development:audit=disabled
+/ioncache-ai-tools:plugin-settings --global --review:comments=enabled
+```
+
+| Group | CLI names | Controls |
+| --- | --- | --- |
+| Hooks | `hook:<name>` | Automatic checks and services, including guards and documentation caching |
+| Instructions | `instruction:<name>` | Guidance only, without a tool denial |
+| Autonomous development | `autonomous-development:<setting>` | Execution and related workflow features |
+| Reviews | `review:<setting>` | Review categories and related workflow features |
+| Skills | `skill:<name>` | Whether a skill can be invoked or applied |
+
+Use exact names from the listing, including their prefixes.
+Values are `enabled` or `disabled`, not JSON booleans. Multiple setting flags
+are accepted; if repeated, the last value wins. Unknown IDs or values fail
+before settings writes. `--help` lists the accepted options.
+
+CLI names map to the existing JSON feature IDs documented below. For example,
+`hook:answer-questions` updates `answer-questions`, `instruction:documentation-first`
+updates `documentation-first`, and `autonomous-development:audit` updates
+`autonomous-development-audit`. Skill IDs already have their `skill:` prefix.
+The CLI does not accept unprefixed storage IDs or rename keys in settings files.
+
+`autonomous-development:execution` maps to `autonomous-development`; it controls
+execution rather than skill availability. The separate invocation guard belongs
+in Hooks as `hook:autonomous-development:explicit-only`, because it enforces a
+tool denial rather than merely instructing the assistant.
+
+The current directory is the default project. `--project /absolute/project`
+selects another existing directory. Changes update all three hosts' project
+files; they stay sparse and leave global files untouched.
+If any project destination resolves to a global settings file, the command
+refuses the update before writing. Choose a distinct `--project` directory,
+or use `--global` if you intend to change global settings. Read-only listing
+remains available.
+`--global` instead updates all three global files, preserving both embedded
+and file-based project overrides. Its listing shows global and effective
+project states separately. A project override can still win after a global
+change; the command reports that difference rather than removing the override.
+Global changes do not affect existing project overrides in other projects.
+
+The helper uses the shared configuration resolver and locked, atomic file
+writes. It re-reads each target under its lock, preserving unrelated settings
+and intentional symlinks. It validates existing settings before updates and
+checks each target's requested stored values afterward. The three files are
+not one transaction. Verification and both displayed state columns use the
+same readback observations. A failed write, failed readback, or mismatched stored
+value makes the command exit nonzero and report that the update may be partial.
+Inspect the listing and correct the reported problem before retrying. Malformed
+preferences are never replaced with defaults.
+
+`skill:plugin-settings` controls the skill itself. The standalone helper remains
+available for explicitly requested settings management when the skill is off:
+
+```sh
+python3 "/absolute/plugin root/hooks/scripts/plugin_settings.py" --skill:plugin-settings=enabled
+```
+
+Resolve that path from the installed plugin, and run it from the target project
+or supply `--project`. No reinstall is needed for settings changes.
+
 ## Settings files and precedence
 
 | Host | Global settings | Project settings |
@@ -51,6 +171,7 @@ remain after synchronization finishes.
 | `no_broad_process_kill` | Name-based and process-group termination commands |
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
+| `plugin-settings-ui` | Native Claude settings pane; the CLI helper and settings skill remain independent |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
 | `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |

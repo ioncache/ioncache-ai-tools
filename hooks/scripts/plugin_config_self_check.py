@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import uuid
 import pytest
 
 import plugin_config as config
+import plugin_settings
 import block_pending_question
 import guidance
 from classify_question import marker_path
@@ -48,6 +50,640 @@ class ConfigurationTests(unittest.TestCase):
     def write(self, path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
+
+    def settings_command(self, *args, raw=False):
+        with mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            try:
+                code = plugin_settings.main(list(args) if raw else ['--project', str(self.project), *args])
+            except SystemExit as error:
+                code = error.code
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def tree_state(self):
+        result = {}
+        for path in self.root.rglob('*'):
+            if path.is_symlink():
+                result[path] = ('link', path.readlink())
+            elif path.is_file():
+                result[path] = ('file', path.read_bytes())
+            else:
+                result[path] = ('directory',)
+        return result
+
+    def test_settings_listing_is_complete_effective_and_read_only(self):
+        paths = config.paths(self.project)
+        self.write(paths['claude'][0], {'features': {'answer-questions': False}})
+        self.write(paths['claude'][1], {'features': {'answer-questions': True}})
+        self.write(paths['copilot'][1], {'features': {'skill:review-code': False}})
+        legacy = paths['codex'][0].with_name('config.toml')
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('[ioncache-ai-tools]\ndisabled_rules = ["docs-cache"]\n')
+        before = self.tree_state()
+
+        code, output, error = self.settings_command()
+
+        self.assertEqual(code, 0, error)
+        rows = [line.split() for line in output.splitlines()
+                if len(line.split()) == 2 and line.split()[1] in ('enabled', 'disabled')]
+        self.assertEqual(len(rows), len(config.defaults()))
+        values = dict(rows)
+        self.assertEqual(values['hook:answer-questions'], 'enabled')
+        self.assertEqual(values['skill:review-code'], 'disabled')
+        self.assertEqual(values['hook:docs-cache'], 'disabled')
+        self.assertEqual(values['hook:no_broad_process_kill'], 'enabled')
+        self.assertEqual(values['instruction:documentation-first'], 'enabled')
+        self.assertEqual(values['autonomous-development:execution'], 'enabled')
+        self.assertEqual(values['autonomous-development:audit'], 'enabled')
+        self.assertEqual(values['review:comments'], 'enabled')
+        headings = ('Hooks', 'Instructions', 'Autonomous development', 'Reviews', 'Skills')
+        positions = [output.index('\n' + heading + '\n') for heading in headings]
+        self.assertEqual(positions, sorted(positions))
+        for heading in headings:
+            self.assertRegex(output, '\n' + heading + r'\n-{3,}\nSetting')
+        hooks = output[positions[0]:positions[1]]
+        self.assertIn('hook:autonomous-development:explicit-only', hooks)
+        self.assertNotIn('instruction:', hooks)
+        self.assertNotIn('skill:', hooks)
+        self.assertEqual(self.tree_state(), before)
+
+        code, output, error = self.settings_command('--global')
+
+        self.assertEqual(code, 0, error)
+        self.assertIn('Effective project', output)
+        rows = [line.split() for line in output.splitlines()
+                if len(line.split()) == 3 and line.split()[1] in ('enabled', 'disabled')]
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertIn(['hook:answer-questions', 'disabled', 'enabled'], rows)
+        self.assertIn(['skill:review-code', 'enabled', 'disabled'], rows)
+        self.assertIn(['hook:docs-cache', 'disabled', 'disabled'], rows)
+        self.assertNotIn('Saved:', output)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_settings_grouped_flags_update_existing_storage_keys(self):
+        flags = {
+            'hook:answer-questions': 'answer-questions',
+            'hook:autonomous-development:explicit-only': 'autonomous-development-explicit-only',
+            'instruction:documentation-first': 'documentation-first',
+            'autonomous-development:execution': 'autonomous-development',
+            'autonomous-development:audit': 'autonomous-development-audit',
+            'review:comments': 'review-comments',
+            'skill:comments': 'skill:comments',
+        }
+
+        code, output, error = self.settings_command(*(f'--{name}=disabled' for name in flags))
+
+        self.assertEqual(code, 0, error)
+        for public in flags:
+            self.assertRegex(output, public + r'\s+disabled')
+        for _, path in config.paths(self.project).values():
+            self.assertEqual(json.loads(path.read_text())['features'],
+                             {stored: False for stored in flags.values()})
+        self.assertEqual(config.synchronize(str(self.project), persist=False), set(flags.values()))
+
+    def test_settings_json_view_is_read_only_and_shares_effective_states(self):
+        paths = config.paths(self.project)
+        self.write(paths['claude'][0], {'features': {'answer-questions': False}})
+        self.write(paths['claude'][1], {'features': {'answer-questions': True}})
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--json', '--global')
+
+        self.assertEqual(code, 0, error)
+        result = json.loads(output)
+        self.assertEqual(result['scope'], 'global')
+        self.assertEqual(result['saved'], [])
+        rows = {row['name']: row for group in result['groups'] for row in group['settings']}
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertEqual(rows['hook:answer-questions'],
+                         {'name': 'hook:answer-questions', 'enabled': False, 'effective': True})
+        self.assertEqual(self.tree_state(), before)
+
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+
+        self.assertEqual(code, 0, error)
+        result = json.loads(output)
+        self.assertEqual(set(result['saved']), {str(pair[1]) for pair in paths.values()})
+        rows = {row['name']: row for group in result['groups'] for row in group['settings']}
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertFalse(rows['hook:docs-cache']['enabled'])
+        self.assertTrue(rows['hook:answer-questions']['enabled'])
+        for _, path in paths.values():
+            self.assertFalse(json.loads(path.read_text())['features']['docs-cache'])
+
+    def test_settings_ui_opt_out_preserves_cli_recovery_and_other_features(self):
+        code, output, error = self.settings_command('--json', '--ui',
+                                                   '--hook:plugin-settings-ui=disabled')
+        self.assertEqual(code, 0, error)
+        self.assertFalse(json.loads(output)['uiEnabled'])
+        before = self.tree_state()
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, '')
+        self.assertIn('--hook:plugin-settings-ui=enabled', error)
+        self.assertEqual(self.tree_state(), before)
+        self.assertEqual(config.synchronize(str(self.project), persist=False), {'plugin-settings-ui'})
+
+        self.assertEqual(self.settings_command('--hook:plugin-settings-ui=enabled')[0], 0)
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+        self.assertEqual(code, 0, error)
+        self.assertTrue(json.loads(output)['uiEnabled'])
+        self.assertEqual(config.synchronize(str(self.project), persist=False), {'docs-cache'})
+
+    def test_settings_native_command_parses_arguments_without_shell_execution(self):
+        project = self.root / 'project with spaces; literal'
+        project.mkdir()
+        arguments = f'--project {shlex.quote(str(project))} --hook:answer-questions=disabled'
+        code, output, error = self.settings_command('--command', arguments, raw=True)
+        self.assertEqual(code, 0, error)
+        self.assertIn(str(project), output)
+        for _, path in config.paths(project).values():
+            self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+
+        for arguments in ('"unterminated', '--list; touch unexpected', '--command recursive'):
+            code, _, _ = self.settings_command('--command', arguments, raw=True)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(self.tree_state(), before)
+
+    @pytest.mark.process
+    def test_native_claude_settings_command_uses_namespaced_skill_and_persists_changes(self):
+        cli = ROOT / 'node_modules/.bin/claude'
+        self.assertTrue(cli.exists(), 'Install contributor tooling with npm ci')
+        home = self.root / 'native-home'
+        self.write(home / '.claude/.claude.json', {})
+        env = {key: value for key, value in os.environ.items()
+               if not any(word in key for word in ('TOKEN', 'API_KEY', 'AUTH', 'CLAUDE', 'ANTHROPIC'))}
+        env.update({
+            'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(home / '.claude'),
+            'COPILOT_HOME': str(home / '.copilot'), 'CODEX_HOME': str(home / '.codex'),
+            'XDG_CACHE_HOME': str(home / '.cache'), 'PWD': str(self.project),
+            'ANTHROPIC_API_KEY': 'offline-test-key', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:1',
+            'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1',
+            'NO_PROXY': '127.0.0.1',
+        })
+        command = [
+            str(cli), '--plugin-dir', str(ROOT), '--setting-sources', '',
+            '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
+        ]
+        for arguments in ('', '--list', '--hook:docs-cache=disabled',
+                          '--hook:plugin-settings-ui=disabled', ''):
+            result = subprocess.run(
+                [*command, '-p', '/ioncache-ai-tools:plugin-settings ' + arguments],
+                cwd=self.project, env=env, text=True, capture_output=True, timeout=20,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            setting = ('hook:plugin-settings-ui' if arguments == '--hook:plugin-settings-ui=disabled'
+                       else 'hook:docs-cache')
+            self.assertIn(setting, result.stdout)
+            self.assertNotIn('Native settings command unavailable', result.stdout)
+        for _, path in config.paths(self.project).values():
+            self.assertFalse(json.loads(path.read_text())['features']['docs-cache'])
+
+    def test_settings_help_groups_public_flags_without_reading_preferences(self):
+        path = config.paths(self.project)['claude'][0]
+        path.parent.mkdir(parents=True)
+        path.write_text('{bad')
+
+        code, output, error = self.settings_command('--help')
+
+        self.assertEqual(code, 0, error)
+        for heading in ('Hooks', 'Instructions', 'Autonomous development', 'Reviews', 'Skills'):
+            self.assertIn('\n' + heading + ':\n', output)
+        self.assertIn('--hook:answer-questions', output)
+        self.assertIn('--autonomous-development:execution', output)
+        self.assertNotIn('--answer-questions', output)
+        self.assertEqual(path.read_text(), '{bad')
+        self.assertEqual(list(self.root.rglob('*.lock')), [])
+
+    def test_settings_unknown_catalog_entry_is_not_silently_omitted(self):
+        catalog = {**config.defaults(), 'new-uncategorized-feature': True}
+        with mock.patch.object(config, 'defaults', return_value=catalog):
+            code, output, error = self.settings_command()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, '')
+        self.assertIn('setting has no display group: new-uncategorized-feature', error)
+        self.assertEqual(list(self.root.rglob(config.FILENAME)), [])
+
+    def test_settings_project_updates_all_hosts_without_changing_globals(self):
+        paths = config.paths(self.project)
+        for global_path, _ in paths.values():
+            self.write(global_path, {
+                'features': {'answer-questions': False},
+                'projects': {str(self.project): {'features': {'answer-questions': False}}},
+            })
+        self.write(paths['copilot'][1], {'features': {'docs-cache': False}})
+        originals = {path: path.read_bytes() for path, _ in paths.values()}
+
+        code, output, error = self.settings_command('--hook:answer-questions=enabled', '--skill:review-code=disabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertIn('Scope: project', output)
+        for global_path, project_path in paths.values():
+            self.assertEqual(global_path.read_bytes(), originals[global_path])
+            features = json.loads(project_path.read_text())['features']
+            expected = {'answer-questions': True, 'skill:review-code': False}
+            if project_path == paths['copilot'][1]:
+                expected['docs-cache'] = False
+            self.assertEqual(features, expected)
+        self.assertEqual(config.synchronize(str(self.project), persist=False),
+                         {'docs-cache', 'skill:review-code'})
+        self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
+        self.assertIn('answer-questions', config.synchronize(str(self.project), persist=False))
+
+    def test_settings_home_project_collision_preserves_globals_and_recovers(self):
+        paths = config.paths(self.project)
+        for global_path, _ in paths.values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        originals = {path: path.read_bytes() for path, _ in paths.values()}
+        before = self.tree_state()
+        home_args = ('--project', str(Path.home()))
+
+        code, output, error = self.settings_command(*home_args, '--hook:answer-questions=disabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('Saved:', output)
+        self.assertIn('--project', error)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+        code, _, error = self.settings_command(*home_args)
+        self.assertEqual(code, 0, error)
+        self.assertEqual(self.tree_state(), before)
+
+        code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        for global_path, project_path in paths.values():
+            self.assertEqual(global_path.read_bytes(), originals[global_path])
+            self.assertFalse(json.loads(project_path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+        code, _, error = self.settings_command(*home_args, '--hook:answer-questions=disabled')
+        self.assertNotEqual(code, 0)
+        self.assertIn('--project', error)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_settings_later_host_global_link_is_rejected_before_writes(self):
+        paths = config.paths(self.project)
+        for global_path, _ in paths.values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        link = paths['codex'][1]
+        link.parent.mkdir()
+        link.symlink_to(paths['claude'][0])
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('Saved:', output)
+        self.assertIn(str(paths['claude'][0]), error)
+        self.assertIn('--project', error)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+        code, _, error = self.settings_command()
+        self.assertEqual(code, 0, error)
+        self.assertEqual(self.tree_state(), before)
+
+        code, _, error = self.settings_command('--global', '--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertTrue(link.is_symlink())
+        for global_path, _ in paths.values():
+            self.assertFalse(json.loads(global_path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+        code, _, error = self.settings_command('--hook:answer-questions=enabled')
+        self.assertNotEqual(code, 0)
+        self.assertIn('--global', error)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_settings_global_updates_preserve_and_display_project_overrides(self):
+        paths = config.paths(self.project)
+        self.write(paths['claude'][0], {
+            'features': {'answer-questions': False},
+            'projects': {str(self.project): {'features': {'answer-questions': False}}},
+        })
+        self.write(paths['copilot'][1], {'features': {'docs-cache': False}})
+        project_original = paths['copilot'][1].read_bytes()
+
+        code, output, error = self.settings_command('--global', '--hook:answer-questions=enabled',
+                                                    '--hook:docs-cache=enabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertIn('Effective project', output)
+        self.assertRegex(output, r'hook:answer-questions\s+enabled\s+disabled')
+        self.assertRegex(output, r'hook:docs-cache\s+enabled\s+disabled')
+        self.assertIn('Project overrides differ', output)
+        for global_path, _ in paths.values():
+            features = json.loads(global_path.read_text())['features']
+            self.assertEqual(set(features), set(config.defaults()))
+            self.assertTrue(features['answer-questions'])
+            self.assertTrue(features['docs-cache'])
+        self.assertEqual(json.loads(paths['claude'][0].read_text())['projects'],
+                         {str(self.project): {'features': {'answer-questions': False}}})
+        self.assertEqual(paths['copilot'][1].read_bytes(), project_original)
+        self.assertEqual(config.synchronize(str(self.root), persist=False), set())
+
+    def test_settings_global_update_preserves_legacy_codex_preferences(self):
+        path = config.paths(self.project)['codex'][0]
+        legacy = path.with_name('config.toml')
+        legacy.parent.mkdir(parents=True)
+        text = '[ioncache-ai-tools]\ndisabled_rules = ["docs-cache"]\n'
+        legacy.write_text(text)
+
+        code, _, error = self.settings_command('--global', '--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertEqual(legacy.read_text(), text)
+        features = json.loads(path.read_text())['features']
+        self.assertFalse(features['docs-cache'])
+        self.assertFalse(features['answer-questions'])
+
+    def test_settings_reject_bad_flags_without_writing_and_accept_a_corrected_request(self):
+        for flag in ('--unknown=disabled', '--hook:answer-questions=false', '--hook:answer=enabled',
+                     '--answer-questions=enabled', '--instruction:answer-questions=enabled', 'disable docs-cache'):
+            with self.subTest(flag=flag):
+                code, output, error = self.settings_command('--hook:docs-cache=disabled', flag)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(output, '')
+                self.assertIn('error:', error)
+                self.assertEqual(list(self.root.rglob(config.FILENAME)), [])
+        code, _, error = self.settings_command('--hook:docs-cache=disabled', '--hook:docs-cache=enabled')
+        self.assertEqual(code, 0, error)
+        self.assertNotIn('docs-cache', config.synchronize(str(self.project), persist=False))
+
+    def test_settings_reject_invalid_project_paths_without_side_effects(self):
+        for global_path, _ in config.paths(self.project).values():
+            self.write(global_path, {'features': {'answer-questions': True}})
+        regular_file = self.root / 'not-a-directory'
+        regular_file.write_text('unchanged')
+        for project in (self.root / 'missing', regular_file):
+            with self.subTest(project=project):
+                before = self.tree_state()
+                code, output, error = self.settings_command(
+                    '--project', str(project), '--hook:answer-questions=disabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Saved:', output)
+                self.assertIn('project directory', error)
+                self.assertEqual(self.tree_state(), before)
+
+                code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+                self.assertEqual(code, 0, error)
+                for global_path, project_path in config.paths(self.project).values():
+                    self.assertTrue(json.loads(global_path.read_text())['features']['answer-questions'])
+                    self.assertFalse(json.loads(project_path.read_text())['features']['answer-questions'])
+
+    def test_sync_file_rejects_invalid_updates_before_filesystem_changes(self):
+        catalog = config.defaults()
+        existing = self.root / 'existing.json'
+        self.write(existing, {'features': {'answer-questions': True, 'docs-cache': False}})
+        missing = self.root / 'missing' / 'settings.json'
+        invalid = ({'unknown': True}, {'answer-questions': 'disabled'}, {'answer-questions': 0})
+        before = self.tree_state()
+        for path, updates in product((existing, missing), invalid):
+            with self.subTest(path=path, updates=updates):
+                with self.assertRaisesRegex(ValueError, 'shipped feature IDs and boolean values'):
+                    config.sync_file(path, catalog, updates=updates)
+                self.assertEqual(self.tree_state(), before)
+
+        config.sync_file(existing, catalog, updates={'answer-questions': False})
+
+        features = json.loads(existing.read_text())['features']
+        self.assertFalse(features['answer-questions'])
+        self.assertFalse(features['docs-cache'])
+
+    def test_settings_validate_every_host_before_writes(self):
+        path = config.paths(self.project)['codex'][1]
+        path.parent.mkdir(parents=True)
+        path.write_text('{bad')
+        before = {file: file.read_bytes() for file in self.root.rglob('*') if file.is_file()}
+
+        code, output, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, '')
+        self.assertIn('No success confirmed', error)
+        self.assertEqual({file: file.read_bytes() for file in self.root.rglob('*') if file.is_file()}, before)
+
+    def test_settings_partial_failure_is_reported_and_retry_completes(self):
+        paths = config.paths(self.project)
+        replace = config.os.replace
+
+        def fail_copilot(source, target):
+            if target == paths['copilot'][1]:
+                raise PermissionError('copilot settings unavailable')
+            return replace(source, target)
+
+        with mock.patch.object(config.os, 'replace', side_effect=fail_copilot):
+            code, output, error = self.settings_command('--hook:answer-questions=disabled')
+        self.assertNotEqual(code, 0)
+        self.assertIn(str(paths['claude'][1]), output)
+        self.assertIn('partial', error)
+        self.assertIn('copilot settings unavailable', error)
+        self.assertFalse(paths['copilot'][1].exists())
+        self.assertFalse(paths['codex'][1].exists())
+        self.assertEqual(self.settings_command()[0], 0)
+
+        code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        for _, path in paths.values():
+            self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+
+    def test_settings_post_write_divergence_is_reported_and_retry_completes(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        for global_scope, enabled, host in product((False, True), (False, True), paths):
+            with self.subTest(global_scope=global_scope, enabled=enabled, host=host):
+                targets = {name: pair[0 if global_scope else 1] for name, pair in paths.items()}
+                scope = ('--global',) if global_scope else ()
+                flag = '--hook:answer-questions=' + ('enabled' if enabled else 'disabled')
+
+                def competing_update(*args, **kwargs):
+                    result = update(*args, **kwargs)
+                    document = json.loads(targets[host].read_text())
+                    document['features']['answer-questions'] = not enabled
+                    self.write(targets[host], document)
+                    return result
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=competing_update):
+                    code, output, error = self.settings_command(*scope, flag)
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('concurrently', error)
+                self.assertIn('No success confirmed', error)
+                for name, path in targets.items():
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'],
+                                     not enabled if name == host else enabled)
+                code, _, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+
+                code, output, error = self.settings_command(*scope, flag)
+
+                self.assertEqual(code, 0, error)
+                self.assertIn('Scope:', output)
+                for path in targets.values():
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'], enabled)
+
+    def test_settings_final_read_failure_preserves_writes_and_retry_completes(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        read_text = Path.read_text
+        for global_scope in (False, True):
+            with self.subTest(global_scope=global_scope):
+                scope = ('--global',) if global_scope else ()
+                targets = [pair[0 if global_scope else 1] for pair in paths.values()]
+                written = False
+
+                def completed_update(*args, **kwargs):
+                    nonlocal written
+                    result = update(*args, **kwargs)
+                    written = True
+                    return result
+
+                def fail_final_read(path, *args, **kwargs):
+                    if written and path == targets[-1]:
+                        raise OSError('post-write settings read unavailable')
+                    return read_text(path, *args, **kwargs)
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=completed_update), \
+                        mock.patch.object(Path, 'read_text', fail_final_read):
+                    code, output, error = self.settings_command(*scope, '--hook:answer-questions=disabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('post-write settings read unavailable', error)
+                self.assertIn('No success confirmed', error)
+                for path in targets:
+                    self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+                code, _, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+
+                code, output, error = self.settings_command(*scope, '--hook:answer-questions=disabled')
+
+                self.assertEqual(code, 0, error)
+                self.assertIn('Scope:', output)
+                for path in targets:
+                    self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+
+    def test_settings_verification_rejects_a_mismatch_restored_after_readback(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        read_text = Path.read_text
+        for global_scope, enabled in product((False, True), (False, True)):
+            with self.subTest(global_scope=global_scope, enabled=enabled):
+                scope = ('--global',) if global_scope else ()
+                state = 'enabled' if enabled else 'disabled'
+                flag = '--hook:answer-questions=' + state
+                target = paths['codex'][0 if global_scope else 1]
+                written = False
+                restored = False
+
+                def competing_update(*args, **kwargs):
+                    nonlocal written
+                    result = update(*args, **kwargs)
+                    document = json.loads(read_text(target))
+                    document['features']['answer-questions'] = not enabled
+                    self.write(target, document)
+                    written = True
+                    return result
+
+                def restore_after_read(path, *args, **kwargs):
+                    nonlocal restored
+                    text = read_text(path, *args, **kwargs)
+                    if written and path == target and not restored:
+                        document = json.loads(text)
+                        document['features']['answer-questions'] = enabled
+                        self.write(target, document)
+                        restored = True
+                    return text
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=competing_update), \
+                        mock.patch.object(Path, 'read_text', restore_after_read):
+                    code, output, error = self.settings_command(*scope, flag)
+
+                self.assertTrue(restored)
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('concurrently', error)
+                self.assertIn('No success confirmed', error)
+                for pair in paths.values():
+                    path = pair[0 if global_scope else 1]
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'], enabled)
+                code, output, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+                self.assertRegex(output, r'hook:answer-questions\s+' + state)
+                code, output, error = self.settings_command(*scope, flag)
+                self.assertEqual(code, 0, error)
+                self.assertRegex(output, r'hook:answer-questions\s+' + state)
+
+    def test_settings_readback_requires_each_requested_stored_value(self):
+        update = plugin_settings.update
+        for global_scope, removal in product((False, True), ('file', 'feature')):
+            with self.subTest(global_scope=global_scope, removal=removal):
+                scope = ('--global',) if global_scope else ()
+                target = config.paths(self.project)['codex'][0 if global_scope else 1]
+
+                def remove_update(*args, **kwargs):
+                    result = update(*args, **kwargs)
+                    if removal == 'file':
+                        target.unlink()
+                    else:
+                        document = json.loads(target.read_text())
+                        del document['features']['answer-questions']
+                        self.write(target, document)
+                    return result
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=remove_update):
+                    code, output, error = self.settings_command(*scope, '--hook:answer-questions=enabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn(str(target), error)
+                code, _, error = self.settings_command(*scope, '--hook:answer-questions=enabled')
+                self.assertEqual(code, 0, error)
+                self.assertTrue(json.loads(target.read_text())['features']['answer-questions'])
+
+    def test_settings_update_rereads_symlink_target_under_lock(self):
+        target = self.root / 'shared.json'
+        self.write(target, {'features': {'answer-questions': True}})
+        path = config.paths(self.project)['claude'][1]
+        path.parent.mkdir()
+        path.symlink_to(target)
+        acquire = config.acquire_lock
+
+        def concurrent_edit(lock):
+            acquire(lock)
+            if Path(lock.name).parent == target.parent:
+                self.write(target, {'features': {'answer-questions': True, 'docs-cache': False}})
+
+        with mock.patch.object(config, 'acquire_lock', side_effect=concurrent_edit):
+            code, _, error = self.settings_command('--hook:answer-questions=disabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(json.loads(target.read_text())['features'],
+                         {'answer-questions': False, 'docs-cache': False})
+        with mock.patch.object(config, 'acquire_lock', side_effect=AssertionError('unnecessary lock')):
+            self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
+
+    @pytest.mark.process
+    def test_installed_settings_helper_runs_from_an_unrelated_project(self):
+        install = self.root / 'plugin with spaces'
+        install.symlink_to(ROOT, target_is_directory=True)
+        skill = install / 'skills/plugin-settings'
+        helper = skill / '../../hooks/scripts/plugin_settings.py'
+        self.assertIn('../../hooks/scripts/plugin_settings.py', (skill / 'SKILL.md').read_text())
+        for args in ([], ['--hook:answer-questions=disabled']):
+            result = subprocess.run([sys.executable, '-B', str(helper), *args], cwd=self.project,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'Project: {self.project}', result.stdout)
+            if not args:
+                self.assertEqual(list(self.root.rglob(config.FILENAME)), [])
+        for _, path in config.paths(self.project).values():
+            self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
 
 
     def test_guidance_deadline_reports_unavailability_and_next_call_recovers(self):
@@ -368,7 +1004,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual({name.removeprefix('skill:') for name in config.defaults()
                           if name.startswith('skill:')}, skills)
         path = config.paths(self.project)['claude'][0]
-        for skill in ('review-code', 'autonomous-development'):
+        for skill in ('review-code', 'autonomous-development', 'plugin-settings'):
             self.write(path, {'features': {'skill:' + skill: False}})
             output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
             self.assertIn('Disabled plugin skills: ' + skill, str(output))

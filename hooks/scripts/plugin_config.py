@@ -110,13 +110,15 @@ def write_atomic(path, text):
         Path(temporary).unlink(missing_ok=True)
 
 
-def read_settings(path, catalog, complete, legacy):
+def read_settings(path, catalog, complete, legacy, *, updates=None):
     try:
         original = path.read_text(encoding='utf-8')
     except FileNotFoundError:
         original = None
     document = json.loads(original) if original is not None else (legacy or {})
     result = reconcile(document, catalog, complete)
+    if updates:
+        result['features'].update(updates)
     return original, result, json.dumps(result, indent=2) + '\n'
 
 
@@ -133,17 +135,19 @@ def acquire_lock(lock):
             time.sleep(min(0.02, remaining))
 
 
-def sync_file(path, catalog, complete=True, legacy=None, *, strict=True):
+def sync_file(path, catalog, complete=True, legacy=None, *, strict=True, updates=None):
+    if updates and any(name not in catalog or type(value) is not bool for name, value in updates.items()):
+        raise ValueError('updates must use shipped feature IDs and boolean values')
     # Worktree-local settings may intentionally symlink to the main worktree.
     path = path.resolve()
-    original, result, text = read_settings(path, catalog, complete, legacy)
+    original, result, text = read_settings(path, catalog, complete, legacy, updates=updates)
     if text == original:
         return result
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with (path.parent / ('.' + path.name + '.lock')).open('a', encoding='utf-8') as lock:
             acquire_lock(lock)
-            original, result, text = read_settings(path, catalog, complete, legacy)
+            original, result, text = read_settings(path, catalog, complete, legacy, updates=updates)
             if text != original:
                 write_atomic(path, text)
     except OSError as error:
@@ -155,7 +159,8 @@ def sync_file(path, catalog, complete=True, legacy=None, *, strict=True):
     return result
 
 
-def synchronize(project, harness=None, *, strict=False, catalog=None, persist=True):
+def synchronize(project, harness=None, *, strict=False, catalog=None, persist=True, global_only=False,
+                read_observer=None):
     catalog = defaults() if catalog is None else catalog
     disabled = set()
     for host, (global_path, project_path) in paths(project).items():
@@ -168,18 +173,23 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                 if persist:
                     global_config = sync_file(global_path, catalog, legacy=legacy, strict=strict)
                 else:
-                    global_config = read_settings(global_path.resolve(), catalog, True, legacy)[1]
+                    path = global_path.resolve()
+                    original, global_config, _ = read_settings(path, catalog, True, legacy)
+                    if read_observer is not None:
+                        read_observer(path, original, global_config, True)
             else:
                 global_config = {'features': catalog}
-            values = {
-                **global_config['features'],
-                **global_config.get('projects', {}).get(str(project), {}).get('features', {}),
-            }
-            if project_path.exists():
+            values = dict(global_config['features'])
+            if not global_only:
+                values.update(global_config.get('projects', {}).get(str(project), {}).get('features', {}))
+            if not global_only and project_path.exists():
                 if persist:
                     project_config = sync_file(project_path, catalog, complete=False, strict=strict)
                 else:
-                    project_config = read_settings(project_path.resolve(), catalog, False, None)[1]
+                    path = project_path.resolve()
+                    original, project_config, _ = read_settings(path, catalog, False, None)
+                    if read_observer is not None:
+                        read_observer(path, original, project_config, False)
                 values.update(project_config['features'])
             disabled.update(name for name, enabled in values.items() if not enabled)
         except (OSError, ValueError, TypeError) as error:

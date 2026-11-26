@@ -491,7 +491,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_workflows_ship_as_native_skills(self):
         for name in (
             'create-worktree', 'engineering-judgment', 'investigate', 'review-code',
-            'triage-errors', 'verify-unresolved-pr-comments', 'autonomous-development',
+            'triage-errors', 'verify-unresolved-pr-comments', 'autonomous-development', 'plugin-settings',
         ):
             with self.subTest(name=name):
                 path = ROOT / 'skills' / name / 'SKILL.md'

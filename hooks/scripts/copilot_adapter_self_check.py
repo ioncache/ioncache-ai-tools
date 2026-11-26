@@ -22,6 +22,7 @@ import copilot_question
 import docs_cache
 import guidance
 import hook_adapter_common
+import plugin_settings
 from classify_question import marker_path
 from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
 from turn_guard_self_check import install_reviewers
@@ -98,6 +99,23 @@ class CopilotAdapterTests(unittest.TestCase):
     def write_config(self, path, config):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(config))
+
+    def test_settings_skill_opt_out_retains_helper_recovery_and_other_guards(self):
+        skill = {'skill': 'ioncache-ai-tools:plugin-settings'}
+        self.assertEqual(self.tool('skill', skill), {})
+        result = run_main(plugin_settings, ['--skill:plugin-settings=disabled'],
+                          cwd=self.project, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tool('skill', skill)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        command = shlex.join([sys.executable, str(plugin_settings.__file__),
+                              '--project', str(self.project), '--skill:plugin-settings=enabled'])
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        result = run_main(plugin_settings, ['--skill:plugin-settings=enabled'],
+                          cwd=self.project, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tool('skill', skill), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def native_history(self, *groups):
         events = [event for group in groups for event in NATIVE_QUESTION_EVENTS[group]]
