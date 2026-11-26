@@ -328,13 +328,6 @@ lost response; return `data.commit` for the actual accepted commit.
 draft PR. Reuse the existing write-pr-descriptions skill and preserve intervening
 human edits. Inspect existing branch and PR state before repeating any operation.
 Never push the default branch or silently create a replacement PR.
-`draft` and `ready` link issues as the approved `constraints` record for this
-PR. Use a closing keyword only for an issue they say this PR may close; a closing
-keyword closes that issue when the PR merges, so never close a parent issue from
-a partial PR. Without such a record, link only the `source` issues, in this
-PR's repository, of requirements artifacts that this PR's tasks reference.
-Use no closing keyword, and say in the PR description that they stay open
-after merge.
 Both `draft` and `ready` must apply [FOLLOW_UPS.md](FOLLOW_UPS.md): include
 **Known issues not fixed here** from the cumulative inventory, safely publish
 or reuse tickets only within the assignment's authority, and return

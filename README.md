@@ -228,7 +228,8 @@ See [skills/autonomous-development/RECOVERY.md](skills/autonomous-development/RE
 Offline checks establish only the controller and adapter contracts they
 exercise. They do not establish native permissions, worker launch, result
 delivery or cancellation on a given host. Execution establishes those from the
-selected host's evidence and reports any not yet established as deferred; see
+selected host's evidence, and the launching session reports any the preflight
+record deferred that no later step established; see
 [skills/autonomous-development/WORKERS.md](skills/autonomous-development/WORKERS.md).
 Neither establishes cloud operation or shared team controls, which the consuming
 environment must provide.
