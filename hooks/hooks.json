@@ -1,6 +1,6 @@
 {
   "description": "Guidance, question-turn and recoverable action checks, and documentation caching",
-  "modules": ["./plugin-settings.mjs"],
+  "modules": ["./plugin-settings.mjs", "./response-validation/register.mjs"],
   "hooks": {
     "SessionStart": [
       {

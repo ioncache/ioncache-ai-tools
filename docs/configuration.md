@@ -194,6 +194,7 @@ remain after synchronization finishes.
 | `no-manual-lockfile-edit` | Lockfile edits through file tools |
 | `no_manual_lockfile_edit_bash` | Lockfile edits through shell commands |
 | `plugin-settings-ui` | Native Claude settings pane; the CLI helper and settings skill remain independent |
+| `response-validation` | Claude-only pre-delivery response validation and rewriting, including supported agent-message payloads; adds small-model usage |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
 | `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |
@@ -331,3 +332,10 @@ tables before using Codex `--strict-config`.
 
 Settings edits need no reinstall. Start a new session to refresh instructions
 already delivered to the conversation.
+
+Claude's response mod reads the current effective `response-validation` setting
+before each response. Its configuration reader uses
+`plugin_config.py claude --project /absolute/project --feature response-validation`;
+the JSON output contains an `enabled` boolean. Without `--feature`, the existing
+synchronization command still prints the global settings path.
+See [response-validation.md](response-validation.md).

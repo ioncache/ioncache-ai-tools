@@ -48,7 +48,7 @@ jobs:
 
       - name: Check JS hook script syntax
         run: |
-          for f in hooks/*.mjs hooks/scripts/*.js scripts/*.js; do
+          for f in hooks/*.mjs hooks/scripts/*.js scripts/*.js hooks/response-validation/*.mjs; do
             [ -f "$f" ] || continue
             node --check "$f" || exit 1
             echo "$f OK"
@@ -65,6 +65,9 @@ jobs:
 
       - name: Run native workflow self-check
         run: node scripts/development_workflow_self_check.js
+
+      - name: Run response validation checks
+        run: npm run test:responses
 
       - name: Check release changelog
         run: npm run release:check

@@ -16,6 +16,7 @@ Python uses the standard library; Node helpers use CommonJS. Claude's native
 settings mod in `hooks/plugin-settings.mjs` uses the host-required ES module
 format and the shared Python settings helper, not a separate preference store.
 Its native `.test.ts` tests run offline with the contributor Claude CLI.
+Claude's response-validation mod also uses the native ES module format.
 The release helper
 dynamically imports the ESM-only `conventional-changelog` packages from
 contributor dev dependencies; the worktree helper uses Node built-ins.
@@ -64,8 +65,14 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Exercise defaults with real commands in disposable directories and interleaved
   root/child questions, including actual Copilot child `sessionId`/`agentId`
   payloads. Isolated adapter checks do not establish live host usability.
-  Assistant display and final text are not rewritten or gated. Stop hooks only
-  deliver cache notices; Copilot does not scan final transcripts.
+  Claude's `hooks/response-validation/` mod buffers response streams and rewrites
+  their text before delivery. It uses a tool-less native small-model completion,
+  the caller's own bounded history, and no approval or retry state. Failed
+  validation replaces the draft with an unavailability notice without denying
+  subsequent work. Keep stream text and returned metadata consistent, preserve
+  unrelated tool calls and opaque chunk handles, and never leak drafts on
+  cancellation or hook failure. `response-validation` independently opts out.
+  Copilot and Codex do not run this mod. Stop hooks only deliver cache notices.
   `block_emdash_turn.py` is retained inactive source.
   Question markers (`classify_question.marker_path`) are keyed by session and
   agent identity. A marker requires a positively identified root-user prompt.
@@ -220,6 +227,7 @@ npm run test:settings-ui
 node scripts/create-worktree.js --self-test
 node scripts/development_workflow_self_check.js
 npm run release:check
+npm run test:responses
 ```
 
 These checks run in CI; the Node self-test exercises worktree setup and path
@@ -252,7 +260,7 @@ Syntax and manifest checks used by CI:
 
 ```sh
 python3 -m py_compile hooks/scripts/*.py hooks/rules/*.py scripts/*.py
-for f in scripts/*.js; do node --check "$f" || exit 1; done
+for f in scripts/*.js hooks/response-validation/*.mjs; do node --check "$f" || exit 1; done
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
          .codex-plugin/plugin.json .agents/plugins/marketplace.json \
          .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \

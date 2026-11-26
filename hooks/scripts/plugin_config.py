@@ -220,13 +220,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('host', choices=HOSTS)
     parser.add_argument('--project', default=os.getcwd(), help='project root for optional overrides')
+    parser.add_argument('--feature', help='print the effective enabled state of one shipped feature as JSON')
     args = parser.parse_args()
     try:
-        synchronize(str(Path(args.project).resolve()), args.host, strict=True)
+        catalog = defaults()
+        if args.feature and args.feature not in catalog:
+            raise ValueError('unknown feature')
+        disabled = synchronize(str(Path(args.project).resolve()), args.host, strict=True, catalog=catalog)
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-config: synchronization failed: {error}', file=sys.stderr)
         sys.exit(1)
-    print(paths(args.project)[args.host][0])
+    if args.feature:
+        print(json.dumps({'enabled': args.feature not in disabled}))
+    else:
+        print(paths(args.project)[args.host][0])
 
 
 if __name__ == '__main__':

@@ -28,6 +28,14 @@ Run inside Claude Code:
 Choose user scope to make the plugin available across projects. Reload plugins
 or start a new session when prompted. Manage updates and removal through `/plugin`.
 
+Claude Code 2.1.332 or later also runs automatic pre-delivery response validation.
+It holds each response while a small model checks factual support and rewrites
+overclaims before the text is displayed and recorded. This adds model usage and
+latency. If checking fails, an unavailability notice replaces the draft without
+blocking further work. Set `response-validation: false` in the plugin's feature
+settings to opt out. See [docs/response-validation.md](docs/response-validation.md)
+for coverage, costs, and limitations. This feature does not run in Copilot or Codex.
+
 ### GitHub Copilot CLI
 
 Run in your terminal:
