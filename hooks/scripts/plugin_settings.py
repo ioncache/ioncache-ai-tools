@@ -1,5 +1,6 @@
 """List or update shipped plugin settings across Claude, Copilot, and Codex."""
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -53,12 +54,24 @@ def arguments(argv, catalog):
     return parser.parse_args(argv)
 
 
-def states(project, catalog, global_scope):
-    effective = config.synchronize(str(project), catalog=catalog, strict=True, persist=False)
-    selected = (config.synchronize(str(project), catalog=catalog, strict=True,
-                                   persist=False, global_only=True)
-                if global_scope else effective)
-    return selected, effective
+def states(project, catalog, global_scope, *, updates=None):
+    expected = updates or {}
+    unchecked = set(expected)
+    global_disabled = set()
+
+    def observe(path, original, document, is_global):
+        if path in expected:
+            stored = config.settings(json.loads(original), catalog) if original is not None else {}
+            verify_updates(path, stored, expected[path])
+            unchecked.discard(path)
+        if is_global:
+            global_disabled.update(name for name, enabled in document['features'].items() if not enabled)
+
+    effective = config.synchronize(str(project), catalog=catalog, strict=True, persist=False,
+                                   read_observer=observe)
+    for path in sorted(unchecked):
+        verify_updates(path, {}, expected[path])
+    return (global_disabled if global_scope else effective), effective
 
 
 def update(project, catalog, changes, *, global_scope):
@@ -81,12 +94,10 @@ def update(project, catalog, changes, *, global_scope):
     return targets
 
 
-def verify_updates(targets, catalog, changes):
-    for path in targets.values():
-        stored = config.read_settings(path, catalog, False, None)[1]['features']
-        if any(stored.get(name) is not value for name, value in changes.items()):
-            raise ValueError(f'settings changed concurrently in {path}; '
-                             'inspect the listing before retrying')
+def verify_updates(path, stored, changes):
+    if any(stored.get(name) is not value for name, value in changes.items()):
+        raise ValueError(f'settings changed concurrently in {path}; '
+                         'inspect the listing before retrying')
 
 
 def display(project, names, selected, effective, *, global_scope):
@@ -122,8 +133,8 @@ def main(argv=None):
         selected, effective = states(project, catalog, args.global_scope)
         if changes:
             targets = update(project, catalog, changes, global_scope=args.global_scope)
-            selected, effective = states(project, catalog, args.global_scope)
-            verify_updates(targets, catalog, changes)
+            selected, effective = states(project, catalog, args.global_scope,
+                                         updates={path: changes for path in targets.values()})
         display(project, changes or catalog, selected, effective, global_scope=args.global_scope)
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-settings: {error}', file=sys.stderr)

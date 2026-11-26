@@ -468,6 +468,84 @@ class ConfigurationTests(unittest.TestCase):
                 for path in targets:
                     self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
 
+    def test_settings_verification_rejects_a_mismatch_restored_after_readback(self):
+        paths = config.paths(self.project)
+        update = plugin_settings.update
+        read_text = Path.read_text
+        for global_scope, enabled in product((False, True), (False, True)):
+            with self.subTest(global_scope=global_scope, enabled=enabled):
+                scope = ('--global',) if global_scope else ()
+                state = 'enabled' if enabled else 'disabled'
+                flag = '--hook:answer-questions=' + state
+                target = paths['codex'][0 if global_scope else 1]
+                written = False
+                restored = False
+
+                def competing_update(*args, **kwargs):
+                    nonlocal written
+                    result = update(*args, **kwargs)
+                    document = json.loads(read_text(target))
+                    document['features']['answer-questions'] = not enabled
+                    self.write(target, document)
+                    written = True
+                    return result
+
+                def restore_after_read(path, *args, **kwargs):
+                    nonlocal restored
+                    text = read_text(path, *args, **kwargs)
+                    if written and path == target and not restored:
+                        document = json.loads(text)
+                        document['features']['answer-questions'] = enabled
+                        self.write(target, document)
+                        restored = True
+                    return text
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=competing_update), \
+                        mock.patch.object(Path, 'read_text', restore_after_read):
+                    code, output, error = self.settings_command(*scope, flag)
+
+                self.assertTrue(restored)
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn('concurrently', error)
+                self.assertIn('No success confirmed', error)
+                for pair in paths.values():
+                    path = pair[0 if global_scope else 1]
+                    self.assertEqual(json.loads(path.read_text())['features']['answer-questions'], enabled)
+                code, output, error = self.settings_command(*scope)
+                self.assertEqual(code, 0, error)
+                self.assertRegex(output, r'hook:answer-questions\s+' + state)
+                code, output, error = self.settings_command(*scope, flag)
+                self.assertEqual(code, 0, error)
+                self.assertRegex(output, r'hook:answer-questions\s+' + state)
+
+    def test_settings_readback_requires_each_requested_stored_value(self):
+        update = plugin_settings.update
+        for global_scope, removal in product((False, True), ('file', 'feature')):
+            with self.subTest(global_scope=global_scope, removal=removal):
+                scope = ('--global',) if global_scope else ()
+                target = config.paths(self.project)['codex'][0 if global_scope else 1]
+
+                def remove_update(*args, **kwargs):
+                    result = update(*args, **kwargs)
+                    if removal == 'file':
+                        target.unlink()
+                    else:
+                        document = json.loads(target.read_text())
+                        del document['features']['answer-questions']
+                        self.write(target, document)
+                    return result
+
+                with mock.patch.object(plugin_settings, 'update', side_effect=remove_update):
+                    code, output, error = self.settings_command(*scope, '--hook:answer-questions=enabled')
+
+                self.assertNotEqual(code, 0)
+                self.assertNotIn('Scope:', output)
+                self.assertIn(str(target), error)
+                code, _, error = self.settings_command(*scope, '--hook:answer-questions=enabled')
+                self.assertEqual(code, 0, error)
+                self.assertTrue(json.loads(target.read_text())['features']['answer-questions'])
+
     def test_settings_update_rereads_symlink_target_under_lock(self):
         target = self.root / 'shared.json'
         self.write(target, {'features': {'answer-questions': True}})

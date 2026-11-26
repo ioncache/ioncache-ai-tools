@@ -62,7 +62,8 @@ The helper uses the shared configuration resolver and locked, atomic file
 writes. It re-reads each target under its lock, preserving unrelated settings
 and intentional symlinks. It validates existing settings before updates and
 checks each target's requested stored values afterward. The three files are
-not one transaction: a failed write, failed readback, or mismatched stored
+not one transaction. Verification and both displayed state columns use the
+same readback observations. A failed write, failed readback, or mismatched stored
 value makes the command exit nonzero and report that the update may be partial.
 Inspect the listing and correct the reported problem before retrying. Malformed
 preferences are never replaced with defaults.

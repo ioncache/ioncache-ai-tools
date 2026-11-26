@@ -159,7 +159,8 @@ def sync_file(path, catalog, complete=True, legacy=None, *, strict=True, updates
     return result
 
 
-def synchronize(project, harness=None, *, strict=False, catalog=None, persist=True, global_only=False):
+def synchronize(project, harness=None, *, strict=False, catalog=None, persist=True, global_only=False,
+                read_observer=None):
     catalog = defaults() if catalog is None else catalog
     disabled = set()
     for host, (global_path, project_path) in paths(project).items():
@@ -172,7 +173,10 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                 if persist:
                     global_config = sync_file(global_path, catalog, legacy=legacy, strict=strict)
                 else:
-                    global_config = read_settings(global_path.resolve(), catalog, True, legacy)[1]
+                    path = global_path.resolve()
+                    original, global_config, _ = read_settings(path, catalog, True, legacy)
+                    if read_observer is not None:
+                        read_observer(path, original, global_config, True)
             else:
                 global_config = {'features': catalog}
             values = dict(global_config['features'])
@@ -182,7 +186,10 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                 if persist:
                     project_config = sync_file(project_path, catalog, complete=False, strict=strict)
                 else:
-                    project_config = read_settings(project_path.resolve(), catalog, False, None)[1]
+                    path = project_path.resolve()
+                    original, project_config, _ = read_settings(path, catalog, False, None)
+                    if read_observer is not None:
+                        read_observer(path, original, project_config, False)
                 values.update(project_config['features'])
             disabled.update(name for name, enabled in values.items() if not enabled)
         except (OSError, ValueError, TypeError) as error:
