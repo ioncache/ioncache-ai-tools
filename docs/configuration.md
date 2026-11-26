@@ -5,6 +5,73 @@ Installation and basic usage: [../README.md](../README.md).
 [../config/defaults.json](../config/defaults.json) is the complete catalog of
 active guards, services, and skills. Every entry ships as `true`.
 
+## Settings command
+
+Invoke `/ioncache-ai-tools:plugin-settings` in Claude or Copilot, or
+`$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it lists every
+shipped setting and its effective `enabled` or `disabled` state in separate
+groups, without writing settings or lock files.
+
+```text
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
+/ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
+/ioncache-ai-tools:plugin-settings --instruction:documentation-first=enabled
+/ioncache-ai-tools:plugin-settings --autonomous-development:audit=disabled
+/ioncache-ai-tools:plugin-settings --global --review:comments=enabled
+```
+
+| Group | CLI names | Controls |
+| --- | --- | --- |
+| Hooks | `hook:<name>` | Automatic checks and services, including guards and documentation caching |
+| Instructions | `instruction:<name>` | Guidance only, without a tool denial |
+| Autonomous development | `autonomous-development:<setting>` | Execution and related workflow features |
+| Reviews | `review:<setting>` | Review categories and related workflow features |
+| Skills | `skill:<name>` | Whether a skill can be invoked or applied |
+
+Use exact names from the listing, including their prefixes.
+Values are `enabled` or `disabled`, not JSON booleans. Multiple setting flags
+are accepted; if repeated, the last value wins. Unknown IDs or values fail
+before settings writes. `--help` lists the accepted options.
+
+CLI names map to the existing JSON feature IDs documented below. For example,
+`hook:answer-questions` updates `answer-questions`, `instruction:documentation-first`
+updates `documentation-first`, and `autonomous-development:audit` updates
+`autonomous-development-audit`. Skill IDs already have their `skill:` prefix.
+The CLI does not accept unprefixed storage IDs or rename keys in settings files.
+
+`autonomous-development:execution` maps to `autonomous-development`; it controls
+execution rather than skill availability. The separate invocation guard belongs
+in Hooks as `hook:autonomous-development:explicit-only`, because it enforces a
+tool denial rather than merely instructing the assistant.
+
+The current directory is the default project. `--project /absolute/project`
+selects another existing directory. Changes update all three hosts' project
+files; they stay sparse and leave global files untouched.
+`--global` instead updates all three global files, preserving both embedded
+and file-based project overrides. Its listing shows global and effective
+project states separately. A project override can still win after a global
+change; the command reports that difference rather than removing the override.
+Global changes do not affect existing project overrides in other projects.
+
+The helper uses the shared configuration resolver and locked, atomic file
+writes. It re-reads each target under its lock, preserving unrelated settings
+and intentional symlinks. It validates existing settings before updates and
+re-reads the result afterward. The three files are not one transaction:
+if a write fails after another succeeded, the command exits nonzero and reports
+that the update may be partial. Inspect the listing and correct the reported
+problem before retrying. Malformed preferences are never replaced with defaults.
+
+`skill:plugin-settings` controls the skill itself. The standalone helper remains
+available for explicitly requested settings management when the skill is off:
+
+```sh
+python3 "/absolute/plugin root/hooks/scripts/plugin_settings.py" --skill:plugin-settings=enabled
+```
+
+Resolve that path from the installed plugin, and run it from the target project
+or supply `--project`. No reinstall is needed for settings changes.
+
 ## Settings files and precedence
 
 | Host | Global settings | Project settings |

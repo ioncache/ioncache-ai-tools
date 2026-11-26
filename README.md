@@ -1,7 +1,7 @@
 # ioncache-ai-tools
 
 A plugin for Claude Code, GitHub Copilot CLI, and Codex CLI. It provides
-20 directly invocable skills for code review, PR work, investigation, writing,
+21 directly invocable skills for code review, PR work, investigation, writing,
 and implementation, plus automatic guardrails for common tool actions.
 
 ## Install
@@ -89,8 +89,8 @@ In Codex:
 $ioncache-ai-tools:review-code branch
 ```
 
-Most skills take task context rather than fixed command-line flags. Review
-options below are explicit skill arguments. Bare `review-code` invocation uses
+Most skills take task context rather than fixed command-line flags. Review and
+plugin-settings options are explicit skill arguments. Bare `review-code` invocation uses
 defaults without a setup prompt.
 
 ## Skills
@@ -114,6 +114,7 @@ defaults without a setup prompt.
 | `/ioncache-ai-tools:investigate` | Traces a feature or workflow and explains its behavior without editing files | The feature, workflow, or system to investigate |
 | `/ioncache-ai-tools:triage-errors` | Groups failing checks by root cause and fixes each group | The failing command and relevant error context |
 | `/ioncache-ai-tools:create-worktree` | Creates a git worktree and applies the repository's setup configuration | Worktree arguments, such as `-b feature-name ../feature-name` |
+| `/ioncache-ai-tools:plugin-settings` | Lists or changes plugin settings across all three hosts | No arguments to list; `--<setting-id>=enabled` or `=disabled`; optional `--global` |
 | `/ioncache-ai-tools:autonomous-development` | Prepares approved plans and coordinates bounded implementation toward review-ready PRs | An idea, artifact references, an approved manifest, or a private run directory |
 
 ### Writing and engineering guidance
@@ -320,8 +321,37 @@ usage.** Disable `docs-cache` to opt out.
 
 ## Configuration
 
-Every shipped guard and skill is enabled by default. Edit the appropriate
-global or project settings file to opt out:
+Every shipped guard and skill is enabled by default.
+
+### Using the settings skill
+
+List settings and their effective states, or enable and disable them without
+editing a settings file:
+
+```text
+/ioncache-ai-tools:plugin-settings
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
+/ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
+/ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
+/ioncache-ai-tools:plugin-settings --instruction:documentation-first=enabled
+/ioncache-ai-tools:plugin-settings --autonomous-development:audit=disabled
+/ioncache-ai-tools:plugin-settings --global --review:comments=enabled
+```
+
+In Codex, use `$ioncache-ai-tools:plugin-settings` with the same arguments.
+The listing separates Hooks, Instructions, Autonomous development, Reviews,
+and Skills. `hook:` controls automatic checks or services; `instruction:`
+controls guidance only; `skill:` controls skill availability. Related workflow
+settings use `autonomous-development:<setting>` and `review:<setting>`.
+Use the displayed names as flags; existing JSON keys stay unchanged.
+
+Changes default to the current project and apply across all three hosts.
+`--global` changes global values, preserving project overrides and showing
+their effective result. The bare invocation is read-only; `--help` lists flags.
+
+### Editing settings manually
+
+The skill manages these files, which can also be edited directly:
 
 | Host | Global settings | Project settings |
 | --- | --- | --- |
@@ -329,7 +359,9 @@ global or project settings file to opt out:
 | Copilot CLI | `~/.copilot/ioncache-ai-tools.local.json` | `.github/copilot/ioncache-ai-tools.local.json` |
 | Codex CLI | `~/.codex/ioncache-ai-tools.local.json` | `.codex/ioncache-ai-tools.local.json` |
 
-For example, disable the documentation cache and the code-review skill:
+Use the JSON keys from [config/defaults.json](config/defaults.json), not the
+CLI names. For example, `hook:docs-cache` maps to `docs-cache` in JSON, while
+`skill:review-code` keeps its prefix. To disable both:
 
 ```json
 {

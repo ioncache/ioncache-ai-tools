@@ -44,6 +44,7 @@
     "skill:engineering-judgment": true,
     "skill:investigate": true,
     "skill:jsdoc": true,
+    "skill:plugin-settings": true,
     "skill:post-pr-review-comments": true,
     "skill:prompt-output": true,
     "skill:review-code": true,
