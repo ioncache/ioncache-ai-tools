@@ -7,10 +7,12 @@
   },
   "scripts": {
     "prepare": "husky",
+    "test:settings-ui": "claude plugin test .",
     "release": "node scripts/release.js",
     "release:check": "node scripts/release.js --check"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.332",
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
     "conventional-changelog": "^8.1.3",

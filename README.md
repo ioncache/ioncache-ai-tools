@@ -323,6 +323,19 @@ usage.** Disable `docs-cache` to opt out.
 
 Every shipped guard and skill is enabled by default.
 
+### Interactive settings in Claude Code
+
+Run `/plugin-settings-ui` in Claude Code to open the native settings pane. Choose
+Project or Global, then select a setting to toggle it. Changes save immediately
+across Claude, Copilot, and Codex; global changes preserve project overrides.
+Settings are grouped with section separators. Use Tab and Enter to navigate,
+Page Up/Down to scroll, and Esc to close.
+
+The pane requires Claude Code 2.1.326+ with mods enabled. `/plugin-settings-ui --list`
+prints the full listing instead; setting flags also work with this native
+command. `hook:plugin-settings-ui` controls the pane independently of the skill.
+Copilot, Codex, and Claude installations without mods use the skill below.
+
 ### Using the settings skill
 
 List settings and their effective states, or enable and disable them without
@@ -351,7 +364,7 @@ their effective result. The bare invocation is read-only; `--help` lists flags.
 
 ### Editing settings manually
 
-The skill manages these files, which can also be edited directly:
+The pane and skill manage these files, which can also be edited directly:
 
 | Host | Global settings | Project settings |
 | --- | --- | --- |

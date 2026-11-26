@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+import shlex
 import sys
 
 import plugin_config as config
@@ -9,7 +10,7 @@ import plugin_config as config
 HOOK_SETTINGS = frozenset({
     'answer-questions', 'autonomous-development-explicit-only', 'block_raw_worktree_add',
     'docs-cache', 'fix_emdash', 'no_broad_process_kill', 'no-manual-lockfile-edit',
-    'no_manual_lockfile_edit_bash',
+    'no_manual_lockfile_edit_bash', 'plugin-settings-ui',
 })
 INSTRUCTION_SETTINGS = frozenset({
     'documentation-first', 'engineering-judgment', 'scope-exactly-what-asked',
@@ -46,6 +47,9 @@ def arguments(argv, catalog):
                         help='read or update global values, preserving project overrides')
     parser.add_argument('--project', type=Path, default=Path.cwd(),
                         help='project directory (default: current working directory)')
+    parser.add_argument('--list', action='store_true', help='list settings without opening a native pane')
+    parser.add_argument('--json', action='store_true', help='return the complete settings view as JSON')
+    parser.add_argument('--ui', action='store_true', help=argparse.SUPPRESS)
     for title, settings in setting_groups(catalog).items():
         group = parser.add_argument_group(title)
         for public, name in sorted(settings.items()):
@@ -74,7 +78,7 @@ def states(project, catalog, global_scope, *, updates=None):
     return (global_disabled if global_scope else effective), effective
 
 
-def update(project, catalog, changes, *, global_scope):
+def update(project, catalog, changes, *, global_scope, quiet=False):
     host_paths = config.paths(project)
     targets = {host: (global_path if global_scope else project_path).resolve()
                for host, (global_path, project_path) in host_paths.items()}
@@ -90,7 +94,8 @@ def update(project, catalog, changes, *, global_scope):
         legacy = (config.legacy_codex(global_path.with_name('config.toml'))
                   if global_scope and host == 'codex' and not global_path.exists() else None)
         config.sync_file(path, catalog, complete=global_scope, legacy=legacy, updates=changes)
-        print(f'Saved: {path}')
+        if not quiet:
+            print(f'Saved: {path}')
     return targets
 
 
@@ -122,8 +127,30 @@ def display(project, names, selected, effective, *, global_scope):
         print('\nProject overrides differ from global values; they were preserved.')
 
 
+def json_view(project, catalog, selected, effective, targets, *, global_scope):
+    return {
+        'version': 1,
+        'project': str(project),
+        'scope': 'global' if global_scope else 'project',
+        'uiEnabled': 'plugin-settings-ui' not in effective,
+        'saved': [str(path) for path in dict.fromkeys(targets.values())],
+        'groups': [
+            {'title': title, 'settings': [
+                {'name': public, 'enabled': name not in selected, 'effective': name not in effective}
+                for public, name in sorted(settings.items())
+            ]}
+            for title, settings in setting_groups(catalog).items()
+        ],
+    }
+
+
 def main(argv=None):
     try:
+        argv = list(sys.argv[1:] if argv is None else argv)
+        if argv[:1] == ['--command']:
+            if len(argv) != 2:
+                raise ValueError('--command requires one argument string')
+            argv = shlex.split(argv[1])
         catalog = config.defaults()
         args = arguments(argv, catalog)
         project = args.project.resolve()
@@ -131,11 +158,19 @@ def main(argv=None):
             raise ValueError(f'project directory does not exist: {project}')
         changes = {name: value == 'enabled' for name, value in vars(args).items() if name in catalog}
         selected, effective = states(project, catalog, args.global_scope)
+        if args.ui and 'plugin-settings-ui' in effective:
+            raise ValueError('native settings pane is disabled; use the standalone helper without '
+                             '--ui and with --hook:plugin-settings-ui=enabled to re-enable it')
+        targets = {}
         if changes:
-            targets = update(project, catalog, changes, global_scope=args.global_scope)
+            targets = update(project, catalog, changes, global_scope=args.global_scope, quiet=args.json)
             selected, effective = states(project, catalog, args.global_scope,
                                          updates={path: changes for path in targets.values()})
-        display(project, changes or catalog, selected, effective, global_scope=args.global_scope)
+        if args.json:
+            print(json.dumps(json_view(project, catalog, selected, effective, targets,
+                                       global_scope=args.global_scope)))
+        else:
+            display(project, changes or catalog, selected, effective, global_scope=args.global_scope)
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-settings: {error}', file=sys.stderr)
         print('No success confirmed. Writes, if started, may be partial across hosts. '

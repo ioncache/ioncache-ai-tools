@@ -21,6 +21,22 @@ it automatically. Plugin users do not need these npm dependencies.
 Validation commands are maintained in
 [../.github/copilot-instructions.md#validation-commands](../.github/copilot-instructions.md#validation-commands).
 
+### Native settings pane tests
+
+`npm ci` includes the pinned Claude Code CLI used by `npm run test:settings-ui`.
+These native mod tests need no sign-in, network, or model calls. They mount the
+pane on terminal, Desktop, and VS Code surfaces, press controls, and stub the
+process boundary. The Python configuration self-checks exercise real settings
+reads, writes, scope precedence, and recovery. One process-tier test starts
+the native command alongside the skill and verifies persisted changes, with
+isolated preferences and model traffic directed to a closed local endpoint.
+
+The Claude mod in `hooks/plugin-settings.mjs` is an ES module because the host
+requires that format; its native tests use `.test.ts`. Neither needs a build
+step. Other Node helpers remain CommonJS. After changing layout, also inspect
+the pane in an interactive Claude session; the native test kit validates trees
+and callbacks, not terminal painting.
+
 ### Python tests
 
 Install the pinned contributor-only dependencies in each worktree:

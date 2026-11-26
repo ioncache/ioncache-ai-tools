@@ -51,11 +51,11 @@ class ConfigurationTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def settings_command(self, *args):
+    def settings_command(self, *args, raw=False):
         with mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
                 mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
             try:
-                code = plugin_settings.main(['--project', str(self.project), *args])
+                code = plugin_settings.main(list(args) if raw else ['--project', str(self.project), *args])
             except SystemExit as error:
                 code = error.code
         return code, stdout.getvalue(), stderr.getvalue()
@@ -140,6 +140,102 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())['features'],
                              {stored: False for stored in flags.values()})
         self.assertEqual(config.synchronize(str(self.project), persist=False), set(flags.values()))
+
+    def test_settings_json_view_is_read_only_and_shares_effective_states(self):
+        paths = config.paths(self.project)
+        self.write(paths['claude'][0], {'features': {'answer-questions': False}})
+        self.write(paths['claude'][1], {'features': {'answer-questions': True}})
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--json', '--global')
+
+        self.assertEqual(code, 0, error)
+        result = json.loads(output)
+        self.assertEqual(result['scope'], 'global')
+        self.assertEqual(result['saved'], [])
+        rows = {row['name']: row for group in result['groups'] for row in group['settings']}
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertEqual(rows['hook:answer-questions'],
+                         {'name': 'hook:answer-questions', 'enabled': False, 'effective': True})
+        self.assertEqual(self.tree_state(), before)
+
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+
+        self.assertEqual(code, 0, error)
+        result = json.loads(output)
+        self.assertEqual(set(result['saved']), {str(pair[1]) for pair in paths.values()})
+        rows = {row['name']: row for group in result['groups'] for row in group['settings']}
+        self.assertEqual(len(rows), len(config.defaults()))
+        self.assertFalse(rows['hook:docs-cache']['enabled'])
+        self.assertTrue(rows['hook:answer-questions']['enabled'])
+        for _, path in paths.values():
+            self.assertFalse(json.loads(path.read_text())['features']['docs-cache'])
+
+    def test_settings_ui_opt_out_preserves_cli_recovery_and_other_features(self):
+        code, output, error = self.settings_command('--json', '--ui',
+                                                   '--hook:plugin-settings-ui=disabled')
+        self.assertEqual(code, 0, error)
+        self.assertFalse(json.loads(output)['uiEnabled'])
+        before = self.tree_state()
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, '')
+        self.assertIn('--hook:plugin-settings-ui=enabled', error)
+        self.assertEqual(self.tree_state(), before)
+        self.assertEqual(config.synchronize(str(self.project), persist=False), {'plugin-settings-ui'})
+
+        self.assertEqual(self.settings_command('--hook:plugin-settings-ui=enabled')[0], 0)
+        code, output, error = self.settings_command('--json', '--ui', '--hook:docs-cache=disabled')
+        self.assertEqual(code, 0, error)
+        self.assertTrue(json.loads(output)['uiEnabled'])
+        self.assertEqual(config.synchronize(str(self.project), persist=False), {'docs-cache'})
+
+    def test_settings_native_command_parses_arguments_without_shell_execution(self):
+        project = self.root / 'project with spaces; literal'
+        project.mkdir()
+        arguments = f'--project {shlex.quote(str(project))} --hook:answer-questions=disabled'
+        code, output, error = self.settings_command('--command', arguments, raw=True)
+        self.assertEqual(code, 0, error)
+        self.assertIn(str(project), output)
+        for _, path in config.paths(project).values():
+            self.assertFalse(json.loads(path.read_text())['features']['answer-questions'])
+        before = self.tree_state()
+
+        for arguments in ('"unterminated', '--list; touch unexpected', '--command recursive'):
+            code, _, _ = self.settings_command('--command', arguments, raw=True)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(self.tree_state(), before)
+
+    @pytest.mark.process
+    def test_native_claude_settings_command_coexists_with_skill_and_persists_changes(self):
+        cli = ROOT / 'node_modules/.bin/claude'
+        self.assertTrue(cli.exists(), 'Install contributor tooling with npm ci')
+        home = self.root / 'native-home'
+        self.write(home / '.claude/.claude.json', {})
+        env = {key: value for key, value in os.environ.items()
+               if not any(word in key for word in ('TOKEN', 'API_KEY', 'AUTH', 'CLAUDE', 'ANTHROPIC'))}
+        env.update({
+            'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(home / '.claude'),
+            'COPILOT_HOME': str(home / '.copilot'), 'CODEX_HOME': str(home / '.codex'),
+            'XDG_CACHE_HOME': str(home / '.cache'), 'PWD': str(self.project),
+            'ANTHROPIC_API_KEY': 'offline-test-key', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:1',
+            'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1',
+            'NO_PROXY': '127.0.0.1',
+        })
+        command = [
+            str(cli), '--plugin-dir', str(ROOT), '--setting-sources', '',
+            '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
+        ]
+        for arguments in ('--list', '--hook:docs-cache=disabled'):
+            result = subprocess.run(
+                [*command, '-p', '/plugin-settings-ui ' + arguments],
+                cwd=self.project, env=env, text=True, capture_output=True, timeout=20,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('hook:docs-cache', result.stdout)
+            self.assertNotIn('Native settings command unavailable', result.stdout)
+        for _, path in config.paths(self.project).values():
+            self.assertFalse(json.loads(path.read_text())['features']['docs-cache'])
 
     def test_settings_help_groups_public_flags_without_reading_preferences(self):
         path = config.paths(self.project)['claude'][0]

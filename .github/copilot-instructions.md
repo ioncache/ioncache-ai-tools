@@ -12,7 +12,11 @@ This repository ships reusable AI-assistant behavior as a plugin for Claude
 Code, Codex, and GitHub Copilot CLI. Python hooks enforce behavior, Markdown
 skills instruct the assistant, and Node.js helpers create configured git
 worktrees and prepare releases.
-Python uses the standard library; JavaScript uses CommonJS. The release helper
+Python uses the standard library; Node helpers use CommonJS. Claude's native
+settings mod in `hooks/plugin-settings.mjs` uses the host-required ES module
+format and the shared Python settings helper, not a separate preference store.
+Its native `.test.ts` tests run offline with the contributor Claude CLI.
+The release helper
 dynamically imports the ESM-only `conventional-changelog` packages from
 contributor dev dependencies; the worktree helper uses Node built-ins.
 Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
@@ -207,6 +211,7 @@ npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -n auto
+npm run test:settings-ui
 node scripts/create-worktree.js --self-test
 node scripts/development_workflow_self_check.js
 npm run release:check

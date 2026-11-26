@@ -19,6 +19,7 @@
     "no_broad_process_kill": true,
     "no-manual-lockfile-edit": true,
     "no_manual_lockfile_edit_bash": true,
+    "plugin-settings-ui": true,
     "review-auto-model-selection": true,
     "review-code-complexity": true,
     "review-comments": true,

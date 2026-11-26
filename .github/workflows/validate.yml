@@ -48,7 +48,7 @@ jobs:
 
       - name: Check JS hook script syntax
         run: |
-          for f in hooks/scripts/*.js scripts/*.js; do
+          for f in hooks/*.mjs hooks/scripts/*.js scripts/*.js; do
             [ -f "$f" ] || continue
             node --check "$f" || exit 1
             echo "$f OK"
@@ -56,6 +56,9 @@ jobs:
 
       - name: Run Python tests in parallel
         run: python -m pytest -n auto
+
+      - name: Run native Claude settings pane tests
+        run: npm run test:settings-ui
 
       - name: Run worktree self-test
         run: node scripts/create-worktree.js --self-test
@@ -81,7 +84,7 @@ jobs:
           import pathlib, sys
           em_dash = chr(0x2014)
           hits = []
-          for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js'):
+          for pattern in ('**/*.py', '**/*.md', '**/*.json', '**/*.js', '**/*.mjs', '**/*.ts'):
               for path in pathlib.Path('.').glob(pattern):
                   if any(part in {'.git', 'node_modules', '.venv', '.pytest_cache'} for part in path.parts):
                       continue

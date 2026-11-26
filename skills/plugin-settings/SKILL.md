@@ -7,6 +7,12 @@ description: Lists grouped plugin settings and changes them with typed CLI-style
 
 Use a command interface, not a conversational configuration interview.
 
+Claude Code 2.1.326+ with mods enabled also registers a native `/plugin-settings-ui`
+command. Its bare invocation opens an interactive pane without an assistant
+turn. Do not imitate that pane with conversational questions. The namespaced
+skill below remains the text interface and fallback on all three hosts.
+`/plugin-settings-ui --list` prints settings through Claude's native command.
+
 ## Invocation
 
 Claude and Copilot:
@@ -22,7 +28,8 @@ Claude and Copilot:
 ```
 
 In Codex, replace the leading `/` with `$`, retaining the plugin namespace.
-`/plugin-settings` is shorthand here, not a promised unnamespaced host alias.
+The native `/plugin-settings-ui` command is Claude-only. `/plugin-settings`
+is shorthand here, not a promised unnamespaced host alias.
 
 With no setting flags, list every shipped setting and its effective
 `enabled` or `disabled` state. Preserve the helper's separate groups: Hooks,
@@ -69,6 +76,8 @@ before retrying. Never claim the files form one atomic transaction.
 `skill:plugin-settings` disables this skill like any other. The standalone
 helper remains available for explicitly requested settings management, including
 re-enabling the skill. Do not re-enable it without a user request.
+`hook:plugin-settings-ui` independently controls Claude's interactive pane.
+Neither switch disables the standalone helper.
 Settings changes need no reinstall; instructions already in conversation may
 need a new session to refresh. Do not reload hosts or change native permissions.
 
