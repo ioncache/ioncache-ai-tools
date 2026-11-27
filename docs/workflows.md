@@ -41,12 +41,16 @@ plugin-settings options are explicit skill arguments.
 | [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | An idea, artifact references, an approved manifest, or a private run directory |
 
 Writing and implementation guidance lives in [../skills/](../skills/):
-`answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
+`engineering-judgment`, `code-complexity`, `comments`,
 `documentation-writing`, `prompt-output`, `unit-tests`, `jsdoc`, and `security`.
 Unit-test guidance adapts to the actual language and runner; Vitest conventions
 apply only to Vitest suites. JSDoc guidance is JavaScript-only, not TypeScript.
 General documentation and contract review remain relevant to other languages,
 including native doc comments and docstrings.
+
+Question-answering behavior is an automatic hook, not a skill users need to
+invoke. The `answer-questions` skill file is a policy reference.
+See [guardrails.md#question-turns](guardrails.md#question-turns).
 
 ## Autonomous development
 

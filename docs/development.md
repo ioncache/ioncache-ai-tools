@@ -1,6 +1,6 @@
 # Development and plugin maintenance
 
-Installation: [../README.md#install](../README.md#install).
+Installation: [../README.md#how-to-install](../README.md#how-to-install).
 Contributor requirements: [../AGENTS.md](../AGENTS.md) and
 [../.github/copilot-instructions.md](../.github/copilot-instructions.md).
 
