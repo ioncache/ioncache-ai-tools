@@ -20,7 +20,8 @@ REVIEW_FIELDS = ("model_selection", "fallback", "strategy") + tuple(
 POSTING_FIELDS = ("post_comments", "post_sensitive")
 SENSITIVE_POLICIES = ("none", "private", "all")
 POSTING_FEATURE = "review-post-comments"
-NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE, "review-known-issues")
+NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE, "review-known-issues",
+                        "review-report-json-recovery")
 
 
 class PostingConflict(ValueError):

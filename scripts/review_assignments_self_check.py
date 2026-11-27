@@ -2,6 +2,7 @@
 """Check category records offline; these fixtures never launch model workers."""
 
 import copy
+import io
 import json
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ import development_handoff
 import development_jobs
 import development_run
 import review_assignments as assignments
+import report_json
 import writing_guidance
 
 
@@ -27,7 +29,7 @@ class ReviewAssignmentTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.home = Path(directory.name)
+        self.home = Path(directory.name).resolve()
         self.root = self.home / "project"
         self.root.mkdir()
         self.scratch = self.home / "private"
@@ -564,8 +566,91 @@ class ReviewAssignmentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "snapshot mismatch"):
             development_jobs.validate({}, job, report)
 
-    def development_report_fixture(self, submission):
-        store = self.scratch / submission
+    def test_report_json_recovers_only_wrappers_and_trailing_commas_without_changing_text(self):
+        note = 'Quoted "comma,}" and backslash \\,] stay; literal ``` stays too'
+        expected = {"note": note, "candidates": [{"key": "kept"}]}
+        strict = json.dumps(expected)
+        trailing = '{"note":' + json.dumps(note) + ',"candidates":[{"key":"kept",},],}'
+        cases = [
+            (strict.encode(), []),
+            (strict.encode("utf-16"), []),
+            (f"```json\n{strict}\n```\n".encode(), ["code_fence"]),
+            (f"```\r\n{strict}\r\n```\r\n".encode(), ["code_fence"]),
+            (trailing.encode(), ["trailing_commas"]),
+            (json.dumps(strict).encode(), ["json_string"]),
+            (f"```json\n{json.dumps(trailing)}\n```".encode(),
+             ["code_fence", "json_string", "trailing_commas"]),
+            (json.dumps(f"```json\n{trailing}\n```").encode(),
+             ["json_string", "code_fence", "trailing_commas"]),
+        ]
+        for content, kinds in cases:
+            with self.subTest(kinds=kinds, content=content):
+                value, repair = report_json.decode(content, recover=True)
+                self.assertEqual(value, expected)
+                if not kinds:
+                    self.assertIsNone(repair)
+                    continue
+                self.assertEqual([change["kind"] for change in repair["changes"]], kinds)
+                self.assertEqual(repair["original_sha256"], development_jobs.plan.digest(content))
+                self.assertEqual(repair["decoded_identity"], assignments.digest(expected))
+                for change in repair["changes"]:
+                    if change["kind"] == "trailing_commas":
+                        self.assertEqual(len(change["offsets"]), 3)
+                        self.assertTrue(all(trailing[index] == "," for index in change["offsets"]))
+                with self.assertRaises(ValueError):
+                    report_json.decode(content)
+
+    def test_report_json_does_not_guess_truncated_ambiguous_or_non_json_evidence(self):
+        cases = [
+            b'{"candidates":[', b'{"note":"truncated}', b'{"note":}',
+            b'{"candidates":[,]}', b'{,}', b'{"candidates":[1,,]}',
+            b'{"outcome":"partial","outcome":"complete"}',
+            b'{"outcome":"partial","out\\u0063ome":"complete"}',
+            b'{"coverage":{"files":[],"files":["consumer.py"]},}',
+            b'{"outcome":"complete"} {"outcome":"partial"}',
+            b'Here is the report:\n{"candidates":[]}', b'{"candidates":[]} done',
+            b'```json\n{"candidates":[]}', b'```json\n{}\n```\n```json\n{}\n```',
+            b'```json\n```json\n{}\n```\n```',
+            json.dumps(json.dumps(json.dumps({"candidates": []}))).encode(),
+            b'{"candidates": [NaN]}', b'{"note":Infinity}', b'{"value":1e9999}',
+            b"{'note':'single quotes'}", b'{"note":undefined}', b'{"note":/*comment*/"x"}',
+            b'{"note":"invalid\\q"}', b'{"note":"\xff"}', b'[]', b'null',
+        ]
+        for content in cases:
+            with self.subTest(content=content), self.assertRaises(ValueError):
+                report_json.decode(content, recover=True)
+        with self.assertRaisesRegex(ValueError, "Too many trailing commas"):
+            report_json.decode(b'{"candidates":[' + b"[1,]," * 4097 + b"]}", recover=True)
+
+    def test_standalone_report_decoder_honors_settings_without_rewriting_reports_or_config(self):
+        original = b'```json\n{"candidates":[{"key":"kept",},],}\n```'
+        path = self.scratch / "report.json"
+        path.write_bytes(original)
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir()
+        for enabled in (True, False):
+            config.write_text(json.dumps({"features": {"review-report-json-recovery": enabled}}))
+            configuration = config.read_bytes()
+            with patch("sys.stdout", new_callable=io.StringIO) as output, \
+                    patch("sys.stderr", new_callable=io.StringIO) as errors:
+                code = report_json.main([str(path), "--project", str(self.root)])
+            self.assertEqual(code, 0 if enabled else 2, errors.getvalue())
+            if enabled:
+                result = json.loads(output.getvalue())
+                self.assertEqual(result["report"]["candidates"], [{"key": "kept"}])
+                self.assertEqual(result["json_repairs"]["original_sha256"],
+                                 development_jobs.plan.digest(original))
+            else:
+                self.assertIn("do not repeat the review", errors.getvalue())
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(config.read_bytes(), configuration)
+        with self.assertRaises(json.JSONDecodeError):
+            development_jobs.decode_json(original)
+        with self.assertRaises(json.JSONDecodeError):
+            development_handoff.read_json(path)
+
+    def development_report_fixture(self, submission, transform=None):
+        store = self.scratch / (submission + ("-syntax" if transform else ""))
         reports = store / "reports"
         reports.mkdir(parents=True)
         self.request["scratch_directory"] = str(reports)
@@ -576,7 +661,8 @@ class ReviewAssignmentTests(unittest.TestCase):
         report["coverage"]["reference_sources"] = {"path": "consumer.py:12", "use": "Evidence"}
         report["limitations"] = "No model launched by this offline fixture"
         report["candidates"] = [{"key": "original-observation", "evidence": ["consumer.py:12"]}]
-        assignment = {"id": "A1", "root": str(self.root), "store": str(store)}
+        assignment = {"id": "A1", "root": str(self.root), "store": str(store),
+                      "report_json_recovery_enabled": True}
         jobs = [{"role": "reviewer", "packet": item["packet"], "result_file": item["packet"]["result_file"]}
                 for item in handoff["attempts"]]
         batch = {"id": "B1", "assignment": "A1", "status": "collected", "submitted": {},
@@ -584,6 +670,8 @@ class ReviewAssignmentTests(unittest.TestCase):
         for number, attempt in enumerate(handoff["attempts"], 1):
             path = Path(attempt["packet"]["result_file"])
             original = json.dumps(attempt["result"], indent=3).encode()
+            if transform and number == 1:
+                original = transform(original)
             if submission == "submit":
                 candidate = path.with_suffix(".candidate.json")
                 candidate.write_bytes(original)
@@ -601,6 +689,38 @@ class ReviewAssignmentTests(unittest.TestCase):
         Path(data["plan"]).write_text(json.dumps(plan))
         Path(data["handoff"]).write_text(json.dumps(handoff))
         return assignment, {"store": str(store), "handoffs": {"B1": batch}}, data, plan, handoff
+
+    def test_development_syntax_recovery_retains_byte_identity_through_final_acceptance(self):
+        def malformed(content):
+            trailing = content.decode()[:-1] + ",}"
+            return f"```json\n{json.dumps(trailing)}\n```".encode()
+
+        for submission in ("finish", "submit"):
+            with self.subTest(submission=submission):
+                assignment, state, data, plan, handoff = self.development_report_fixture(submission, malformed)
+                batch = state["handoffs"]["B1"]
+                stored, = batch["report_json_repairs"]["1"].values()
+                ledger_report = {key: self.request[key] for key in ("base", "snapshot")}
+                with patch.object(development_run, "review_files", return_value=self.request["files"]):
+                    checked = development_run.review_coverage(state, assignment, ledger_report, data)
+                self.assertTrue(checked["structurally_complete"], checked)
+                repair, = checked["report_json_repairs"]
+                self.assertEqual(repair["decoded_identity"], assignments.digest(handoff["attempts"][0]["result"]))
+                self.assertEqual(development_jobs.plan.digest(Path(repair["archive"]).read_bytes()),
+                                 repair["original_sha256"])
+                self.assertEqual(repair["changes"], stored["changes"])
+                self.assertEqual(set(checked["replacement_rounds_used"].values()), {0})
+                assignment["report_json_recovery_enabled"] = False
+                replay = development_handoff.report_for(assignment, batch, 1, expected=batch["submitted"]["1"])
+                self.assertEqual(replay["report"], handoff["attempts"][0]["result"])
+                handoff["attempts"][0]["result"]["snapshot"] = "wrong-snapshot"
+                with self.assertRaisesRegex(ValueError, "differs from the collected"):
+                    development_jobs.require_collected_review(state, assignment, handoff)
+                if submission == "finish":
+                    receipt = batch["submitted"]["1"]
+                    batch["report_json_repairs"]["1"][receipt["sha256"]]["changes"] = []
+                    with self.assertRaisesRegex(development_jobs.review.EvidenceUnavailable, "repair record changed"):
+                        development_jobs.retained_report(batch, 1)
 
     def test_development_report_recovery_preserves_collection_and_final_acceptance_bindings(self):
         for submission in ("finish", "submit"):

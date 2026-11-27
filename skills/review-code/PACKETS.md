@@ -142,6 +142,32 @@ observation; a caller-authored description remains `caller`.
 Retain terminal failure diagnostics even when no worker/result was created.
 
 Read the complete original report and attach it as `result`, retaining its file.
+If JSON parsing fails or yields a JSON string instead of an object, use the
+report-only decoder before changing any fields:
+
+```sh
+python3 -B "/absolute/plugin/scripts/report_json.py" "/private/original-report.json" \
+  --project "/absolute/consuming/worktree"
+```
+
+It tries strict JSON first, then removes at most one enclosing Markdown fence,
+removes trailing commas outside strings, and decodes at most one extra JSON
+string layer. These operations may be combined. It never extracts objects from
+prose, merges reports, fills missing values or closes truncated JSON. Duplicate
+keys and non-finite numbers remain invalid. Inputs are bounded to 16 MiB and
+4096 trailing-comma removals per layer.
+
+The decoder writes `{report, json_repairs}` to stdout without changing files.
+Attach `report` as the attempt's `result`; retain `json_repairs` in its
+`observation` and give it to the adjudicator with the untouched original file.
+The repair record includes the original byte SHA-256, decoded-object identity
+and ordered transformations. Comma offsets are zero-based character positions
+in that step's input, after any preceding fence or string decoding.
+`json_repairs: null` means no syntax recovery was needed. The
+`review-report-json-recovery` setting disables these transformations, not strict parsing
+or other report repairs. Successful decoding is not schema validation or review
+acceptance; continue with `check`.
+
 Diagnose format errors before treating any review work as failed. `check`
 automatically reformats supported representations in a separate copy, validates
 that copy, and returns `report_repairs` with each attempt, original and normalized
@@ -179,8 +205,15 @@ failed or noncompliant review work needs a fresh replacement within the existing
 bound. The helper retains unresolved inactive results as diagnostics without
 preventing a valid replacement from completing.
 
-Development handoff `check-report`, `submit`, and `finish` validate reviewer
-reports through the same supported format repairs. They retain the original
+Development handoff `check-report`, `submit`, and `finish` use the same syntax
+decoder for reports and candidates, but never for plans, settings or approvals.
+`check-report` returns syntax repairs without writing state or spending attempts.
+Submission archives the original bytes and stores `report_json_repairs` by job
+and byte identity in the batch. Accepted category coverage includes those records.
+Retained reports replay their recorded transformations even if new recovery is
+later disabled.
+
+Reviewer reports also use the same supported field-format repairs. They retain the original
 parsed report, not the normalized copy. The handoff helper archives the
 original bytes and final acceptance still requires the active result to match
 that collected report. Keep that original in the final handoff; the shared

@@ -21,6 +21,7 @@ import development_models as models
 import development_run as run
 import plugin_config
 import review_ledger as review
+import report_json
 
 
 # Claude's Workflow tool refuses scripts over 524,288 bytes; keep a margin below it.
@@ -60,7 +61,7 @@ def read_json(path):
     return jobs.decode_json(read_bytes(path))
 
 
-def read_document(path, record, number, expected=None):
+def read_document(path, record, number, expected=None, *, recover=False):
     content = read_bytes(path)
     identity = plan.digest(content)
     archive = review.safe_path(Path(record["spec"]["store"]),
@@ -70,7 +71,13 @@ def read_document(path, record, number, expected=None):
         review.atomic_write(archive, content)
     if expected is not None and identity != expected:
         raise HandoffError("changed_report", "Submitted report changed; restore its retained bytes before retrying")
-    return jobs.decode_json(content), identity
+    saved = record.get("report_json_repairs", {}).get(str(number), {}).get(identity)
+    value, repair = report_json.decode(content, recover=recover or saved is not None)
+    if saved is not None:
+        plan.require(saved == repair, "Report JSON repair record changed; restore its original record")
+    if repair is not None:
+        record.setdefault("report_json_repairs", {}).setdefault(str(number), {})[identity] = repair
+    return value, identity
 
 
 def persist(folder, state):
@@ -450,7 +457,9 @@ def report_for(assignment, record, number, *, expected=None, bind_reference=Fals
     job = selected_job(record, number)
     folder = Path(assignment["store"])
     path = review.safe_path(folder, str(Path(job["result_file"]).relative_to(folder)))
-    report, identity = read_document(path, record, number, expected.get("sha256") if expected else None)
+    recover = assignment.get("report_json_recovery_enabled", False)
+    report, identity = read_document(path, record, number, expected.get("sha256") if expected else None,
+                                     recover=recover)
     jobs.validate(assignment, job, report)
     if job["role"] == "review-owner" and report["outcome"] == "dispatch":
         require_launchable(folder, record, assignment, report["requests"])
@@ -462,7 +471,8 @@ def report_for(assignment, record, number, *, expected=None, bind_reference=Fals
                                "Run finish to validate and bind the current evidence before collection.")
         reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))
         development, identity = read_document(
-            reference, record, number, expected.get("development_sha256") if expected else None)
+            reference, record, number, expected.get("development_sha256") if expected else None,
+            recover=recover)
         jobs.development_report(assignment, development)
         plan.require(report["outcome"] == development["outcome"], "Owner report outcomes differ")
         receipt["development_sha256"] = identity
@@ -524,18 +534,21 @@ def check_report(folder, args):
     record = batch_record(state, args.batch)
     assignment = assignment_for(state, record, settings)
     job = selected_job(record, args.job)
-    candidate = read_json(candidate_path(folder, args.candidate))
+    candidate, repair = report_json.decode(
+        read_bytes(candidate_path(folder, args.candidate)),
+        recover=assignment.get("report_json_recovery_enabled", False))
     report, _ = candidate_reports(assignment, job, candidate)
     if job["role"] == "review-owner" and report["outcome"] == "dispatch":
         require_launchable(folder, record, assignment, report["requests"])
-    return {"valid": True, "accepted": False,
+    return {"valid": True, "accepted": False, "json_repairs": repair,
             "next": "Submit or recover-report, then collect for the unchanged acceptance checks"}
 
 
 def write_candidate(assignment, record, args):
     folder = Path(assignment["store"])
     job = selected_job(record, args.job)
-    candidate, identity = read_document(candidate_path(folder, args.candidate), record, args.job)
+    candidate, identity = read_document(candidate_path(folder, args.candidate), record, args.job,
+                                        recover=assignment.get("report_json_recovery_enabled", False))
     report, development = candidate_reports(assignment, job, candidate)
     if development is not None:
         reference = review.safe_path(folder, str(Path(assignment["result_file"]).relative_to(folder)))

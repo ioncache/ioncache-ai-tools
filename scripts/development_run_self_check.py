@@ -3812,7 +3812,7 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("size limit", error["error"])
         self.assertFalse(list((self.store / "handoffs" / batch["batch"]).glob("1-*.json")))
         before_growth = SimpleNamespace(st_mode=candidate.stat().st_mode, st_size=0)
-        with patch.object(handoffs.jobs.os, "fstat", return_value=before_growth):
+        with patch.object(handoffs.report_json.os, "fstat", return_value=before_growth):
             with self.assertRaisesRegex(ValueError, "size limit"):
                 handoffs.read_bytes(candidate)
         candidate.write_text('{"outcome":"blocked","summary":"Recovered","evidence":["Fixture"],"data":{}}')
@@ -4056,6 +4056,67 @@ class DevelopmentRunTests(unittest.TestCase):
             disabled, {"role": "draft"}, SCRIPTS.parent))
         self.assertEqual(handoffs.jobs.data_contract(disabled, "draft"),
                          handoffs.jobs.data_contract(assignment, "draft"))
+
+    @pytest.mark.stable_storage
+    def test_report_syntax_precheck_and_submit_preserve_originals_without_spending_corrections(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        candidate = self.store / "candidate.json"
+        value = {
+            "outcome": "complete", "summary": "Verified fixture prerequisites",
+            "evidence": ['A literal ",}" remains evidence'],
+            "data": {key: True for key in handoffs.jobs.CAPABILITIES},
+        }
+        original = ("```json\n" + json.dumps(json.dumps(value)[:-1] + ",}") + "\n```").encode()
+        candidate.write_bytes(original)
+        arguments = ("--batch", batch["batch"], "--job", 1, "--candidate", candidate)
+        before = (self.store / "RUN.json").read_bytes()
+        checked = self.handoff("check-report", *arguments)
+        self.assertTrue(checked["valid"])
+        self.assertEqual((self.store / "RUN.json").read_bytes(), before)
+        self.assertEqual(checked["json_repairs"]["original_sha256"], manifest.digest(original))
+        self.handoff("submit", *arguments)
+        record = development.load(self.store)["handoffs"][batch["batch"]]
+        self.assertEqual(record["failures"], {})
+        self.assertEqual(record["report_json_repairs"]["1"][manifest.digest(original)], checked["json_repairs"])
+        archive = self.store / "handoffs" / batch["batch"] / f"1-{manifest.digest(original)}.json"
+        self.assertEqual(archive.read_bytes(), original)
+        self.assertEqual(candidate.read_bytes(), original)
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{"features": {"review-report-json-recovery": false}}')
+        self.handoff("finish", "--batch", batch["batch"], "--job", 1)
+        self.handoff("collect", "--batch", batch["batch"])
+        self.assertTrue(development.load(self.store)["preflight"])
+        self.assertEqual(self.handoff("prepare")["assignment"], "A0002")
+
+    @pytest.mark.stable_storage
+    def test_disabled_syntax_recovery_keeps_strict_report_correction_available(self):
+        self.init()
+        batch = self.handoff("prepare")
+        self.claim_handoff(batch)
+        path = self.report({key: True for key in handoffs.jobs.CAPABILITIES})
+        strict = path.read_bytes()
+        original = b"```json\n" + strict + b"\n```"
+        path.write_bytes(original)
+        config = self.root / ".claude/ioncache-ai-tools.local.json"
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{"features": {"review-report-json-recovery": false}}')
+        arguments = ("--batch", batch["batch"], "--job", 1)
+        rejected = self.handoff("finish", *arguments, ok=False)
+        self.assertIn("Correct only the report", rejected["error"])
+        self.assertEqual(path.read_bytes(), original)
+        path.write_bytes(strict)
+        self.handoff("finish", *arguments)
+        self.handoff("collect", "--batch", batch["batch"])
+        state = development.load(self.store)
+        self.assertTrue(state["preflight"])
+        record = state["handoffs"][batch["batch"]]
+        self.assertNotIn("report_json_repairs", record)
+        self.assertEqual(record["failures"]["1"], 1)
+        archive = self.store / "handoffs" / batch["batch"] / f"1-{manifest.digest(original)}.json"
+        self.assertEqual(archive.read_bytes(), original)
 
     @pytest.mark.stable_storage
     def test_relative_report_candidate_stays_inside_store_without_spending_corrections(self):

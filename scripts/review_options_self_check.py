@@ -203,6 +203,7 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertTrue(features["review-security"])
         self.assertTrue(features["review-documentation"])
         self.assertFalse(features["review-comments"])
+        self.assertNotIn("review-report-json-recovery", features)
         self.assertTrue(options["configuration"]["auto_selection_enabled"])
         self.write_settings("project/.github/copilot/ioncache-ai-tools.local.json",
                             {"review-comments": True})

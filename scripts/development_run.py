@@ -458,7 +458,7 @@ def review_coverage(state, assignment, report, data):
     plan.require(not omitted, "Category review omits changed files: " + json.dumps(sorted(omitted)))
     plan.require(checked["structurally_complete"],
                  "Category review is incomplete: " + json.dumps(checked))
-    jobs.require_collected_review(state, assignment, records["handoff"])
+    checked["report_json_repairs"] = jobs.require_collected_review(state, assignment, records["handoff"])
     return {"plan": str(Path(data["plan"]).resolve()),
             "handoff": str(Path(data["handoff"]).resolve()),
             "identity": phase["identity"], "files": request["files"], **checked}
@@ -730,6 +730,8 @@ def request(state, settings):
             "monitoring": {"enabled": monitoring.enabled(settings)},
             "report_contract_enabled": "autonomous-development-report-contract" in settings.catalog and
                                        "autonomous-development-report-contract" not in settings.disabled,
+            "report_json_recovery_enabled": "review-report-json-recovery" in settings.catalog and
+                                            "review-report-json-recovery" not in settings.disabled,
             "model_selection": assignment.get("model_selection", model_policy(state, settings)),
             "result_file": str(Path(state["store"]) / "reports" / (assignment["id"] + ".json"))}
 
