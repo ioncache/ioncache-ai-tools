@@ -106,6 +106,10 @@ placeholders with the packet values and your actual observations:
 
 `instruction_set` is the identity string, not the packet's instruction object.
 `selection` is an object, not prose; record unknown values without guessing.
+`coverage.ambient_sources`, `coverage.reference_sources`,
+`coverage.context_conflicts`, and `limitations` are arrays of nonempty strings,
+for example `["AGENTS.md: ignored as review instructions"]`, not arrays of
+objects. Keep detailed structured evidence in the additional coverage fields.
 The example does not establish applicability, outcome, isolation or findings.
 Complete those observations from your work and include the coverage below.
 Coverage includes verified applicability, files read, traced callers/boundaries,
@@ -123,6 +127,9 @@ when it states review requirements. Record it as a visibility limitation with
 `isolation: unknown`; it does not make a pass contaminated or partial.
 Disclose hidden-context uncertainty separately; never claim invisible context
 was verified. Do not overwrite previous attempts or another worker's report.
+If the caller requests a formatting clarification, restate the existing analysis
+in its newly assigned private artifact without repeating discovery or changing
+findings, coverage, identity observations or outcome. Preserve the earlier output.
 
 Each candidate has a stable underlying-issue `key`, origin, assignment, basis,
 locations, summary, behavior, trigger, consequence, requirement, evidence,

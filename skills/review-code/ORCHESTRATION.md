@@ -484,15 +484,26 @@ Continue unaffected authorized work; no selection failure creates a tool fence.
 
 ## Failure, permissions, and drift
 
-Malformed, genuinely partial, failed, or missing work never counts as completed
+Check reports as they arrive. A malformed representation is not failed review
+work: inspect the complete output, diagnose the mismatch, reformat it without
+losing evidence, and recheck under PACKETS.md. Preserve originals and repair
+records, then continue using the same assignment. Do not request another review
+round or human approval merely to repair report formatting. Same-worker
+formatting clarification is not another discovery pass.
+
+Genuinely partial, failed, missing or noncompliant work never counts as completed
 coverage. A source-read-only isolation label is assessed separately below.
 Preserve available evidence, identify missing assignments, and
 return an incomplete or blocked handback. A failed worker does not by itself
 prove the surrounding run is unrecoverable.
+Report each unresolved failure's exact cause, affected assignment, attempted
+recovery and remaining gap. A generic incomplete label or silently omitted
+category is not a sufficient failure report.
 
 Keep the caller-owned chronological attempt log and active map from PACKETS.md.
 The default is one automatic replacement round per failed category per phase,
 including shards, with a fresh context and result path for every attempt.
+Format-only repairs do not create attempts or consume this allowance.
 This is a ceiling, not an instruction to repeat an unchanged failure. Before
 replacement, identify its cause and the concrete change that makes the retry
 viable. A known conflicting context needs changed instructions or launch

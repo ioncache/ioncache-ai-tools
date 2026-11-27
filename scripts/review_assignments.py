@@ -419,6 +419,42 @@ def checked_result(attempt, assessed=False):
         require(set(owned) == set(packet["scope_files"]), "Shard coverage differs from assignment")
 
 
+def report_texts(value):
+    if isinstance(value, (str, dict)):
+        value = [value]
+    if not isinstance(value, list):
+        return value
+    values = [json.dumps(item, sort_keys=True, ensure_ascii=True)
+              if isinstance(item, dict) and item else item for item in value]
+    return list(dict.fromkeys(values)) if all(isinstance(item, str) for item in values) else values
+
+
+def repair_result(attempt):
+    result, packet = attempt["result"], attempt["packet"]
+    if not isinstance(result, dict):
+        return result, []
+    normalized, changes = copy.deepcopy(result), []
+    updates = [(("limitations",), report_texts(result.get("limitations")))]
+    coverage = result.get("coverage")
+    if isinstance(coverage, dict):
+        updates.extend((("coverage", name), report_texts(coverage.get(name)))
+                       for name in ("ambient_sources", "reference_sources", "context_conflicts"))
+    selection = result.get("selection")
+    if isinstance(selection, str) and selection.strip():
+        updates.append((("selection",), {"actual": "unknown", "reason": selection}))
+    instruction = packet["instruction_set"]
+    if result.get("instruction_set") in (instruction, {"identity": instruction["identity"]}):
+        updates.append((("instruction_set",), instruction["identity"]))
+    for path, value in updates:
+        parent = normalized if len(path) == 1 else normalized[path[0]]
+        key = path[-1]
+        if key not in parent or parent[key] == value:
+            continue
+        changes.append({"field": ".".join(path), "original": parent[key], "normalized": value})
+        parent[key] = value
+    return normalized, changes
+
+
 def attempt_index(plan, records, errors, assessments):
     require(isinstance(records, list), "Attempts must be a chronological list")
     indexed, workers, paths, assignments, partitions, rounds = {}, set(), set(), set(), set(), {}
@@ -438,7 +474,8 @@ def attempt_index(plan, records, errors, assessments):
                     "Repeated owned files require another replacement round, not renamed shards")
             require(number >= rounds.get(category, 0), "Category replacement round was reset")
             require(number <= rounds.get(category, -1) + 1, "Missing earlier attempt history")
-            indexed[key] = dict(attempt, result_error=None, isolation_assessment=None)
+            indexed[key] = dict(attempt, result_error=None, isolation_assessment=None,
+                                normalized_result=attempt["result"], format_changes=[])
             if worker is not None:
                 workers.add(worker)
             paths.add(packet["result_file"])
@@ -447,11 +484,13 @@ def attempt_index(plan, records, errors, assessments):
             owned.setdefault((category, number), set()).update(packet["scope_files"])
             rounds[category] = number
             try:
+                normalized, changes = repair_result(attempt)
+                indexed[key].update(normalized_result=normalized, format_changes=changes)
                 require(not reused_worker, "Observed worker context reused")
                 assessment = assessments.get(key)
                 if assessment is not None:
                     checked_isolation_assessment(attempt, assessment)
-                checked_result(attempt, assessed=assessment is not None)
+                checked_result({**attempt, "result": normalized}, assessed=assessment is not None)
                 indexed[key]["isolation_assessment"] = assessment
             except (KeyError, TypeError, ValueError) as error:
                 indexed[key]["result_error"] = str(error)
@@ -466,6 +505,9 @@ def active_coverage(plan, active, indexed, errors, limitations):
     missing = []
     for category in plan["required"]:
         files, complete = set(), bool(active.get(category))
+        if not complete:
+            errors.append(f"No active report for {category}; recover retained output before "
+                          "considering new review work")
         for key in strings(active.get(category, []), "Active attempts"):
             attempt = indexed.get(key)
             if attempt is None or attempt["packet"]["review_type"] != category:
@@ -473,17 +515,29 @@ def active_coverage(plan, active, indexed, errors, limitations):
                 complete = False
                 continue
             if attempt["result_error"]:
-                errors.append(f"Active attempt {key}: {attempt['result_error']}")
+                errors.append(f"Active attempt {key}: {attempt['result_error']}; original report "
+                              "retained. Diagnose the remaining error before replacing review work")
                 complete = False
                 continue
-            result = attempt["result"]
+            result = attempt["normalized_result"]
             assessment = attempt["isolation_assessment"]
-            if result is None or (result["outcome"] != "complete" and assessment is None):
+            if result is None:
+                errors.append(f"Active attempt {key}: no report returned; recover available output "
+                              "or report the collection failure")
+                complete = False
+                continue
+            if result["outcome"] != "complete" and assessment is None:
+                errors.append(f"Active attempt {key}: reported {result['outcome']} work; "
+                              "inspect the preserved coverage and limitations")
+                limitations.extend(result["limitations"])
                 complete = False
                 continue
             coverage = result["coverage"]
             files.update(coverage["files"])
             complete &= coverage["isolation"] != "contaminated" or assessment is not None
+            if coverage["isolation"] == "contaminated" and assessment is None:
+                errors.append(f"Active attempt {key}: reported contaminated review context; "
+                              "adjudicate the original evidence before replacing the worker")
             if assessment is not None:
                 limitations.append(f"{category}: adjudicator corrected a read-only isolation classification "
                                    f"for {key}; original report and attempt retained")
@@ -498,6 +552,9 @@ def active_coverage(plan, active, indexed, errors, limitations):
             limitations.extend(result["limitations"])
         if not complete or files != set(plan["request"]["files"]):
             missing.append(category)
+            if complete:
+                errors.append(f"Active reports for {category} omit required files: "
+                              + ", ".join(sorted(set(plan["request"]["files"]) - files)))
     return missing
 
 
@@ -527,6 +584,16 @@ def check(plan, handoff):
         errors.append("Isolation assessment refers to an unknown attempt")
     limitations.extend(f"{key}: unusable attempt retained: {attempt['result_error']}"
                        for key, attempt in indexed.items() if attempt["result_error"])
+    repairs = []
+    for key, attempt in indexed.items():
+        if not attempt["format_changes"]:
+            continue
+        repairs.append({"attempt": key, "original_identity": digest(attempt["result"]),
+                        "normalized_identity": digest(attempt["normalized_result"]),
+                        "changes": attempt["format_changes"],
+                        "normalized_result": attempt["normalized_result"]})
+        fields = ", ".join(change["field"] for change in attempt["format_changes"])
+        limitations.append(f"{key}: reformatted {fields}; original report and review attempt retained")
     roles = set()
     for other in handoff["other_workers"]:
         require(other["role"] in ("coordinator", "adjudicator", "validator"), "Invalid other-worker role")
@@ -546,6 +613,7 @@ def check(plan, handoff):
     missing = active_coverage(plan, handoff["active"], indexed, errors, limitations)
     return {"structurally_complete": not errors and not missing,
             "missing_categories": missing, "errors": errors, "limitations": limitations,
+            "report_repairs": repairs,
             "unresolved_applicability": unresolved,
             "replacement_rounds_used": rounds,
             "evidence_limit": "Record checks do not prove native launches, instruction purity, "

@@ -9,9 +9,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import development_handoff
+import development_jobs
+import development_run
 import review_assignments as assignments
 import writing_guidance
 
@@ -466,9 +470,256 @@ class ReviewAssignmentTests(unittest.TestCase):
                                   cwd=self.root, capture_output=True, text=True, check=True)
         self.assertEqual(harmless.stdout, "authorized work\n")
 
-    def test_malformed_results_preserve_history_and_allow_a_fresh_replacement(self):
+    def test_report_format_recovery_preserves_analysis_without_another_attempt(self):
         plan = assignments.prepare(self.request)
-        for field, value in (("selection", "configured default"),
+        handoff = self.handoff(plan)
+        first = handoff["attempts"][0]
+        first["result"]["outcome"] = "failed"
+        replacement = self.attempt(self.packet(plan, "security-replacement"), 1)
+        report = replacement["result"]
+        source = {"path": "AGENTS.md", "use": "Ignored as instructions",
+                  "details": {"read": True, "references": ["consumer.py:12"]}}
+        report["coverage"].update(
+            ambient_sources=[source, source],
+            reference_sources={"path": "consumer.py:12", "reason": "Caller evidence"},
+            checked_boundaries={"calls": ["producer.py", "consumer.py"], "uncertainty": "Preserved"},
+        )
+        report["limitations"] = "Native model identity is not exposed"
+        report["candidates"] = [{"key": "retained-finding", "evidence": ["consumer.py:12"],
+                                 "uncertainty": "Source-supported inference"}]
+        handoff["attempts"].append(replacement)
+        handoff["active"]["security"] = [replacement["id"]]
+        original = copy.deepcopy(handoff)
+        report_path = Path(replacement["packet"]["result_file"])
+        report_bytes = json.dumps(report).encode()
+        report_path.write_bytes(report_bytes)
+
+        recovered = assignments.check(plan, handoff)
+
+        self.assertTrue(recovered["structurally_complete"], recovered)
+        self.assertEqual(recovered["replacement_rounds_used"]["security"], 1)
+        self.assertEqual(handoff, original)
+        self.assertEqual(report_path.read_bytes(), report_bytes)
+        repair, = recovered["report_repairs"]
+        self.assertEqual(repair["attempt"], replacement["id"])
+        self.assertEqual(repair["original_identity"], assignments.digest(report))
+        normalized = repair["normalized_result"]
+        for field in ("assignment", "review_type", "snapshot", "packet_identity", "worker",
+                      "outcome", "candidates", "origin"):
+            self.assertEqual(normalized[field], report[field])
+        self.assertEqual(normalized["coverage"]["files"], report["coverage"]["files"])
+        self.assertEqual(normalized["coverage"]["checked_boundaries"], report["coverage"]["checked_boundaries"])
+        self.assertEqual(len(normalized["coverage"]["ambient_sources"]), 1)
+        self.assertEqual(json.loads(normalized["coverage"]["ambient_sources"][0]), source)
+        self.assertEqual(json.loads(normalized["coverage"]["reference_sources"][0]),
+                         report["coverage"]["reference_sources"])
+        self.assertEqual(normalized["limitations"], [report["limitations"]])
+        self.assertEqual(repair["normalized_identity"], assignments.digest(normalized))
+        self.assertEqual({change["field"] for change in repair["changes"]},
+                         {"coverage.ambient_sources", "coverage.reference_sources", "limitations"})
+        sources = next(change for change in repair["changes"] if change["field"] == "coverage.ambient_sources")
+        self.assertEqual(sources["original"], [source, source])
+        normalized_again, changes = assignments.repair_result({**replacement, "result": normalized})
+        self.assertEqual(normalized_again, normalized)
+        self.assertEqual(changes, [])
+        self.assertEqual(assignments.check(plan, handoff), recovered)
+        self.assertTrue(any("reformatted" in note for note in recovered["limitations"]))
+
+    def test_report_format_recovery_preserves_supplied_selection_and_instruction_identity(self):
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        attempt = handoff["attempts"][0]
+        report = attempt["result"]
+        report["selection"] = "Configured defaults; actual model not exposed"
+        report["instruction_set"] = copy.deepcopy(attempt["packet"]["instruction_set"])
+        original = copy.deepcopy(handoff)
+
+        recovered = assignments.check(plan, handoff)
+
+        self.assertTrue(recovered["structurally_complete"], recovered)
+        self.assertEqual(handoff, original)
+        normalized = recovered["report_repairs"][0]["normalized_result"]
+        self.assertEqual(normalized["selection"]["reason"], report["selection"])
+        self.assertEqual(normalized["selection"]["actual"], "unknown")
+        self.assertEqual(normalized["instruction_set"],
+                         attempt["packet"]["instruction_set"]["identity"])
+        self.assertEqual(set(recovered["replacement_rounds_used"].values()), {0})
+
+    def test_development_candidates_validate_a_copy_without_rewriting_review_evidence(self):
+        plan = assignments.prepare(self.request)
+        attempt = self.attempt(plan["packets"]["security"])
+        report = attempt["result"]
+        report["instruction_set"] = {"identity": attempt["packet"]["instruction_set"]["identity"]}
+        report["selection"] = "Native model identity is not exposed"
+        report["limitations"] = [{"observation": "Read-only fixture", "details": ["No native launch"]}]
+        job = {"role": "reviewer", "packet": attempt["packet"]}
+        original = copy.deepcopy(report)
+
+        candidate = development_jobs.candidate_report({}, job, report)
+        development_jobs.validate({}, job, candidate)
+
+        self.assertEqual(candidate, original)
+        self.assertEqual(report, original)
+        report["snapshot"] = "wrong-snapshot"
+        with self.assertRaisesRegex(ValueError, "snapshot mismatch"):
+            development_jobs.validate({}, job, report)
+
+    def development_report_fixture(self, submission):
+        store = self.scratch / submission
+        reports = store / "reports"
+        reports.mkdir(parents=True)
+        self.request["scratch_directory"] = str(reports)
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        report = handoff["attempts"][0]["result"]
+        report["selection"] = "Model identity not exposed"
+        report["coverage"]["reference_sources"] = {"path": "consumer.py:12", "use": "Evidence"}
+        report["limitations"] = "No model launched by this offline fixture"
+        report["candidates"] = [{"key": "original-observation", "evidence": ["consumer.py:12"]}]
+        assignment = {"id": "A1", "root": str(self.root), "store": str(store)}
+        jobs = [{"role": "reviewer", "packet": item["packet"], "result_file": item["packet"]["result_file"]}
+                for item in handoff["attempts"]]
+        batch = {"id": "B1", "assignment": "A1", "status": "collected", "submitted": {},
+                 "spec": {"store": str(store), "jobs": jobs}}
+        for number, attempt in enumerate(handoff["attempts"], 1):
+            path = Path(attempt["packet"]["result_file"])
+            original = json.dumps(attempt["result"], indent=3).encode()
+            if submission == "submit":
+                candidate = path.with_suffix(".candidate.json")
+                candidate.write_bytes(original)
+                development_handoff.write_candidate(
+                    assignment, batch, SimpleNamespace(job=number, candidate=str(candidate)))
+                self.assertEqual(candidate.read_bytes(), original)
+            else:
+                path.write_bytes(original)
+            snapshot = development_handoff.report_for(assignment, batch, number)
+            batch["submitted"][str(number)] = snapshot["receipt"]
+            self.assertEqual(snapshot["report"], attempt["result"])
+            archive = store / "handoffs" / "B1" / f"{number}-{development_jobs.plan.digest(original)}.json"
+            self.assertEqual(archive.read_bytes(), original)
+        data = {"plan": str(reports / "plan.json"), "handoff": str(reports / "handoff.json")}
+        Path(data["plan"]).write_text(json.dumps(plan))
+        Path(data["handoff"]).write_text(json.dumps(handoff))
+        return assignment, {"store": str(store), "handoffs": {"B1": batch}}, data, plan, handoff
+
+    def test_development_report_recovery_preserves_collection_and_final_acceptance_bindings(self):
+        for submission in ("finish", "submit"):
+            with self.subTest(submission=submission):
+                assignment, state, data, plan, handoff = self.development_report_fixture(submission)
+                original = copy.deepcopy(handoff)
+                paths = [Path(data[key]) for key in ("plan", "handoff")]
+                bytes_before = [path.read_bytes() for path in paths]
+                ledger_report = {key: self.request[key] for key in ("base", "snapshot")}
+
+                with patch.object(development_run, "review_files", return_value=self.request["files"]):
+                    checked = development_run.review_coverage(state, assignment, ledger_report, data)
+
+                self.assertTrue(checked["structurally_complete"], checked)
+                repair, = checked["report_repairs"]
+                self.assertEqual(repair["original_identity"], assignments.digest(handoff["attempts"][0]["result"]))
+                self.assertEqual(repair["normalized_result"]["candidates"],
+                                 handoff["attempts"][0]["result"]["candidates"])
+                self.assertEqual(set(checked["replacement_rounds_used"].values()), {0})
+                self.assertEqual([path.read_bytes() for path in paths], bytes_before)
+                handoff["attempts"][0]["result"] = repair["normalized_result"]
+                with self.assertRaisesRegex(ValueError, "differs from the collected reviewer report"):
+                    development_jobs.require_collected_review(state, assignment, handoff)
+                handoff["attempts"][0]["result"] = original["attempts"][0]["result"]
+                development_jobs.require_collected_review(state, assignment, handoff)
+                self.assertEqual(assignments.check(plan, handoff)["report_repairs"], checked["report_repairs"])
+
+    def test_format_recovery_keeps_isolation_assessment_bound_to_original_report(self):
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        attempt = handoff["attempts"][0]
+        report = attempt["result"]
+        report["outcome"] = "partial"
+        report["coverage"].update(
+            isolation="contaminated",
+            reference_sources={"path": "consumer.py", "use": "Evidence only"},
+            context_conflicts={"reason": "Classified an evidence read as instructions"},
+        )
+        assessment = {
+            "attempt": attempt["id"], "packet_identity": attempt["packet"]["identity"],
+            "result_identity": assignments.digest(report), "kind": "evidence-read-only",
+            "sources": ["consumer.py"], "assigned_ruleset_only": True, "otherwise_complete": True,
+            "evidence": ["Offline adjudication fixture: complete work with only an evidence read"],
+        }
+        handoff["other_workers"][0]["isolation_assessments"] = [assessment]
+        original = copy.deepcopy(handoff)
+
+        checked = assignments.check(plan, handoff)
+
+        self.assertTrue(checked["structurally_complete"], checked)
+        repair, = checked["report_repairs"]
+        self.assertEqual(repair["normalized_result"]["outcome"], "partial")
+        self.assertEqual(handoff, original)
+        assessment["result_identity"] = repair["normalized_identity"]
+        stale = assignments.check(plan, handoff)
+        self.assertFalse(stale["structurally_complete"], stale)
+        self.assertIn("Isolation assessment is stale", "\n".join(stale["errors"]))
+
+    def test_report_repair_does_not_hide_missing_work_or_conflicting_evidence(self):
+        plan = assignments.prepare(self.request)
+        for defect, expected in (
+                ("snapshot", "snapshot mismatch"),
+                ("instruction", "instruction identity mismatch"),
+                ("instruction-extra", "instruction identity mismatch"),
+                ("worker", "worker contradicts"),
+                ("packet", "packet identity mismatch"),
+                ("purpose", "review_type mismatch"),
+                ("partial", "reported partial"),
+                ("failed", "reported failed"),
+                ("missing", "no report"),
+                ("files", "coverage differs"),
+                ("conflict", "Known context conflicts"),
+                ("contaminated", "reported contaminated"),
+                ("empty-source", "needs nonempty text")):
+            with self.subTest(defect=defect):
+                handoff = self.handoff(plan)
+                attempt = handoff["attempts"][0]
+                report = attempt["result"]
+                report["coverage"]["ambient_sources"] = [{"path": "AGENTS.md"}]
+                if defect == "snapshot":
+                    report["snapshot"] = "other-snapshot"
+                elif defect == "instruction":
+                    report["instruction_set"] = {"identity": "wrong-instruction"}
+                elif defect == "instruction-extra":
+                    report["instruction_set"] = {
+                        **attempt["packet"]["instruction_set"], "extra": "Not frozen instructions"}
+                elif defect == "worker":
+                    report["worker"] = "another-worker"
+                elif defect == "packet":
+                    report["packet_identity"] = "another-packet"
+                elif defect == "purpose":
+                    report["review_type"] = "another-purpose"
+                elif defect in ("partial", "failed"):
+                    report["outcome"] = defect
+                elif defect == "missing":
+                    attempt["result"] = None
+                elif defect == "files":
+                    report["coverage"]["files"] = ["producer.py"]
+                elif defect == "conflict":
+                    report["coverage"]["context_conflicts"] = [{"reason": "Read sibling findings"}]
+                elif defect == "contaminated":
+                    report["coverage"].update(
+                        isolation="contaminated",
+                        context_conflicts=[{"reason": "Adopted another ruleset"}])
+                else:
+                    report["coverage"]["ambient_sources"] = [{}]
+                original = copy.deepcopy(handoff)
+
+                result = assignments.check(plan, handoff)
+
+                self.assertFalse(result["structurally_complete"], result)
+                self.assertEqual(result["missing_categories"], ["security"])
+                self.assertIn(expected, "\n".join(result["errors"]))
+                self.assertEqual(handoff, original)
+                self.assertEqual(result["replacement_rounds_used"]["security"], 0)
+
+    def test_unrecoverable_results_preserve_history_and_allow_a_fresh_replacement(self):
+        plan = assignments.prepare(self.request)
+        for field, value in (("selection", None),
                              ("instruction_set", {"identity": "not a string"})):
             with self.subTest(field=field):
                 handoff = self.handoff(plan)
@@ -485,7 +736,7 @@ class ReviewAssignmentTests(unittest.TestCase):
                 self.assertTrue(recovered["structurally_complete"], recovered)
                 self.assertTrue(any(first["id"] in row for row in recovered["limitations"]))
                 self.assertEqual(first, original)
-                replacement["result"]["selection"] = "malformed replacement"
+                replacement["result"]["selection"] = None
                 exhausted = assignments.check(plan, handoff)
                 self.assertFalse(exhausted["structurally_complete"])
                 self.assertEqual(exhausted["replacement_rounds_used"]["security"], 1)

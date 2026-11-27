@@ -366,7 +366,9 @@ def validate(assignment, job, report):
     plan.require(isinstance(report, dict) and report.get("outcome") in ("complete", "partial", "failed", "blocked"),
                  "Leaf report requires a complete, partial, failed or blocked outcome")
     if role == "reviewer":
-        assignments.checked_result({"packet": job["packet"], "worker": report.get("worker"), "result": report})
+        attempt = {"packet": job["packet"], "worker": report.get("worker"), "result": report}
+        normalized, _ = assignments.repair_result(attempt)
+        assignments.checked_result({**attempt, "result": normalized})
     else:
         plan.require(bool(report.get("summary")) or bool(report.get("assessments")) or
                      "candidates" in report or "findings" in report,

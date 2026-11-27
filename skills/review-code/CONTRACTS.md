@@ -90,7 +90,11 @@ Each result includes:
 | `outcome` | `complete`, `partial`, or `failed`; an empty findings list alone never establishes completion. |
 | `candidates` | All observations, including uncertain candidates and recurrence evidence. |
 
-Missing, malformed, or truncated results leave the assignment incomplete.
+Diagnose and repair format-only errors under PACKETS.md before declaring an
+assignment incomplete. Preserve the original and an auditable corrected copy;
+reformatting existing analysis neither repeats a review nor consumes a
+replacement round. Missing evidence, unrecoverable truncation and substantive
+contract violations remain incomplete, with the precise cause reported.
 Compare returned IDs, purposes, instruction sets, worker identities, and
 snapshots with the assignment map, not just the number of reports.
 Separate reports from a reused context do not establish independent coverage.
@@ -121,7 +125,8 @@ The report file contains this entire record; its returned path is only a
 handoff pointer. Reading a path or a short completion message is not reading
 the result. File handoff does not relax the review's read-only target boundary.
 When delegating validation, send the assignment-to-file map, not retyped
-findings. The adjudicator reads the complete reports and their frozen assignment packets
+findings. The adjudicator reads the complete original reports, any format-repair records,
+and their frozen assignment packets
 within the caller's constraints, assessing actual purpose and applicability
 under ASSESSMENT.md as well as finding validity. Hook approval checks authority,
 not the truth of report contents;

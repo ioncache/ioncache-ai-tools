@@ -52,9 +52,15 @@ pass. Verify the original coverage, required checks and caller constraints;
 zero findings alone establish none of these. Do not complete missing review
 work yourself, waive a read prohibition, or rewrite the original report.
 
+Assess format-only repairs against the preserved original report. A schema
+mismatch alone does not invalidate otherwise complete review work. Use the
+PACKETS.md recovery path without rewriting findings or filling evidence gaps.
+
 Return the compliance decision and evidence to the caller. The caller removes
 rejected attempts from the active map, without rewriting their original reports,
-and schedules fresh same-category replacements within the existing allowance.
+only after representation errors have been repaired or explicitly diagnosed as
+unrecoverable. Fresh same-category replacements address missing or noncompliant
+work within the existing allowance, not formatting alone.
 Exhaustion remains incomplete. Adjudicator source inspection and another
 category's findings cannot replace the missing independent assignment.
 
@@ -116,6 +122,9 @@ Finish with reportable counts by severity and action, separate counts of
 non-reportable and below-threshold candidates, scope and snapshot, execution
 mode and strategy, model-selection limitations, and incomplete coverage or
 failed passes. Count underlying issues, not grouped rows or duplicate sightings.
+For each failed pass, state the concrete cause and attempted recovery, not only
+the missing category. Mention repaired formats without presenting them as lost
+review coverage.
 End with the absolute path of the consolidated handback file, or the ledger for
 a calling loop, so an agent can read the complete evidence. Say that the file is
 private session storage and may be cleared.
