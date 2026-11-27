@@ -24,6 +24,8 @@ Host skill-invocation references:
 
 Most skills take task context rather than fixed command-line flags. Review and
 plugin-settings options are explicit skill arguments.
+Every skill's inputs, supported flags, defaults, and meanings are listed in
+[skill-arguments.md](skill-arguments.md).
 
 | Skill | What to provide |
 | --- | --- |
@@ -41,12 +43,16 @@ plugin-settings options are explicit skill arguments.
 | [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | An idea, artifact references, an approved manifest, or a private run directory |
 
 Writing and implementation guidance lives in [../skills/](../skills/):
-`answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
+`engineering-judgment`, `code-complexity`, `comments`,
 `documentation-writing`, `prompt-output`, `unit-tests`, `jsdoc`, and `security`.
 Unit-test guidance adapts to the actual language and runner; Vitest conventions
 apply only to Vitest suites. JSDoc guidance is JavaScript-only, not TypeScript.
 General documentation and contract review remain relevant to other languages,
 including native doc comments and docstrings.
+
+Question-answering behavior is an automatic hook, not a skill users need to
+invoke. The `answer-questions` skill file is a policy reference.
+See [guardrails.md#question-turns](guardrails.md#question-turns).
 
 ## Autonomous development
 
@@ -178,8 +184,10 @@ adjudication, before retries, validators or capacity shards.
 See [configuration.md](configuration.md) for opt-outs and the coordination
 section below for project requirements and worker isolation.
 
-Role effort, validator, fallback, strategy, and posting options:
-[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md).
+Complete argument tables, including role effort, validator, fallback, strategy,
+and posting options:
+[skill-arguments.md#review-code](skill-arguments.md#review-code) and
+[skill-arguments.md#review-validate-fix-loop](skill-arguments.md#review-validate-fix-loop).
 The review/fix loop accepts the same review options, except posting options;
 they do not change its fixing model.
 Use `$ioncache-ai-tools:review-code --help` in Codex. Claude can show argument
@@ -195,6 +203,10 @@ See [../skills/autonomous-development/FOLLOW_UPS.md](../skills/autonomous-develo
 for publication and disclosure rules.
 
 ## Review loops
+
+Arguments and defaults:
+[skill-arguments.md#review-triage-loop](skill-arguments.md#review-triage-loop) and
+[skill-arguments.md#review-validate-fix-loop](skill-arguments.md#review-validate-fix-loop).
 
 These are direct skill invocations in Claude Code or Copilot CLI, not shell
 commands. In Codex, replace only the leading `/` with `$`, keeping the
@@ -371,6 +383,9 @@ Synthetic finding-quality checks and their limits are described in
 [review-evaluation.md](review-evaluation.md).
 
 ## Worktree setup
+
+Arguments and defaults:
+[skill-arguments.md#create-worktree](skill-arguments.md#create-worktree).
 
 For Claude/Copilot:
 

@@ -260,9 +260,12 @@ invoked review skills can also use model agents.
 
 ## Host coverage and limits
 
-Assistant display and final-response text are not rewritten or blocked on any
-host. Stop hooks deliver cache notices, not punctuation correction loops.
-The `fix_emdash` file protections remain independent of assistant output.
+The punctuation guard does not rewrite or block assistant display or
+final-response text. Stop hooks deliver cache notices, not punctuation
+correction loops. The `fix_emdash` file protections remain independent of
+assistant output. Separately, opt-in Claude response validation checks and
+rewrites supported responses before delivery:
+[response-validation.md](response-validation.md).
 
 Copilot general-purpose workers can refuse `/tmp` writes before invoking tools,
 even with allow-all and without the plugin. This is tracked separately at
