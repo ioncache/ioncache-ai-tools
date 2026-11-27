@@ -69,10 +69,13 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   Claude's `hooks/response-validation/` mod buffers response streams and rewrites
   their text before delivery. It uses a tool-less native small-model completion,
   the caller's own bounded history, and no approval or retry state. Failed
-  validation replaces the draft with an unavailability notice without denying
-  subsequent work. Keep stream text and returned metadata consistent, preserve
-  unrelated tool calls and opaque chunk handles, and never leak drafts on
-  cancellation or hook failure. `response-validation` is off by default because
+  validation preserves the response with a visible reason-specific preface,
+  never a notice in place of the answer. Separate technical failures from
+  missing evidence and unclear requests; retain supported corrections.
+  Keep stream text and returned metadata consistent, preserve unrelated tool
+  calls and opaque chunk handles, and discard held drafts on cancellation.
+  An interrupted source preserves received text without executing unfinished
+  tool calls. `response-validation` is off by default because
   it adds model usage and latency; it remains independently configurable.
   Copilot and Codex do not run this mod. Stop hooks only deliver cache notices.
   `block_emdash_turn.py` is retained inactive source.

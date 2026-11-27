@@ -149,6 +149,7 @@ before submitting sensitive questions.
 Optional response validation checks factual support and rewrites overclaims
 before delivery in Claude Code 2.1.332+. It is off by default and adds model
 usage and latency. It does not run in Copilot or Codex.
+If validation cannot finish, the reply is preserved with a preface explaining why.
 Opt-in and limits: [docs/response-validation.md](docs/response-validation.md).
 
 ## Configuration
