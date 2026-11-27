@@ -115,23 +115,23 @@ identify additional model calls, repeated review passes, and context overhead.
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes. Arguments (target, review and posting flags): [docs/skill-arguments.md#review-code](docs/skill-arguments.md#review-code). <p><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy.</p> |
-| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them. Task arguments (PR or saved run): [docs/skill-arguments.md#review-dependabot-pr](docs/skill-arguments.md#review-dependabot-pr). <p><strong>Token usage:</strong> May launch separate package-review workers. Usage grows with the number of dependencies and the analysis each requires.</p> |
-| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests. No arguments; uses the current branch's PR: [docs/skill-arguments.md#verify-unresolved-pr-comments](docs/skill-arguments.md#verify-unresolved-pr-comments). <p><strong>Token usage:</strong> Using an agent-backed PR integration adds model calls; direct API retrieval does not require a separate reviewer.</p> |
-| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review. Task arguments (PR, findings, requested action): [docs/skill-arguments.md#post-pr-review-comments](docs/skill-arguments.md#post-pr-review-comments). <p><strong>Token usage:</strong> Separate correctness and clarity reviewers add model calls before presentation or posting. Revised comments can require repeated checks.</p> |
-| `/ioncache-ai-tools:write-pr-descriptions` | Enabled | Draft or edit a PR title and description. Task arguments: [docs/skill-arguments.md#write-pr-descriptions](docs/skill-arguments.md#write-pr-descriptions). |
-| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings. Arguments (target, round limit, resume): [docs/skill-arguments.md#review-triage-loop](docs/skill-arguments.md#review-triage-loop). <p><strong>Token usage:</strong> Each round starts a fresh reviewer and repeats analysis. Round limits are not token or spending caps.</p> |
-| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push. Arguments (target, loop limits, resume, review flags): [docs/skill-arguments.md#review-validate-fix-loop](docs/skill-arguments.md#review-validate-fix-loop). <p><strong>Token usage:</strong> Repeated specialist reviews, validation, and fix cycles can be token-heavy. Loop limits are not token or spending caps.</p> |
+| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes.<br><br>Arguments (target, review and posting flags): [Argument details](docs/skill-arguments.md#review-code).<br><br><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy. |
+| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them.<br><br>Task arguments (PR or saved run): [Argument details](docs/skill-arguments.md#review-dependabot-pr).<br><br><strong>Token usage:</strong> May launch separate package-review workers. Usage grows with the number of dependencies and the analysis each requires. |
+| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests.<br><br>No arguments; uses the current branch's PR: [Argument details](docs/skill-arguments.md#verify-unresolved-pr-comments).<br><br><strong>Token usage:</strong> Using an agent-backed PR integration adds model calls; direct API retrieval does not require a separate reviewer. |
+| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review.<br><br>Task arguments (PR, findings, requested action): [Argument details](docs/skill-arguments.md#post-pr-review-comments).<br><br><strong>Token usage:</strong> Separate correctness and clarity reviewers add model calls before presentation or posting. Revised comments can require repeated checks. |
+| `/ioncache-ai-tools:write-pr-descriptions` | Enabled | Draft or edit a PR title and description.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#write-pr-descriptions). |
+| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings.<br><br>Arguments (target, round limit, resume): [Argument details](docs/skill-arguments.md#review-triage-loop).<br><br><strong>Token usage:</strong> Each round starts a fresh reviewer and repeats analysis. Round limits are not token or spending caps. |
+| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push.<br><br>Arguments (target, loop limits, resume, review flags): [Argument details](docs/skill-arguments.md#review-validate-fix-loop).<br><br><strong>Token usage:</strong> Repeated specialist reviews, validation, and fix cycles can be token-heavy. Loop limits are not token or spending caps. |
 
 #### Investigation and implementation
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:investigate` | Enabled | Explain an existing feature or workflow without editing files. Task argument (topic to trace): [docs/skill-arguments.md#investigate](docs/skill-arguments.md#investigate). |
-| `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them. Task arguments (failing command and errors): [docs/skill-arguments.md#triage-errors](docs/skill-arguments.md#triage-errors). |
-| `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+. Arguments (destination and Git worktree options): [docs/skill-arguments.md#create-worktree](docs/skill-arguments.md#create-worktree). |
-| `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts. Arguments (listing, scope, and setting flags): [docs/skill-arguments.md#plugin-settings](docs/skill-arguments.md#plugin-settings). |
-| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection. Task arguments (idea, artifacts, or saved run): [docs/skill-arguments.md#autonomous-development](docs/skill-arguments.md#autonomous-development). <p><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps.</p> |
+| `/ioncache-ai-tools:investigate` | Enabled | Explain an existing feature or workflow without editing files.<br><br>Task argument (topic to trace): [Argument details](docs/skill-arguments.md#investigate). |
+| `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them.<br><br>Task arguments (failing command and errors): [Argument details](docs/skill-arguments.md#triage-errors). |
+| `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+.<br><br>Arguments (destination and Git worktree options): [Argument details](docs/skill-arguments.md#create-worktree). |
+| `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts.<br><br>Arguments (listing, scope, and setting flags): [Argument details](docs/skill-arguments.md#plugin-settings). |
+| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection.<br><br>Task arguments (idea, artifacts, or saved run): [Argument details](docs/skill-arguments.md#autonomous-development).<br><br><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps. |
 
 Review and approve the autonomous-development plan, content, permissions, and
 limits before execution. PR merging stays under human control.
@@ -143,14 +143,14 @@ test or audit tools.
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:engineering-judgment` | Enabled | Choose coherent solutions while honoring scope. Task arguments: [docs/skill-arguments.md#engineering-judgment](docs/skill-arguments.md#engineering-judgment). |
-| `/ioncache-ai-tools:code-complexity` | Enabled | Keep functions cohesive and control nesting and parameter counts. Task arguments: [docs/skill-arguments.md#code-complexity](docs/skill-arguments.md#code-complexity). |
-| `/ioncache-ai-tools:comments` | Enabled | Keep implementation comments purposeful and preserve API documentation. Task arguments: [docs/skill-arguments.md#comments](docs/skill-arguments.md#comments). |
-| `/ioncache-ai-tools:documentation-writing` | Enabled | Write direct documentation with clear sentences and standard punctuation. Task arguments: [docs/skill-arguments.md#documentation-writing](docs/skill-arguments.md#documentation-writing). |
-| `/ioncache-ai-tools:prompt-output` | Enabled | Format a requested prompt as one copyable Markdown code block. Task arguments: [docs/skill-arguments.md#prompt-output](docs/skill-arguments.md#prompt-output). |
-| `/ioncache-ai-tools:unit-tests` | Enabled | Write or review tests using the target language and framework. Task arguments: [docs/skill-arguments.md#unit-tests](docs/skill-arguments.md#unit-tests). |
-| `/ioncache-ai-tools:jsdoc` | Enabled | Write or review JavaScript JSDoc, not TypeScript or other languages. Task arguments: [docs/skill-arguments.md#jsdoc](docs/skill-arguments.md#jsdoc). |
-| `/ioncache-ai-tools:security` | Enabled | Apply input-validation, authentication, and secret-handling standards. Task arguments: [docs/skill-arguments.md#security](docs/skill-arguments.md#security). |
+| `/ioncache-ai-tools:engineering-judgment` | Enabled | Choose coherent solutions while honoring scope.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#engineering-judgment). |
+| `/ioncache-ai-tools:code-complexity` | Enabled | Keep functions cohesive and control nesting and parameter counts.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#code-complexity). |
+| `/ioncache-ai-tools:comments` | Enabled | Keep implementation comments purposeful and preserve API documentation.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#comments). |
+| `/ioncache-ai-tools:documentation-writing` | Enabled | Write direct documentation with clear sentences and standard punctuation.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#documentation-writing). |
+| `/ioncache-ai-tools:prompt-output` | Enabled | Format a requested prompt as one copyable Markdown code block.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#prompt-output). |
+| `/ioncache-ai-tools:unit-tests` | Enabled | Write or review tests using the target language and framework.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#unit-tests). |
+| `/ioncache-ai-tools:jsdoc` | Enabled | Write or review JavaScript JSDoc, not TypeScript or other languages.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#jsdoc). |
+| `/ioncache-ai-tools:security` | Enabled | Apply input-validation, authentication, and secret-handling standards.<br><br>Task arguments: [Argument details](docs/skill-arguments.md#security). |
 
 ### Hooks
 
@@ -163,21 +163,21 @@ The names below are settings, not commands to invoke.
 
 | Setting | Default | Guidance |
 | --- | --- | --- |
-| `hook:answer-questions` | Enabled | Keep verified user-question turns answer-only for that root agent; running children remain unrestricted. [docs/guardrails.md#question-turns](docs/guardrails.md#question-turns) |
-| `hook:autonomous-development:explicit-only` | Enabled | Prevent automatic skill-tool activation of autonomous development; require direct user invocation. [docs/configuration.md#settings-command](docs/configuration.md#settings-command) |
-| `hook:block_raw_worktree_add` | Enabled | Block raw worktree creation and direct the agent to the configured setup helper. [docs/guardrails.md#action-checks-and-autonomous-recovery](docs/guardrails.md#action-checks-and-autonomous-recovery) |
-| `hook:no-manual-lockfile-edit` | Enabled | Block direct lockfile edits through file tools; use the package manager instead. [docs/guardrails.md#action-checks-and-autonomous-recovery](docs/guardrails.md#action-checks-and-autonomous-recovery) |
-| `hook:no_manual_lockfile_edit_bash` | Enabled | Block recognized shell commands that directly edit lockfiles. [docs/guardrails.md#action-checks-and-autonomous-recovery](docs/guardrails.md#action-checks-and-autonomous-recovery) |
-| `hook:no_broad_process_kill` | Enabled | Block broad process termination; use an exact owned process target or native stop control. [docs/guardrails.md#action-checks-and-autonomous-recovery](docs/guardrails.md#action-checks-and-autonomous-recovery) |
-| `hook:fix_emdash` | Enabled | Rewrite em-dashes in structured file edits and reject them in shell input or patch additions. [docs/guardrails.md#action-checks-and-autonomous-recovery](docs/guardrails.md#action-checks-and-autonomous-recovery) |
+| `hook:answer-questions` | Enabled | Keep verified user-question turns answer-only for that root agent; running children remain unrestricted.<br><br>[Documentation details](docs/guardrails.md#question-turns) |
+| `hook:autonomous-development:explicit-only` | Enabled | Prevent automatic skill-tool activation of autonomous development; require direct user invocation.<br><br>[Documentation details](docs/configuration.md#settings-command) |
+| `hook:block_raw_worktree_add` | Enabled | Block raw worktree creation and direct the agent to the configured setup helper.<br><br>[Documentation details](docs/guardrails.md#action-checks-and-autonomous-recovery) |
+| `hook:no-manual-lockfile-edit` | Enabled | Block direct lockfile edits through file tools; use the package manager instead.<br><br>[Documentation details](docs/guardrails.md#action-checks-and-autonomous-recovery) |
+| `hook:no_manual_lockfile_edit_bash` | Enabled | Block recognized shell commands that directly edit lockfiles.<br><br>[Documentation details](docs/guardrails.md#action-checks-and-autonomous-recovery) |
+| `hook:no_broad_process_kill` | Enabled | Block broad process termination; use an exact owned process target or native stop control.<br><br>[Documentation details](docs/guardrails.md#action-checks-and-autonomous-recovery) |
+| `hook:fix_emdash` | Enabled | Rewrite em-dashes in structured file edits and reject them in shell input or patch additions.<br><br>[Documentation details](docs/guardrails.md#action-checks-and-autonomous-recovery) |
 
 #### Automatic services
 
 | Setting | Default | Guidance |
 | --- | --- | --- |
-| `hook:docs-cache` | Enabled | Reuse fetched documentation facts. [docs/documentation-cache.md](docs/documentation-cache.md). <p><strong>Token usage:</strong> Fact distillation runs outside the conversation and makes additional model calls, consuming host tokens.</p> |
-| `hook:plugin-settings-ui` | Enabled | Open the native Claude settings pane when available; keep the text interface available otherwise. [docs/configuration.md#native-claude-settings-pane](docs/configuration.md#native-claude-settings-pane) |
-| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only. [docs/response-validation.md](docs/response-validation.md). <p><strong>Token usage:</strong> Token-heavy because each textual response adds a model review, so it is disabled by default.</p> |
+| `hook:docs-cache` | Enabled | Reuse fetched documentation facts.<br><br>[Documentation details](docs/documentation-cache.md).<br><br><strong>Token usage:</strong> Fact distillation runs outside the conversation and makes additional model calls, consuming host tokens. |
+| `hook:plugin-settings-ui` | Enabled | Open the native Claude settings pane when available; keep the text interface available otherwise.<br><br>[Documentation details](docs/configuration.md#native-claude-settings-pane) |
+| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only.<br><br>[Documentation details](docs/response-validation.md).<br><br><strong>Token usage:</strong> Token-heavy because each textual response adds a model review, so it is disabled by default. |
 
 If response validation cannot finish, the reply is preserved with a preface
 explaining why.
@@ -192,21 +192,21 @@ independent of similarly named skills.
 
 | Setting | Default | Guidance |
 | --- | --- | --- |
-| `instruction:scope-exactly-what-asked` | Enabled | Keep work within the requested scope without introducing approval gates. [docs/guardrails.md#guidance-and-permission](docs/guardrails.md#guidance-and-permission) |
-| `instruction:documentation-first` | Enabled | Use documentation-backed third-party APIs and behavior. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids) |
-| `instruction:engineering-judgment` | Enabled | Apply coherent engineering decisions and the relevant specialist guidance. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids) |
-| `instruction:writer-quality-guidance` | Enabled | Give autonomous implementers and fixers applicable standards, context reconciliation, and diff self-check guidance. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids). <p><strong>Token usage:</strong> Adds standards and context guidance to each applicable worker's prompt, increasing input tokens without launching a separate reviewer.</p> |
+| `instruction:scope-exactly-what-asked` | Enabled | Keep work within the requested scope without introducing approval gates.<br><br>[Documentation details](docs/guardrails.md#guidance-and-permission) |
+| `instruction:documentation-first` | Enabled | Use documentation-backed third-party APIs and behavior.<br><br>[Documentation details](docs/configuration.md#feature-ids) |
+| `instruction:engineering-judgment` | Enabled | Apply coherent engineering decisions and the relevant specialist guidance.<br><br>[Documentation details](docs/configuration.md#feature-ids) |
+| `instruction:writer-quality-guidance` | Enabled | Give autonomous implementers and fixers applicable standards, context reconciliation, and diff self-check guidance.<br><br>[Documentation details](docs/configuration.md#feature-ids).<br><br><strong>Token usage:</strong> Adds standards and context guidance to each applicable worker's prompt, increasing input tokens without launching a separate reviewer. |
 
 ## Known issues and limits
 
 | Situation | What to know or do |
 | --- | --- |
-| A skill is missing | Check that the plugin is installed and enabled in your CLI, then restart the CLI to reload its skills. A personal or project skill with the same name can hide this plugin's version. See [docs/workflows.md#skill-discovery](docs/workflows.md#skill-discovery) for how to resolve that conflict. |
+| A skill is missing | Check that the plugin is installed and enabled in your CLI, then restart the CLI to reload its skills. A personal or project skill with the same name can hide this plugin's version.<br><br>See [skill discovery details](docs/workflows.md#skill-discovery) for how to resolve that conflict. |
 | An action is denied | An attempted command or edit matched a plugin rule. The assistant should use the alternative shown in the rejection message, such as updating a dependency lockfile through the package manager instead of editing it by hand. Repeating the same blocked operation will not help. Your CLI may still ask for permission to run the replacement command. |
-| A checker is unavailable | The plugin could not run a check, for example because its settings could not be read. This is an error, not a verdict that your request is forbidden or safe to perform. The assistant can repair the reported problem or continue other work; remaining checks and normal CLI permissions still apply. See [docs/guardrails.md#checker-failures](docs/guardrails.md#checker-failures). |
-| Review coordination | Reviews split work among several AI reviewers. Starting those reviewers, selecting their models, and collecting their results have not yet been fully tested together in real sessions on the supported CLIs. A run missing required review results is incomplete, even if none of the finished checks found problems. See [docs/workflows.md#review-coordination](docs/workflows.md#review-coordination). |
+| A checker is unavailable | The plugin could not run a check, for example because its settings could not be read. This is an error, not a verdict that your request is forbidden or safe to perform. The assistant can repair the reported problem or continue other work; remaining checks and normal CLI permissions still apply.<br><br>See [checker failure details](docs/guardrails.md#checker-failures). |
+| Review coordination | Reviews split work among several AI reviewers. Starting those reviewers, selecting their models, and collecting their results have not yet been fully tested together in real sessions on the supported CLIs. A run missing required review results is incomplete, even if none of the finished checks found problems.<br><br>See [review coordination details](docs/workflows.md#review-coordination). |
 | Response punctuation | The em-dash rule checks commands and file edits, not chat replies. Enabling `hook:fix_emdash` therefore does not guarantee that the assistant's answers will be free of em-dashes. |
-| Copilot child `/tmp` writes | A separate AI worker launched by Copilot can refuse to create temporary files under `/tmp`, even when the main assistant can write there. This has also happened with the plugin disabled and all tool permissions allowed, so changing those settings is not a confirmed fix. Follow https://github.com/github/copilot-cli/issues/5441 for updates. |
+| Copilot child `/tmp` writes | A separate AI worker launched by Copilot can refuse to create temporary files under `/tmp`, even when the main assistant can write there. This has also happened with the plugin disabled and all tool permissions allowed, so changing those settings is not a confirmed fix.<br><br>Follow [github/copilot-cli#5441](https://github.com/github/copilot-cli/issues/5441) for updates. |
 
 These guardrails are **not a security boundary**. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.
