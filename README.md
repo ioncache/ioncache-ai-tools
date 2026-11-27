@@ -200,12 +200,12 @@ independent of similarly named skills.
 
 | Situation | What to know or do |
 | --- | --- |
-| A skill is missing | Check installation and enablement, then start a fresh session or thread. Same-name skills can conflict; see [docs/workflows.md#skill-discovery](docs/workflows.md#skill-discovery). |
-| An action is denied | Use the alternative in the denial rather than repeating it. Plugin recovery does not require per-turn approval. |
-| A checker is unavailable | The plugin reports the problem without creating a persistent tool gate. Native permissions still apply. |
-| Review coordination | Supervised cross-host trials remain pending; not every execution mode is acceptance-verified. |
-| Response punctuation | There is no response punctuation filter; file-edit checks are separate. |
-| Copilot child `/tmp` writes | Some general-purpose workers refuse these writes even with allow-all, including without the plugin; see https://github.com/github/copilot-cli/issues/5441. |
+| A skill is missing | Check that the plugin is installed and enabled in your CLI, then restart the CLI to reload its skills. A personal or project skill with the same name can hide this plugin's version. See [docs/workflows.md#skill-discovery](docs/workflows.md#skill-discovery) for how to resolve that conflict. |
+| An action is denied | An attempted command or edit matched a plugin rule. The assistant should use the alternative shown in the rejection message, such as updating a dependency lockfile through the package manager instead of editing it by hand. Repeating the same blocked operation will not help. Your CLI may still ask for permission to run the replacement command. |
+| A checker is unavailable | The plugin could not run a check, for example because its settings could not be read. This is an error, not a verdict that your request is forbidden or safe to perform. The assistant can repair the reported problem or continue other work; remaining checks and normal CLI permissions still apply. See [docs/guardrails.md#checker-failures](docs/guardrails.md#checker-failures). |
+| Review coordination | Reviews split work among several AI reviewers. Starting those reviewers, selecting their models, and collecting their results have not yet been fully tested together in real sessions on the supported CLIs. A run missing required review results is incomplete, even if none of the finished checks found problems. See [docs/workflows.md#review-coordination](docs/workflows.md#review-coordination). |
+| Response punctuation | The em-dash rule checks commands and file edits, not chat replies. Enabling `hook:fix_emdash` therefore does not guarantee that the assistant's answers will be free of em-dashes. |
+| Copilot child `/tmp` writes | A separate AI worker launched by Copilot can refuse to create temporary files under `/tmp`, even when the main assistant can write there. This has also happened with the plugin disabled and all tool permissions allowed, so changing those settings is not a confirmed fix. Follow https://github.com/github/copilot-cli/issues/5441 for updates. |
 
 These guardrails are **not a security boundary**. Unsupported tools and shell
 indirection can evade checks; agents with settings access can disable them.
