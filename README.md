@@ -105,7 +105,8 @@ Append a target or task when needed, for example
 ### Skills
 
 Invoke a skill with the task or files you want it to work on. Related skills
-are grouped below; their detailed options stay in the linked documentation.
+are grouped below. Each row links to arguments, defaults, and their meanings.
+Task arguments are plain-language context; only some skills accept fixed flags.
 
 Model-driven skills consume normal conversation tokens. The token-usage notes
 identify additional model calls, repeated review passes, and context overhead.
@@ -114,23 +115,23 @@ identify additional model calls, repeated review passes, and context overhead.
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes. Options and optional posting: [docs/workflows.md#review-options](docs/workflows.md#review-options). <p><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy.</p> |
-| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them. <p><strong>Token usage:</strong> May launch separate package-review workers. Usage grows with the number of dependencies and the analysis each requires.</p> |
-| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests. <p><strong>Token usage:</strong> Using an agent-backed PR integration adds model calls; direct API retrieval does not require a separate reviewer.</p> |
-| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review. <p><strong>Token usage:</strong> Separate correctness and clarity reviewers add model calls before presentation or posting. Revised comments can require repeated checks.</p> |
-| `/ioncache-ai-tools:write-pr-descriptions` | Enabled | Draft or edit a PR title and description |
-| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings. Limits and resume: [docs/workflows.md#review-loops](docs/workflows.md#review-loops). <p><strong>Token usage:</strong> Each round starts a fresh reviewer and repeats analysis. Round limits are not token or spending caps.</p> |
-| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push. [docs/workflows.md#review-loops](docs/workflows.md#review-loops). <p><strong>Token usage:</strong> Repeated specialist reviews, validation, and fix cycles can be token-heavy. Loop limits are not token or spending caps.</p> |
+| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes. Arguments (target, review and posting flags): [docs/skill-arguments.md#review-code](docs/skill-arguments.md#review-code). <p><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy.</p> |
+| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them. Task arguments (PR or saved run): [docs/skill-arguments.md#review-dependabot-pr](docs/skill-arguments.md#review-dependabot-pr). <p><strong>Token usage:</strong> May launch separate package-review workers. Usage grows with the number of dependencies and the analysis each requires.</p> |
+| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests. No arguments; uses the current branch's PR: [docs/skill-arguments.md#verify-unresolved-pr-comments](docs/skill-arguments.md#verify-unresolved-pr-comments). <p><strong>Token usage:</strong> Using an agent-backed PR integration adds model calls; direct API retrieval does not require a separate reviewer.</p> |
+| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review. Task arguments (PR, findings, requested action): [docs/skill-arguments.md#post-pr-review-comments](docs/skill-arguments.md#post-pr-review-comments). <p><strong>Token usage:</strong> Separate correctness and clarity reviewers add model calls before presentation or posting. Revised comments can require repeated checks.</p> |
+| `/ioncache-ai-tools:write-pr-descriptions` | Enabled | Draft or edit a PR title and description. Task arguments: [docs/skill-arguments.md#write-pr-descriptions](docs/skill-arguments.md#write-pr-descriptions). |
+| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings. Arguments (target, round limit, resume): [docs/skill-arguments.md#review-triage-loop](docs/skill-arguments.md#review-triage-loop). <p><strong>Token usage:</strong> Each round starts a fresh reviewer and repeats analysis. Round limits are not token or spending caps.</p> |
+| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push. Arguments (target, loop limits, resume, review flags): [docs/skill-arguments.md#review-validate-fix-loop](docs/skill-arguments.md#review-validate-fix-loop). <p><strong>Token usage:</strong> Repeated specialist reviews, validation, and fix cycles can be token-heavy. Loop limits are not token or spending caps.</p> |
 
 #### Investigation and implementation
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:investigate` | Enabled | Explain an existing feature or workflow without editing files |
-| `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them |
-| `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+. [docs/workflows.md#worktree-setup](docs/workflows.md#worktree-setup) |
-| `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts. [docs/configuration.md](docs/configuration.md) |
-| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection. [docs/workflows.md#autonomous-development](docs/workflows.md#autonomous-development). <p><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps.</p> |
+| `/ioncache-ai-tools:investigate` | Enabled | Explain an existing feature or workflow without editing files. Task argument (topic to trace): [docs/skill-arguments.md#investigate](docs/skill-arguments.md#investigate). |
+| `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them. Task arguments (failing command and errors): [docs/skill-arguments.md#triage-errors](docs/skill-arguments.md#triage-errors). |
+| `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+. Arguments (destination and Git worktree options): [docs/skill-arguments.md#create-worktree](docs/skill-arguments.md#create-worktree). |
+| `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts. Arguments (listing, scope, and setting flags): [docs/skill-arguments.md#plugin-settings](docs/skill-arguments.md#plugin-settings). |
+| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection. Task arguments (idea, artifacts, or saved run): [docs/skill-arguments.md#autonomous-development](docs/skill-arguments.md#autonomous-development). <p><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps.</p> |
 
 Review and approve the autonomous-development plan, content, permissions, and
 limits before execution. PR merging stays under human control.
@@ -142,14 +143,14 @@ test or audit tools.
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:engineering-judgment` | Enabled | Choose coherent solutions while honoring scope |
-| `/ioncache-ai-tools:code-complexity` | Enabled | Keep functions cohesive and control nesting and parameter counts |
-| `/ioncache-ai-tools:comments` | Enabled | Keep implementation comments purposeful and preserve API documentation |
-| `/ioncache-ai-tools:documentation-writing` | Enabled | Write direct documentation with clear sentences and standard punctuation |
-| `/ioncache-ai-tools:prompt-output` | Enabled | Format a requested prompt as one copyable Markdown code block |
-| `/ioncache-ai-tools:unit-tests` | Enabled | Write or review tests using the target language and framework |
-| `/ioncache-ai-tools:jsdoc` | Enabled | Write or review JavaScript JSDoc, not TypeScript or other languages |
-| `/ioncache-ai-tools:security` | Enabled | Apply input-validation, authentication, and secret-handling standards |
+| `/ioncache-ai-tools:engineering-judgment` | Enabled | Choose coherent solutions while honoring scope. Task arguments: [docs/skill-arguments.md#engineering-judgment](docs/skill-arguments.md#engineering-judgment). |
+| `/ioncache-ai-tools:code-complexity` | Enabled | Keep functions cohesive and control nesting and parameter counts. Task arguments: [docs/skill-arguments.md#code-complexity](docs/skill-arguments.md#code-complexity). |
+| `/ioncache-ai-tools:comments` | Enabled | Keep implementation comments purposeful and preserve API documentation. Task arguments: [docs/skill-arguments.md#comments](docs/skill-arguments.md#comments). |
+| `/ioncache-ai-tools:documentation-writing` | Enabled | Write direct documentation with clear sentences and standard punctuation. Task arguments: [docs/skill-arguments.md#documentation-writing](docs/skill-arguments.md#documentation-writing). |
+| `/ioncache-ai-tools:prompt-output` | Enabled | Format a requested prompt as one copyable Markdown code block. Task arguments: [docs/skill-arguments.md#prompt-output](docs/skill-arguments.md#prompt-output). |
+| `/ioncache-ai-tools:unit-tests` | Enabled | Write or review tests using the target language and framework. Task arguments: [docs/skill-arguments.md#unit-tests](docs/skill-arguments.md#unit-tests). |
+| `/ioncache-ai-tools:jsdoc` | Enabled | Write or review JavaScript JSDoc, not TypeScript or other languages. Task arguments: [docs/skill-arguments.md#jsdoc](docs/skill-arguments.md#jsdoc). |
+| `/ioncache-ai-tools:security` | Enabled | Apply input-validation, authentication, and secret-handling standards. Task arguments: [docs/skill-arguments.md#security](docs/skill-arguments.md#security). |
 
 ### Hooks
 

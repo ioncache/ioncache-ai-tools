@@ -72,6 +72,9 @@ paths for native callers without duplicating the catalog or persistence rules.
 
 ## Settings command
 
+Every supported skill argument, its default, and its effect:
+[skill-arguments.md#plugin-settings](skill-arguments.md#plugin-settings).
+
 Invoke `/ioncache-ai-tools:plugin-settings` in Claude or Copilot, or
 `$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it opens the
 Claude pane where available; otherwise it lists every shipped setting and its
