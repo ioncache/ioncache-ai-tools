@@ -4,6 +4,24 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.15.3 (2026-11-27)
+
+### New
+
+* add task-focused context handoffs ([#91](https://github.com/ioncache/ioncache-ai-tools/issues/91)) ([2f09f96](https://github.com/ioncache/ioncache-ai-tools/commit/2f09f9601e0cb1d2262bb3ea8ff040ce1d14f44c))
+
+### Updated
+
+* **docs:** updated README ([#89](https://github.com/ioncache/ioncache-ai-tools/issues/89)) ([3610ee5](https://github.com/ioncache/ioncache-ai-tools/commit/3610ee5ba66fe5b8d48a4c0c57d7951b9a3b4328))
+* make plugin features and defaults discoverable ([#92](https://github.com/ioncache/ioncache-ai-tools/issues/92)) ([f203483](https://github.com/ioncache/ioncache-ai-tools/commit/f2034831a37cb1a14b243ea0d5eb99b359bedcca))
+* release 1.15.2 ([2018ba1](https://github.com/ioncache/ioncache-ai-tools/commit/2018ba114b64c907dd9613dc544c725d32ccf9b4))
+* remove generated Node compile cache ([54183dd](https://github.com/ioncache/ioncache-ai-tools/commit/54183dda963c5e4fba6326b0fcbdcc9dc8048504))
+
+### Fixed
+
+* preserve replies when response validation fails ([#93](https://github.com/ioncache/ioncache-ai-tools/issues/93)) ([3b9c9b3](https://github.com/ioncache/ioncache-ai-tools/commit/3b9c9b3f8844463efe2e42e03c6177d4e38c09f8))
+* recover reviewer report formatting without repeating reviews ([#90](https://github.com/ioncache/ioncache-ai-tools/issues/90)) ([6973abf](https://github.com/ioncache/ioncache-ai-tools/commit/6973abfed590d83e09f8216a09443516c15e8040))
+
 ## 1.15.1 (2026-11-27)
 
 ### New
