@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.15.1 (2026-11-27)
+
+### New
+
+* add incremental delivery planning to autonomous development ([#69](https://github.com/ioncache/ioncache-ai-tools/issues/69)) ([ab8d580](https://github.com/ioncache/ioncache-ai-tools/commit/ab8d5801adbb94aca10179dd390125c50f19a071)), references [#183](https://github.com/ioncache/ioncache-ai-tools/issues/183)
+
+### Updated
+
+* None.
+
+### Fixed
+
+* None.
+
 ## 1.15.0 (2026-11-27)
 
 ### New
