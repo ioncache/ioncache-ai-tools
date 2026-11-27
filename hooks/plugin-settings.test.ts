@@ -7,7 +7,7 @@ const PANE = {
   requestId: 'ioncache-plugin-settings',
   viewport: { columns: 100, rows: 30 },
   props: {
-    title: 'Plugin settings',
+    title: 'ioncache-ai-tools | Settings',
     isFocused: true,
     bodyColumns: 60,
     placement: 'inline',
@@ -20,7 +20,11 @@ function backend(on, clock?) {
   const state = {
     enabled: true, effective: true, uiEnabled: true, failSave: false,
     requests: [] as string[][], opened: 0, closed: 0,
-    placement: 'shown', delayMs: 0,
+    titles: [] as string[],
+    placement: 'shown', delayMs: 0, denyClose: false,
+    project: '/project with spaces',
+    status: undefined as string | undefined,
+    statusSource: '',
   };
   on('process.run', async ($, e) => {
     state.requests.push(e.argv);
@@ -45,7 +49,7 @@ function backend(on, clock?) {
       stderr: '',
       stdout: JSON.stringify({
         version: 1,
-        project: '/project with spaces',
+        project: state.project,
         scope: e.argv.includes('--global') ? 'global' : 'project',
         saved: change || uiChange ? ['/settings.json'] : [],
         uiEnabled: state.uiEnabled,
@@ -61,16 +65,54 @@ function backend(on, clock?) {
       }),
     } };
   });
-  on('ui.open', () => {
+  on('ui.open', ($, e) => {
     state.opened += 1;
+    state.titles.push(e.title);
     if (state.placement === 'error') return { deny: 'UI unavailable' };
     return { value: { isPlaced: state.placement === 'shown' } };
   });
   on('ui.close', () => {
+    if (state.denyClose) return { deny: 'Keep this pane open' };
     state.closed += 1;
     return { value: undefined };
   });
+  on('ui.status', ($, e, next) => {
+    state.status = e.text;
+    state.statusSource = next.origin.plugin;
+    return { value: undefined };
+  });
   return state;
+}
+
+async function expectSettingStatus(ui, key, enabled) {
+  const boxes = await ui.findAll({ type: 'Box' });
+  const row = boxes.find(box => box.children.some(child =>
+    child?.type === 'Button' && child.props.key === key));
+  expect(row).toBeDefined();
+  const status = row.children.find(child => child?.type === 'Text');
+  expect(status).toBeDefined();
+  expect(status.children).toEqual([enabled ? 'enabled' : 'disabled']);
+  expect(status.props.color).toBe(enabled ? 'green' : 'red');
+}
+
+async function expectScopeEmphasis(ui, active) {
+  for (const scope of ['project', 'global']) {
+    expect((await ui.find({ key: scope })).props.variant)
+      .toBe(scope === active ? 'primary' : 'secondary');
+  }
+}
+
+async function expectCatalogSummary(ui, available) {
+  const count = await ui.find({ type: 'Text', text: /^\d+ settings below\./ });
+  const groups = await ui.find({ type: 'Text', text: /^Hooks \| Skills$/ });
+  if (!available) {
+    expect(count).toBeUndefined();
+    expect(groups).toBeUndefined();
+    return;
+  }
+  expect(count).toBeDefined();
+  expect(count.text).toMatch(/^3 settings below\./);
+  expect(groups).toBeDefined();
 }
 
 test('opens native panes and saves toggles without a model or shell', async ($, on) => {
@@ -78,24 +120,81 @@ test('opens native panes and saves toggles without a model or shell', async ($, 
   for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
     await $.command.run({ command: COMMAND, args: '' });
     const ui = await $.ui.mount({ ...PANE, surface });
-    expect(await ui.find({ type: 'Text', text: 'Hooks' })).toBeDefined();
+    expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+    expect(await ui.find({ type: 'Text', text: 'Hooks (2)' })).toBeDefined();
+    expect(await ui.find({ type: 'Text', text: 'ioncache-ai-tools | Settings' })).toBeDefined();
     expect(await ui.find({ key: 'skill:answer-questions' })).toBeDefined();
-    const previous = state.enabled;
-    await ui.press({ key: 'hook:answer-questions' });
-    expect(state.enabled).toBe(!previous);
-    const row = await ui.find({ key: 'hook:answer-questions' });
-    expect(row.props.label).toMatch(previous ? /^disabled/ : /^enabled/);
-    expect(await ui.find({ type: 'Text', text: /^Saved and verified/ })).toBeDefined();
+    for (const enabled of [false, true]) {
+      await ui.press({ key: 'hook:answer-questions' });
+      expect(state.enabled).toBe(enabled);
+      const row = await ui.find({ key: 'hook:answer-questions' });
+      expect(row.props.label).toBe('hook:answer-questions' + (enabled ? ' [x]' : ' [ ]'));
+      await expectSettingStatus(ui, 'hook:answer-questions', enabled);
+      await expectSettingStatus(ui, 'skill:answer-questions', true);
+      expect((await ui.find({ type: 'Text', text: /^Saved and verified/ })).props.color).toBe('green');
+    }
     await ui.press({ key: 'close' });
+    expect(state.status).toBeUndefined();
     await ui.unmount();
   }
   expect(state.opened).toBe(3);
   expect(state.closed).toBe(3);
+  expect(state.titles).toEqual(Array(3).fill('ioncache-ai-tools | Settings'));
   expect(state.requests[1].slice(2)).toEqual([
     '--json', '--ui', '--project', '/project with spaces', '--hook:answer-questions=disabled',
   ]);
   expect(state.requests[1][0]).toBe('python3');
   expect(state.requests[1][1]).toMatch(/\/hooks\/scripts\/plugin_settings.py$/);
+});
+
+test('small panes compact the header and keep navigation outside the scrolling body', async ($, on) => {
+  const state = backend(on);
+  state.project = '/a long project path with spaces/and several nested directories/current project';
+  for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
+    for (const [bodyColumns, bodyRows] of [[56, 6], [35, 20]]) {
+      await $.command.run({ command: COMMAND, args: '' });
+      const ui = await $.ui.mount({
+        ...PANE, surface,
+        props: { ...PANE.props, bodyColumns, scroll: { offset: 0, bodyRows } },
+      });
+      expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+      expect(state.statusSource).toBe('ioncache-ai-tools');
+      expect(await ui.find({
+        type: 'Text', text: '3 settings | Tab: move | Enter: toggle',
+      })).toBeDefined();
+      const location = await ui.find({ type: 'Text', text: 'Project: ' + state.project });
+      expect(location.props.wrap).toBe('truncate-middle');
+      expect(await ui.find({ type: 'Text', text: /^Editing:/ })).toBeUndefined();
+      expect(await ui.find({ type: 'Text', text: /^Changes save/ })).toBeUndefined();
+      expect(await ui.find({ type: 'Text', text: 'Hooks | Skills' })).toBeUndefined();
+      expect((await ui.find({ key: 'group:Hooks' })).props.marginTop).toBe(0);
+      for (const key of ['hook:answer-questions', 'hook:plugin-settings-ui', 'skill:answer-questions']) {
+        expect(await ui.find({ key })).toBeDefined();
+      }
+      await ui.press({ key: 'global' });
+      await expectScopeEmphasis(ui, 'global');
+      expect((await ui.find({ key: 'global' })).props.label).toBe('Global');
+      expect(state.status).toBe('Global | PgUp/PgDn: scroll');
+      await ui.press({ key: 'close' });
+      expect(state.status).toBeUndefined();
+      await ui.unmount();
+    }
+  }
+});
+
+test('a refused Close keeps the pinned status until closing succeeds', async ($, on) => {
+  const state = backend(on);
+  await $.command.run({ command: COMMAND, args: '' });
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  state.denyClose = true;
+  await expect(ui.press({ key: 'close' })).rejects.toThrow('Keep this pane open');
+  expect(state.closed).toBe(0);
+  expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+  state.denyClose = false;
+  await ui.press({ key: 'close' });
+  expect(state.closed).toBe(1);
+  expect(state.status).toBeUndefined();
+  await ui.unmount();
 });
 
 test('unrelated panes retain their downstream rendering', async ($, on) => {
@@ -117,7 +216,16 @@ test('global edits show project overrides and switching scopes does not write', 
   const state = backend(on);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect((await ui.find({ key: 'project' })).props.label).toBe('Project (editing)');
+  await expectScopeEmphasis(ui, 'project');
   await ui.press({ key: 'global' });
+  expect(state.status).toBe('Global | PgUp/PgDn: scroll');
+  await expectScopeEmphasis(ui, 'global');
+  expect((await ui.find({ key: 'project' })).props.label).toBe('Project');
+  expect((await ui.find({ key: 'global' })).props.label).toBe('Global (editing)');
+  expect(await ui.find({
+    type: 'Text', text: 'Editing: global settings (Claude, Copilot, Codex)',
+  })).toBeDefined();
   expect(state.requests[1].includes('--global')).toBe(true);
   expect(state.requests[1].some(arg => arg.startsWith('--hook:'))).toBe(false);
   expect(await ui.find({ type: 'Text', text: /Effective project:/ })).toBeUndefined();
@@ -126,13 +234,15 @@ test('global edits show project overrides and switching scopes does not write', 
   expect(await ui.find({ type: 'Text', text: '  Effective project: enabled' })).toBeDefined();
   state.effective = false;
   await ui.press({ key: 'hook:answer-questions' });
-  expect((await ui.find({ key: 'hook:answer-questions' })).props.label).toMatch(/^enabled/);
+  expect((await ui.find({ key: 'hook:answer-questions' })).props.label).toMatch(/\[x\]$/);
   expect(await ui.find({ type: 'Text', text: '  Effective project: disabled' })).toBeDefined();
   expect(await ui.find({ type: 'Text', text: '  Effective project: enabled' })).toBeUndefined();
   state.effective = true;
   await ui.press({ key: 'refresh' });
   expect(await ui.find({ type: 'Text', text: /Effective project:/ })).toBeUndefined();
   await ui.press({ key: 'project' });
+  expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+  await expectScopeEmphasis(ui, 'project');
   expect(state.requests[state.requests.length - 1].includes('--global')).toBe(false);
   await ui.unmount();
 });
@@ -142,12 +252,15 @@ test('reopening after Global mode restores project-scoped reads and writes', asy
   await $.command.run({ command: COMMAND, args: '' });
   const first = await $.ui.mount({ ...PANE, surface: 'terminal' });
   await first.press({ key: 'global' });
+  await expectScopeEmphasis(first, 'global');
   await first.press({ key: 'close' });
   await first.unmount();
 
   await $.command.run({ command: COMMAND, args: '' });
   const reopened = await $.ui.mount({ ...PANE, surface: 'terminal' });
-  expect(await reopened.find({ type: 'Text', text: 'Scope: project (Claude, Copilot, Codex)' })).toBeDefined();
+  expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+  await expectScopeEmphasis(reopened, 'project');
+  expect(await reopened.find({ type: 'Text', text: 'Editing: project settings (Claude, Copilot, Codex)' })).toBeDefined();
   expect(state.requests[2].slice(2)).toEqual(['--json', '--ui']);
   await reopened.press({ key: 'hook:answer-questions' });
   expect(state.requests[3].slice(2)).toEqual([
@@ -161,6 +274,7 @@ test('pending operations hide stale controls, serialize commands, and recover', 
   const state = backend(on, clock);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectCatalogSummary(ui, true);
 
   for (const failSave of [false, true]) {
     state.failSave = failSave;
@@ -170,11 +284,14 @@ test('pending operations hide stale controls, serialize commands, and recover', 
     try {
       await clock.settle();
       expect(state.requests.length).toBe(before + 1);
+      await expectCatalogSummary(ui, false);
+      expect((await ui.find({ type: 'Text', text: /^Reading settings\.\.\.$/ })).props.color).toBe('cyan');
       for (const key of ['hook:answer-questions', 'hook:plugin-settings-ui', 'project', 'global', 'refresh']) {
         expect(await ui.find({ key })).toBeUndefined();
       }
       await ui.press({ key: 'close' });
       expect(state.closed).toBe(failSave ? 2 : 1);
+      expect(state.status).toBeUndefined();
       const blocked = $.command.run({ command: COMMAND, args: '--list' });
       await clock.settle();
       expect(state.requests.length).toBe(before + 1);
@@ -184,12 +301,25 @@ test('pending operations hide stale controls, serialize commands, and recover', 
       await clock.advance(1000);
       await pending;
     }
+    expect(state.status).toBeUndefined();
     if (failSave) {
       expect(await ui.find({ key: 'hook:answer-questions' })).toBeUndefined();
-      expect(await ui.find({ type: 'Text', text: /No success confirmed.*Partial write/ })).toBeDefined();
+      expect((await ui.find({ type: 'Text', text: /No success confirmed.*Partial write/ })).props.color).toBe('red');
+      await expectCatalogSummary(ui, false);
       state.failSave = false;
-      await ui.press({ key: 'refresh' });
+      state.delayMs = 1000;
+      const refresh = ui.press({ key: 'refresh' });
+      try {
+        await clock.settle();
+        expect((await ui.find({ type: 'Text', text: /^Reading settings\.\.\.$/ })).props.color).toBe('cyan');
+        await expectCatalogSummary(ui, false);
+      } finally {
+        state.delayMs = 0;
+        await clock.advance(1000);
+        await refresh;
+      }
     }
+    await expectCatalogSummary(ui, true);
     expect(await ui.find({ key: 'hook:answer-questions' })).toBeDefined();
     expect(await ui.find({ key: 'global' })).toBeDefined();
     await ui.press({ key: 'hook:answer-questions' });
@@ -202,8 +332,11 @@ test('a mounted pane can disable itself and recover through the same command', a
   const state = backend(on);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  await expectCatalogSummary(ui, true);
   await ui.press({ key: 'hook:plugin-settings-ui' });
   expect(state.uiEnabled).toBe(false);
+  expect(state.status).toBeUndefined();
+  await expectCatalogSummary(ui, false);
   expect(await ui.find({ key: 'hook:answer-questions' })).toBeUndefined();
   expect(await ui.find({ key: 'hook:plugin-settings-ui' })).toBeUndefined();
   expect(await ui.find({
@@ -222,6 +355,8 @@ test('a mounted pane can disable itself and recover through the same command', a
   expect(state.uiEnabled).toBe(true);
   await $.command.run({ command: COMMAND, args: '' });
   const reopened = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+  await expectCatalogSummary(reopened, true);
   await reopened.press({ key: 'hook:answer-questions' });
   expect(state.enabled).toBe(false);
   expect(await reopened.find({ type: 'Text', text: /^Saved and verified/ })).toBeDefined();
@@ -229,7 +364,8 @@ test('a mounted pane can disable itself and recover through the same command', a
 });
 
 test('failed writes remove stale controls and refresh observes the partial write', async ($, on) => {
-  const state = backend(on);
+  const clock = mock.clock(on);
+  const state = backend(on, clock);
   await $.command.run({ command: COMMAND, args: '' });
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
   state.failSave = true;
@@ -237,9 +373,20 @@ test('failed writes remove stale controls and refresh observes the partial write
   expect(await ui.find({ key: 'hook:answer-questions' })).toBeUndefined();
   expect(await ui.find({ type: 'Text', text: /No success confirmed.*Partial write/ })).toBeDefined();
   expect(await ui.find({ type: 'Text', text: /^Saved and verified/ })).toBeUndefined();
+  expect(state.status).toBe('Read failed | Refresh to retry');
   state.failSave = false;
-  await ui.press({ key: 'refresh' });
-  expect((await ui.find({ key: 'hook:answer-questions' })).props.label).toMatch(/^disabled/);
+  state.delayMs = 1000;
+  const refresh = ui.press({ key: 'refresh' });
+  try {
+    await clock.settle();
+    expect(state.status).toBe('Project | Reading settings...');
+  } finally {
+    state.delayMs = 0;
+    await clock.advance(1000);
+    await refresh;
+  }
+  expect(state.status).toBe('Project | PgUp/PgDn: scroll');
+  expect((await ui.find({ key: 'hook:answer-questions' })).props.label).toMatch(/\[ \]$/);
   await ui.press({ key: 'hook:answer-questions' });
   expect(state.enabled).toBe(true);
   await ui.unmount();
@@ -265,6 +412,7 @@ test('the same bare command lists settings when the pane is disabled', async ($,
   expect(result.text).toMatch(/Settings listing/);
   expect(result.isTextDisplayOnly).toBe(true);
   expect(state.opened).toBe(0);
+  expect(state.status).toBeUndefined();
   state.uiEnabled = true;
   await $.command.run({ command: COMMAND, args: '' });
   expect(state.opened).toBe(1);
@@ -277,6 +425,7 @@ test('the same bare command lists settings when the host cannot place a pane', a
     const result = await $.command.run({ command: COMMAND, args: '' });
     expect(result.text).toMatch(/Settings listing/);
     expect(result.isTextDisplayOnly).toBe(true);
+    expect(state.status).toBeUndefined();
   }
   state.placement = 'shown';
   await $.command.run({ command: COMMAND, args: '' });
