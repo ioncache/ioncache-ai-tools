@@ -192,6 +192,7 @@ remain after synchronization finishes.
 | `autonomous-development-follow-ups` | Automatic follow-up issue creation by authorized development PR publishers; separate from run approval, audit publication and reporting |
 | `autonomous-development-incremental-planning` | Incremental delivery planning guidance in autonomous-development Prepare; when disabled, Prepare keeps its baseline planning step |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
+| `context-handoff` | Claude-only task-focused native compaction; preserves native continuation without tool denials |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
 | `engineering-judgment` | Startup engineering policy and skill guidance |
