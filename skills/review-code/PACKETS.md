@@ -141,13 +141,89 @@ Set observation kind to `native` only for a referenced native tool/transcript
 observation; a caller-authored description remains `caller`.
 Retain terminal failure diagnostics even when no worker/result was created.
 
-Read the original report and attach it as `result`, retaining its file.
-The embedded result must equal the original parsed report. Do not normalize
-its fields, even in a copy, to obtain a successful check. A malformed result
-remains a failed attempt and still spends its category's allowance; use a fresh
-replacement within the remaining bound. The helper retains inactive malformed
-results as diagnostics without preventing a valid replacement from completing.
-It includes the PROTOCOL.md fields; `instruction_set` is the instruction identity
+Read the complete original report and attach it as `result`, retaining its file.
+If JSON parsing fails or yields a JSON string instead of an object, use the
+report-only decoder before changing any fields:
+
+```sh
+python3 -B "/absolute/plugin/scripts/report_json.py" "/private/original-report.json" \
+  --project "/absolute/consuming/worktree"
+```
+
+It tries strict JSON first, then removes at most one enclosing Markdown fence,
+removes trailing commas outside strings, and decodes at most one extra JSON
+string layer. These operations may be combined. It never extracts objects from
+prose, merges reports, fills missing values or closes truncated JSON. Duplicate
+keys and non-finite numbers remain invalid. Inputs are bounded to 16 MiB and
+4096 trailing-comma removals per layer.
+
+The decoder writes `{report, json_repairs}` to stdout without changing files.
+Attach `report` as the attempt's `result`; retain `json_repairs` in its
+`observation` and give it to the adjudicator with the untouched original file.
+The repair record includes the original byte SHA-256, decoded-object identity
+and ordered transformations. Comma offsets are zero-based character positions
+in that step's input, after any preceding fence or string decoding.
+`json_repairs: null` means no syntax recovery was needed. The
+`review-report-json-recovery` setting disables these transformations, not strict parsing
+or other report repairs. Successful decoding is not schema validation or review
+acceptance; continue with `check`.
+
+Diagnose format errors before treating any review work as failed. `check`
+automatically reformats supported representations in a separate copy, validates
+that copy, and returns `report_repairs` with each attempt, original and normalized
+identities, field changes, and `normalized_result`. It never overwrites the
+original report or changes the attempt count.
+These identities hash parsed JSON with the helper's canonical `digest`, not raw
+file bytes. Keep the original file as well. A repair record describes formatting,
+not successful validation: inspect `errors` and `structurally_complete` too.
+
+Supported repairs include singleton and structured entries in source-reference
+and limitation lists, duplicate text entries, prose selection observations, and
+an instruction object that exactly matches the frozen instruction set or its
+identity-only wrapper. Structured entries become JSON strings retaining every
+field, not just a guessed path. Prose selection remains verbatim evidence with
+the actual model explicitly unknown. Identities, coverage, outcomes, findings,
+and conflicting evidence are still checked; reformatting cannot make missing
+work complete.
+
+For other format errors, inspect the full original and produce an equivalent
+JSON copy in caller-owned private storage. Preserve the original file and record
+its identity, the corrected artifact, and every transformation in the attempt's
+`observation`. Use the corrected copy as `result` only after comparing all
+substantive content; do not invent missing observations or discard unfamiliar
+fields. A wrapper or formatting mistake is not a reason to repeat discovery.
+If clarification is needed, ask the same worker to restate its existing output
+when its native handle supports that, preserving both versions. This is the
+same assignment, not a new review pass or replacement round.
+
+Give the adjudicator the originals and any repair records, not just the
+reformatted copies. Report successful recovery briefly. If safe repair remains
+impossible, report the exact attempt and field or parse error, what recovery was
+tried, and what evidence is unavailable. Never silently drop the report or
+present a generic incomplete verdict without its cause. Only genuinely missing,
+failed or noncompliant review work needs a fresh replacement within the existing
+bound. The helper retains unresolved inactive results as diagnostics without
+preventing a valid replacement from completing.
+
+Development handoff `check-report`, `submit`, and `finish` use the same syntax
+decoder for reports and candidates, but never for plans, settings or approvals.
+`check-report` returns syntax repairs without writing state or spending attempts.
+Submission archives the original bytes and stores `report_json_repairs` by job
+and byte identity in the batch. Accepted category coverage includes those records.
+Retained reports replay their recorded transformations even if new recovery is
+later disabled.
+
+Reviewer reports also use the same supported field-format repairs. They retain the original
+parsed report, not the normalized copy. The handoff helper archives the
+original bytes and final acceptance still requires the active result to match
+that collected report. Keep that original in the final handoff; the shared
+checker recomputes and persists `report_repairs` in accepted coverage. Do not
+replace it with the normalized copy or reopen worker launches. No format repair
+refunds previously consumed report corrections or review dispatches. The
+development helper's separate bounded `recover-report` command remains required
+when its report correction allowance was already exhausted.
+
+Each report includes the PROTOCOL.md fields; `instruction_set` is the instruction identity
 string and `packet_identity` is the submitted packet identity.
 The report may use `worker: null` when the child cannot observe its own native
 ID, even when the caller has observed that ID. Preserve both observations;
@@ -242,8 +318,10 @@ The adjudicator call still consumes the caller's existing dispatch allowance.
 `otherwise_complete` requires actual completion under the frozen rules,
 including required checks and explicit read/tool constraints. Do not attest it
 if the worker stopped early, adopted another ruleset, or omitted required work.
-Failed/missing/malformed reports, wrong identities or snapshots, reused workers
-and incomplete file coverage cannot be corrected this way. Neither zero
+Failed or missing work, unresolved report errors, wrong identities or snapshots,
+reused workers and incomplete file coverage cannot be corrected this way.
+Apply format-only recovery first; it does not change the original identity
+to which this separate assessment is bound. Neither zero
 findings nor exhausted limits justify a correction. Contradictory or inadequate
 evidence remains unresolved.
 

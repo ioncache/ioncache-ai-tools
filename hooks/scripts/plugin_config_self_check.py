@@ -131,6 +131,7 @@ class ConfigurationTests(unittest.TestCase):
             'autonomous-development:execution': 'autonomous-development',
             'autonomous-development:audit': 'autonomous-development-audit',
             'review:comments': 'review-comments',
+            'review:report-json-recovery': 'review-report-json-recovery',
             'skill:comments': 'skill:comments',
         }
 

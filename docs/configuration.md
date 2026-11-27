@@ -298,6 +298,15 @@ It does not repeat the worker, reset counters or bypass acceptance.
 The read-only `check-report` precheck remains available without spending attempts.
 See [../skills/autonomous-development/RECOVERY.md](../skills/autonomous-development/RECOVERY.md).
 
+`review-report-json-recovery` enables dependency-free syntax recovery in the
+standalone report decoder and development handoff:
+one enclosing Markdown fence, trailing commas outside strings, and one extra JSON
+string layer. It preserves original files and records every transformation.
+It never repairs truncated or ambiguous input, changes control JSON, relaxes
+report validation or refunds attempts. Disabling it leaves strict parsing and
+report correction available; previously recorded repairs remain replayable.
+See [../skills/review-code/PACKETS.md](../skills/review-code/PACKETS.md).
+
 `autonomous-development-rebase-review` enables verified clean-rebase recovery for
 an accepted review. It preserves the original review and all consumed allowances;
 changed patches still require a counted review. Disabling it does not change

@@ -9,8 +9,8 @@ argument-hint: "[target] [--help] [--post-comments] [--lead-model MODEL] [--revi
 Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
-The caller/coordinator may write private request, option, and instruction
-records; leaf workers may write only assigned result files.
+The caller/coordinator may write private request, option, instruction, and
+lossless report-repair records; leaf workers may write only assigned result files.
 All belong in private scratch outside the reviewed tree.
 They never authorize code or ledger edits.
 
@@ -143,6 +143,11 @@ them. They exclude ignored inputs, store symlink target
 text rather than target content, and reject submodules and special files.
 Non-Git or required excluded inputs need an explicit alternative identity
 and coverage limitation; never present them as protected by this fingerprint.
+
+Check worker reports promptly. Diagnose and repair formatting errors through
+PACKETS.md without discarding completed analysis, rerunning discovery or spending
+a replacement round. Preserve originals and report any unrecoverable failure's
+exact cause and attempted recovery.
 
 Run the packet helper's structural check, then check the returned handback
 against the request, required assignments, worker

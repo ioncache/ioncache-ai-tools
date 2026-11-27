@@ -2,20 +2,19 @@
 
 import copy
 import json
-import os
 from pathlib import Path
-import stat
 
 import development_manifest as plan
 import development_models as models
 import development_followups as followups
 import review_assignments as assignments
 import review_ledger as review
+import report_json
+from report_json import MAX_JSON_BYTES, read_bytes
 import writing_guidance
 
 
 LEAVES = ("reviewer", "adjudicator", "validator", "fixer")
-MAX_JSON_BYTES = 16 * 1024 * 1024
 CAPABILITIES = ("artifact_access", "native_permissions", "fresh_workers",
                 "independent_review", "result_delivery", "cancellation")
 CAPABILITY_STATUSES = ("verified", "available", "deferred", "missing")
@@ -107,17 +106,6 @@ def report_fields(value, required, optional, label):
     plan.require(not errors, f"{label}: " + "; ".join(errors))
 
 
-def read_bytes(path):
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        plan.require(stat.S_ISREG(info.st_mode), f"Expected a regular JSON file: {path}")
-        plan.require(info.st_size <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
-        content = stream.read(MAX_JSON_BYTES + 1)
-        plan.require(len(content) <= MAX_JSON_BYTES, f"JSON exceeds the size limit: {path}")
-        return content
-
-
 def decode_json(content):
     try:
         return json.loads(content)
@@ -132,7 +120,10 @@ def retained_report(record, number):
                                    f"handoffs/{record['id']}/{number}-{receipt['sha256']}.json")
         content = read_bytes(archive)
         plan.require(plan.digest(content) == receipt["sha256"], f"Collected archive changed: {archive}")
-        return decode_json(content)
+        expected = record.get("report_json_repairs", {}).get(str(number), {}).get(receipt["sha256"])
+        value, repair = report_json.decode(content, recover=expected is not None)
+        plan.require(repair == expected, "Collected report JSON repair record changed; restore its original record")
+        return value
     except (OSError, ValueError) as error:
         raise review.EvidenceUnavailable(
             f"Collected reviewer evidence unavailable: {error}. Restore the retained archive "
@@ -142,8 +133,9 @@ def retained_report(record, number):
 def require_collected_review(state, assignment, handoff):
     batches = [item for item in state.get("handoffs", {}).values() if item["assignment"] == assignment["id"]]
     if not batches:
-        return
+        return []
     collected = {}
+    repairs = []
     for batch in batches:
         if batch["status"] not in ("collected", "reconciled"):
             continue
@@ -163,6 +155,11 @@ def require_collected_review(state, assignment, handoff):
         plan.require(assignments.digest(attempt["result"]) == assignments.digest(report),
                      f"Final result differs from the collected reviewer report for {attempt['id']}. "
                      "Restore the handoff's original result from its retained archive; do not repeat the review.")
+        batch, number = source
+        for identity, repair in batch.get("report_json_repairs", {}).get(str(number), {}).items():
+            archive = Path(batch["spec"]["store"]) / "handoffs" / batch["id"] / f"{number}-{identity}.json"
+            repairs.append({"attempt": attempt["id"], "archive": str(archive), **repair})
+    return repairs
 
 
 def report_path(assignment, value):
@@ -366,7 +363,9 @@ def validate(assignment, job, report):
     plan.require(isinstance(report, dict) and report.get("outcome") in ("complete", "partial", "failed", "blocked"),
                  "Leaf report requires a complete, partial, failed or blocked outcome")
     if role == "reviewer":
-        assignments.checked_result({"packet": job["packet"], "worker": report.get("worker"), "result": report})
+        attempt = {"packet": job["packet"], "worker": report.get("worker"), "result": report}
+        normalized, _ = assignments.repair_result(attempt)
+        assignments.checked_result({**attempt, "result": normalized})
     else:
         plan.require(bool(report.get("summary")) or bool(report.get("assessments")) or
                      "candidates" in report or "findings" in report,

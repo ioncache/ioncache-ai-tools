@@ -34,6 +34,7 @@
     "review-performance": true,
     "review-post-comments": true,
     "review-privacy": true,
+    "review-report-json-recovery": true,
     "review-security": true,
     "review-test-coverage": true,
     "review-unit-tests": true,
