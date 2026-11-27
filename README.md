@@ -176,7 +176,7 @@ The names below are settings, not commands to invoke.
 | --- | --- | --- |
 | `hook:docs-cache` | Enabled | Reuse fetched documentation facts; distillation makes extra model calls and consumes host usage. [docs/documentation-cache.md](docs/documentation-cache.md) |
 | `hook:plugin-settings-ui` | Enabled | Open the native Claude settings pane when available; keep the text interface available otherwise. [docs/configuration.md#native-claude-settings-pane](docs/configuration.md#native-claude-settings-pane) |
-| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only; adds model usage and latency. [docs/response-validation.md](docs/response-validation.md) |
+| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only. Token-heavy because each textual response adds a model review, so it is disabled by default. [docs/response-validation.md](docs/response-validation.md) |
 
 If response validation cannot finish, the reply is preserved with a preface
 explaining why.
