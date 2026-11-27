@@ -191,7 +191,11 @@ live outside the plugin cache and need no reinstall.
 Category-isolation acceptance needs fresh host sessions using this source,
 including child workers. A source self-check does not replace native instruction
 delivery evidence. Do not treat an old cached session as testing the new guidance.
-Refresh catalog writers together: older copies can erase new `review-*` settings.
+Refresh catalog writers together: copies predating unknown-setting preservation
+can erase any newer feature's opt-out. Retire a setting by removing it from the
+active catalog and adding its ID to `RETIRED_FEATURES` in
+`hooks/scripts/plugin_config.py`; absence from one copy's catalog does not mean
+a setting is retired.
 See [review-evaluation.md](review-evaluation.md) for the separate offline/native
 acceptance paths and [configuration.md](configuration.md) for rollout limitations.
 

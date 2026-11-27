@@ -291,7 +291,9 @@ construct the character with `chr(0x2014)` to pass this source check.
   `config/defaults.json`, enabled by default except `response-validation`, which
   is opt-in because of its model usage and latency. Configuration is part of
   every feature change, not optional follow-up work. Synchronization preserves
-  local values for retained settings, adds new defaults, and removes retired settings.
+  local values for retained and unknown settings, adds new defaults, and removes
+  only explicitly retired IDs from `plugin_config.RETIRED_FEATURES`.
+  Unknown settings are stored but never activated by a catalog that lacks them.
   Add coverage for the opt-out and keep unrelated safeguards independent.
 - Retained inactive implementations must not be imported or registered by
   active hooks. Their retired settings must not appear in the shipped catalog.
@@ -343,7 +345,9 @@ construct the character with `chr(0x2014)` to pass this source check.
   `plugin_config.py` install/update command. All three hosts use plugin-owned
   JSON with a `features` boolean map. Global files contain every shipped key;
   project overrides stay sparse. Resolve defaults, global values, embedded
-  project values, then the project file. Union disables across hosts.
+  project values, then the project file. Resolve project paths and embedded keys
+  consistently; conflicting aliases retain opt-outs within the embedded layer.
+  Union disables across hosts.
   Legacy JSON lists migrate in place; Codex TOML is a one-time migration source
   only when the companion JSON does not exist. Never rewrite host TOML.
   Read unchanged settings without a writer lock; re-read under the lock before

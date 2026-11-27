@@ -169,6 +169,12 @@ project values in the global file's `projects` map, then the project file.
 A feature disabled by any host's effective settings is disabled across all
 three hosts.
 
+Embedded project paths are matched by their resolved absolute paths, including
+symlinks and `..` segments. Hooks, the settings commands and planning lookups
+use the same matching rule without rewriting stored path spellings. If multiple
+entries resolve to the same project, `false` wins for conflicting embedded
+values. The project file still takes precedence over those embedded values.
+
 For example, disable the broad-process-termination guard globally:
 
 ```json
@@ -324,11 +330,16 @@ is reported as unavailable guidance, not as enabled; Prepare continues with the
 baseline. See
 [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md).
 
-Do not mix old and new catalog writers while using the new review controls.
-An older cached plugin removes keys it does not recognize; a newer copy then
-restores their default `true`, losing an intended opt-out. Refresh all active
-host copies together and recheck effective settings. Mixed-version preservation
-of new settings is not supported.
+Settings writers preserve unknown feature IDs and their boolean values in
+global, embedded-project and project settings. Preserved IDs are inactive and
+absent from the settings listing until the running copy's catalog includes them.
+Explicitly retired IDs are still removed.
+
+Cached copies from before this preservation fix can still erase any newer
+setting, not just review controls. A later copy then restores the feature's
+default, losing an intended opt-out. Refresh all active host copies together
+and recheck effective settings; this fix cannot change an already installed
+older writer or recover choices it has already erased.
 
 Hooks reconcile settings on each invocation. To synchronize explicitly after
 installing or updating, run this from the installed plugin directory:
@@ -340,8 +351,8 @@ python3 hooks/scripts/plugin_config.py copilot --project /absolute/path/to/proje
 Replace `copilot` with `claude` or `codex` as needed. Installation itself does
 not run this command.
 
-Synchronization preserves retained values, adds new global defaults, and
-removes unknown or retired keys. Writes are locked and atomic, preserve
+Synchronization preserves known and unknown values, adds new global defaults,
+and removes explicitly retired keys. Writes are locked and atomic, preserve
 intentional symlinks, and skip unchanged files. Settings are reused within
 one hook invocation and are not cached across invocations.
 

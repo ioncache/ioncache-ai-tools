@@ -791,9 +791,9 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_install_update_adds_preserves_and_removes_settings(self):
         path = self.root / 'config.json'
-        old = {'features': {'retained': True, 'disabled': True, 'removed': True}}
+        old = {'features': {'retained': True, 'disabled': True, 'graphify': True}}
         self.assertEqual(config.sync_file(path, old['features']), old)
-        self.write(path, {'features': {'retained': False, 'disabled': False, 'removed': False}})
+        self.write(path, {'features': {'retained': False, 'disabled': False, 'graphify': False}})
         new = {'retained': True, 'disabled': True, 'added': True}
         expected = {'features': {'retained': False, 'disabled': False, 'added': True}}
         self.assertEqual(config.sync_file(path, new), expected)
@@ -801,6 +801,79 @@ class ConfigurationTests(unittest.TestCase):
         stamp = path.stat().st_mtime_ns
         config.sync_file(path, new)
         self.assertEqual(path.stat().st_mtime_ns, stamp)
+
+    def test_older_catalog_writes_preserve_newer_opt_outs_in_every_scope(self):
+        name = 'review-report-json-recovery'
+        newer = config.defaults()
+        older = {key: value for key, value in newer.items() if key != name}
+        documents = (
+            (True, {'features': {name: False}}),
+            (False, {'features': {name: False}}),
+            (True, {'features': {}, 'projects': {str(self.project): {'features': {name: False}}}}),
+        )
+        path = self.root / 'mixed-versions.json'
+        for complete, document in documents:
+            with self.subTest(complete=complete, document=document):
+                self.write(path, document)
+                config.sync_file(path, older, complete=complete, updates={'fix_emdash': False})
+                stored = json.loads(path.read_text())
+                scope = stored['projects'][str(self.project)] if 'projects' in document else stored
+                self.assertIs(scope['features'].get(name), False)
+                config.sync_file(path, newer, complete=complete)
+                stored = json.loads(path.read_text())
+                scope = stored['projects'][str(self.project)] if 'projects' in document else stored
+                self.assertFalse(scope['features'][name])
+                self.assertFalse(stored['features']['fix_emdash'])
+                stamp = path.stat().st_mtime_ns
+                config.sync_file(path, older, complete=complete)
+                self.assertEqual(path.stat().st_mtime_ns, stamp)
+
+    def test_unknown_settings_are_preserved_but_never_effective(self):
+        name = 'future-feature'
+        path = config.paths(self.project)['claude'][0]
+        self.write(path, {'features': {name: False, 'fix_emdash': False}})
+        self.assertEqual(config.synchronize(str(self.project), 'claude'),
+                         {'fix_emdash', 'response-validation'})
+        self.assertIs(json.loads(path.read_text())['features'].get(name), False)
+        self.write(path, {'features': {name: True}})
+        self.assertFalse(config.enabled(name, self.data))
+        self.assertIs(json.loads(path.read_text())['features'].get(name), True)
+
+    def test_embedded_project_overrides_match_aliases_in_hooks_and_commands(self):
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        spellings = (self.project, link, self.project / '..' / 'project')
+        path = config.paths(self.project)['claude'][0]
+        for stored, current in product(spellings, repeat=2):
+            with self.subTest(stored=stored, current=current):
+                self.write(path, {'features': {}, 'projects': {
+                    str(stored): {'features': {'fix_emdash': False}},
+                }})
+                self.assertFalse(config.enabled('fix_emdash', {**self.data, 'cwd': str(current)}))
+                with mock.patch.object(sys, 'argv', [
+                    'plugin_config.py', 'claude', '--project', str(current), '--feature', 'fix_emdash',
+                ]), mock.patch.object(sys, 'stdout', io.StringIO()) as stdout:
+                    config.main()
+                self.assertEqual(json.loads(stdout.getvalue()), {'enabled': False})
+                code, output, error = self.settings_command('--project', str(current), '--json', raw=True)
+                self.assertEqual(code, 0, error)
+                rows = {row['name']: row for group in json.loads(output)['groups'] for row in group['settings']}
+                self.assertFalse(rows['hook:fix_emdash']['effective'])
+
+    def test_conflicting_project_aliases_keep_opt_outs_and_project_file_precedence(self):
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        path, local = config.paths(self.project)['claude']
+        entries = [(str(self.project), {'features': {'fix_emdash': True}}),
+                   (str(link), {'features': {'fix_emdash': False}})]
+        for ordered in (entries, list(reversed(entries))):
+            with self.subTest(ordered=ordered):
+                self.write(path, {'features': {}, 'projects': dict(ordered)})
+                self.assertIn('fix_emdash', config.synchronize(str(self.project), persist=False, strict=True))
+                self.assertIn('fix_emdash', config.synchronize(str(link), persist=False, strict=True))
+                self.write(local, {'features': {'fix_emdash': True}})
+                self.assertNotIn('fix_emdash', config.synchronize(str(link), persist=False, strict=True))
+                local.unlink()
 
     def test_legacy_settings_migrate_and_retired_claim_settings_disappear(self):
         for host, (path, project_path) in config.paths(self.project).items():
@@ -843,7 +916,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_project_overrides_inherit_defaults_and_cross_host_disables(self):
         paths = config.paths(self.project)
         self.write(paths['copilot'][0], {'features': {'fix_emdash': False}})
-        self.write(paths['copilot'][1], {'features': {'fix_emdash': True, 'removed': False}})
+        self.write(paths['copilot'][1], {'features': {'fix_emdash': True, 'graphify': False}})
         self.assertNotIn('fix_emdash', config.synchronize(str(self.project), 'copilot'))
         self.assertEqual(json.loads(paths['copilot'][1].read_text()), {'features': {'fix_emdash': True}})
         self.write(paths['claude'][1], {'features': {'fix_emdash': False}})
@@ -852,7 +925,8 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_invalid_configuration_is_not_replaced_or_silently_enabled(self):
         path = self.root / 'invalid.json'
-        for text in ('{bad', '[]', '{"features":{"fix_emdash":"false"}}'):
+        for text in ('{bad', '[]', '{"features":{"fix_emdash":"false"}}',
+                     '{"features":{"future-feature":"false"}}'):
             path.write_text(text)
             with self.subTest(text=text), self.assertRaises(ValueError):
                 config.sync_file(path, config.defaults())

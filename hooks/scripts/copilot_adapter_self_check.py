@@ -22,6 +22,7 @@ import copilot_question
 import docs_cache
 import guidance
 import hook_adapter_common
+import plugin_config
 import plugin_settings
 from classify_question import marker_path
 from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
@@ -116,6 +117,27 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tool('skill', skill), {})
         self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+
+    def test_project_alias_opt_out_survives_older_catalog_hooks(self):
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        self.payload['cwd'] = str(link)
+        command = {'command': 'pkill fixture'}
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        path = self.home / '.claude/ioncache-ai-tools.local.json'
+        self.write_config(path, {'features': {}, 'projects': {
+            str(self.project.resolve()): {'features': {'no_broad_process_kill': False}},
+        }})
+        self.assertEqual(self.tool('bash', command), {})
+        older = {name: value for name, value in plugin_config.defaults().items()
+                 if name != 'no_broad_process_kill'}
+        with mock.patch.object(plugin_config, 'defaults', return_value=older):
+            self.assertEqual(self.tool('bash', {'command': 'printf fixture'}), {})
+        self.assertEqual(self.tool('bash', command), {})
+        self.assertEqual(self.tool('bash', {'command': 'git worktree add /tmp/new'})['permissionDecision'], 'deny')
+        self.write_config(path, {'features': {}})
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'kill -TERM 12345'}), {})
 
     def native_history(self, *groups):
         events = [event for group in groups for event in NATIVE_QUESTION_EVENTS[group]]
