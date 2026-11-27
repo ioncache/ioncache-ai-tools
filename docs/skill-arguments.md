@@ -199,7 +199,7 @@ Support for newer flags depends on your installed Git version.
 | `-f`, `--force` | Off | Override Git checks such as a branch already being checked out or a missing path still registered to another worktree. A missing locked worktree path requires the flag twice. |
 | `--lock` | Off | Lock the worktree at creation so Git does not automatically prune its registration. |
 | `--reason TEXT` | No lock explanation | With `--lock`, record why the worktree is locked. Quote a multi-word reason. |
-| `-t`, `--track[=MODE]`, `--no-track` | Git configuration; normally track a remote-tracking start branch | Set or suppress upstream tracking for a new branch. `--track` or `--track=direct` tracks the start-point branch; `--track=inherit` copies its upstream configuration. |
+| `--track[=MODE]`, `--no-track` | Git configuration; normally track a remote-tracking start branch | Set or suppress upstream tracking for a new branch. `--track` or `--track=direct` tracks the start-point branch; `--track=inherit` copies its upstream configuration. |
 | `--guess-remote`, `--no-guess-remote` | `worktree.guessRemote`, normally off | Without a commit argument, prefer a uniquely matching remote-tracking branch for the destination's branch name. |
 | `--relative-paths`, `--no-relative-paths` | `worktree.useRelativePaths`, normally absolute paths | Choose relative or absolute links between Git's worktree metadata and the new directory. |
 | `-q`, `--quiet` | Off | Suppress Git's worktree-add feedback, not the plugin's setup output. |
