@@ -9,7 +9,7 @@ import plugin_config as config
 
 HOOK_SETTINGS = frozenset({
     'answer-questions', 'autonomous-development-explicit-only', 'block_raw_worktree_add',
-    'docs-cache', 'fix_emdash', 'no_broad_process_kill', 'no-manual-lockfile-edit',
+    'context-handoff', 'docs-cache', 'fix_emdash', 'no_broad_process_kill', 'no-manual-lockfile-edit',
     'no_manual_lockfile_edit_bash', 'plugin-settings-ui', 'response-validation',
 })
 INSTRUCTION_SETTINGS = frozenset({

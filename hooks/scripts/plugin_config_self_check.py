@@ -126,12 +126,14 @@ class ConfigurationTests(unittest.TestCase):
         flags = {
             'hook:answer-questions': 'answer-questions',
             'hook:autonomous-development:explicit-only': 'autonomous-development-explicit-only',
+            'hook:context-handoff': 'context-handoff',
             'hook:response-validation': 'response-validation',
             'instruction:documentation-first': 'documentation-first',
             'autonomous-development:execution': 'autonomous-development',
             'autonomous-development:audit': 'autonomous-development-audit',
             'review:comments': 'review-comments',
             'skill:comments': 'skill:comments',
+            'skill:context-handoff': 'skill:context-handoff',
         }
 
         code, output, error = self.settings_command(*(f'--{name}=disabled' for name in flags))

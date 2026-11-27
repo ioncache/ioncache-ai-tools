@@ -131,6 +131,7 @@ identify additional model calls, repeated review passes, and context overhead.
 | `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them.<br><br>Task arguments (failing command and errors): [Argument details](docs/skill-arguments.md#triage-errors). |
 | `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+.<br><br>Arguments (destination and Git worktree options): [Argument details](docs/skill-arguments.md#create-worktree). |
 | `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts.<br><br>Arguments (listing, scope, and setting flags): [Argument details](docs/skill-arguments.md#plugin-settings). |
+| `/ioncache-ai-tools:context-handoff` | Enabled | Write a portable handoff with the current task, decisions, and user instructions without stopping workers.<br><br>Task argument (optional destination): [Argument details](docs/context-handoff.md#use). |
 | `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection.<br><br>Task arguments (idea, artifacts, or saved run): [Argument details](docs/skill-arguments.md#autonomous-development).<br><br><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps. |
 
 Review and approve the autonomous-development plan, content, permissions, and
@@ -175,6 +176,7 @@ The names below are settings, not commands to invoke.
 
 | Setting | Default | Guidance |
 | --- | --- | --- |
+| `hook:context-handoff` | Enabled | Preserve task-focused context during Claude Code 2.1.332+ native compaction without stopping workers for `/clear`.<br><br>[Documentation details](docs/context-handoff.md).<br><br><strong>Token usage:</strong> Native compaction consumes model tokens. The plugin adds instructions to that operation without launching a separate model. |
 | `hook:docs-cache` | Enabled | Reuse fetched documentation facts.<br><br>[Documentation details](docs/documentation-cache.md).<br><br><strong>Token usage:</strong> Fact distillation runs outside the conversation and makes additional model calls, consuming host tokens. |
 | `hook:plugin-settings-ui` | Enabled | Open the native Claude settings pane when available; keep the text interface available otherwise.<br><br>[Documentation details](docs/configuration.md#native-claude-settings-pane) |
 | `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only.<br><br>[Documentation details](docs/response-validation.md).<br><br><strong>Token usage:</strong> Token-heavy because each textual response adds a model review, so it is disabled by default. |

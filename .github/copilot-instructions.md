@@ -17,7 +17,7 @@ settings mod in `hooks/plugin-settings.mjs` uses the host-required ES module
 format and the shared Python settings helper, not a separate preference store.
 Its native `.test.ts` tests run offline with the contributor Claude CLI.
 Claude's response-validation mod also uses the native ES module format.
-The single `hooks/register.mjs` entry registers both native mods.
+The single `hooks/register.mjs` entry registers the native mods.
 The release helper
 dynamically imports the ESM-only `conventional-changelog` packages from
 contributor dev dependencies; the worktree helper uses Node built-ins.
@@ -78,6 +78,11 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   tool calls. `response-validation` is off by default because
   it adds model usage and latency; it remains independently configurable.
   Copilot and Codex do not run this mod. Stop hooks only deliver cache notices.
+  Claude's `hooks/context-handoff.mjs` changes native compaction instructions
+  without replacing messages or blocking tools. Claude owns the automatic
+  threshold and continuation. Child compactions are untouched; failures retain
+  native recovery. Do not restore the old status-line/pending-file workflow
+  or make `/clear` a continuation requirement.
   `block_emdash_turn.py` is retained inactive source.
   Question markers (`classify_question.marker_path`) are keyed by session and
   agent identity. A marker requires a positively identified root-user prompt.
