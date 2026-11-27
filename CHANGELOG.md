@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.15.0 (2026-11-27)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* None.
+
 ## 1.14.3 (2026-11-27)
 
 ### New
