@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.14.3 (2026-11-27)
+
+### New
+
+* None.
+
+### Updated
+
+* None.
+
+### Fixed
+
+* keep settings pane controls visible and align states ([#88](https://github.com/ioncache/ioncache-ai-tools/issues/88)) ([73c7b3c](https://github.com/ioncache/ioncache-ai-tools/commit/73c7b3c883b7fa45ddcbc72d3adee245ac6760f8))
+
 ## 1.14.2 (2026-11-27)
 
 ### New
