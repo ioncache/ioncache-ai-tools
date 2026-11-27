@@ -87,9 +87,13 @@ Completed reviews precede commits, and a full-PR review precedes readiness.
 Accepted exceptions remain visible. Neither the controller nor its workers may
 approve or merge PRs, force-push, deploy, or silently expand approved scope.
 
-The adapter has offline lifecycle checks, not live-host qualification. Test
-native permissions, worker identities, result delivery, cancellation, and resume
-in an explicitly approved disposable trial before relying on unattended use.
+Offline lifecycle checks do not establish native permissions, worker launch,
+result delivery or cancellation on a given host. Execution establishes those
+from the selected host's evidence, and the launching session reports any the
+preflight record deferred that no later step established; see
+[the worker contract](../skills/autonomous-development/WORKERS.md).
+Authorization already given needs no separate trial approval or trial budget;
+see Prepare step 6 of [the skill](../skills/autonomous-development/SKILL.md).
 Hosting, shared storage, team controls, notification services, and browser/upload
 capabilities are consuming-environment requirements, not provisioned services.
 

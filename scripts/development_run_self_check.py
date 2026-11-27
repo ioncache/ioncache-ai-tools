@@ -559,6 +559,8 @@ class DevelopmentRunTests(unittest.TestCase):
     @pytest.mark.stable_storage
     def test_preexisting_no_action_finding_reaches_pr_draft_and_final_report(self):
         self.plan["permissions"]["create_follow_up_issues"] = True
+        closing = "PR first links fixture issue 1 and may close it"
+        self.plan["constraints"].append(closing)
         self.init()
         self.preflight()
         root = self.prepare()
@@ -596,6 +598,16 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("preexisting issue", draft["progress"]["known_issues_pr_draft"])
         self.assertIn("Not introduced by this change", draft["progress"]["known_issues_pr_draft"])
         prompt = handoffs.jobs.instructions(draft, {"role": "draft"}, "/pinned")
+        self.assertIn(closing, draft["constraints"])
+        self.assertIn(json.dumps(closing), prompt)
+        requirements = next(item for item in draft["artifacts"] if item["role"] == "requirements")
+        self.assertEqual(requirements["source"], "https://example.invalid/requirements")
+        self.assertIn(json.dumps(requirements["source"]), prompt)
+        self.assertIn(json.dumps(self.plan["repository"]["url"]), prompt)
+        self.assertIn(json.dumps(draft["manifest_file"]), prompt)
+        approved = json.loads(Path(draft["manifest_file"]).read_bytes())
+        self.assertIn("requirements", next(task["artifacts"] for task in approved["tasks"]
+                                           if task["pr"] == draft["pr"]))
         self.assertIn("Known issues not fixed here", prompt)
         self.assertIn("Create or reuse follow-up issues automatically", prompt)
         self.execute_fixture(draft)
@@ -6671,6 +6683,66 @@ class DevelopmentRunTests(unittest.TestCase):
                 change(value)
                 with self.assertRaises(manifest.ManifestError):
                     manifest.validate(value, self.bundle)
+
+    def test_unknown_fields_and_cross_pr_task_edges_without_pr_edges_are_rejected(self):
+        conditional = copy.deepcopy(self.plan)
+        conditional["tasks"][0]["optional"] = True
+        with self.assertRaisesRegex(manifest.ManifestError, "Expected fields"):
+            manifest.validate(conditional, self.bundle)
+        split = copy.deepcopy(self.plan)
+        second = {**copy.deepcopy(split["prs"][0]), "id": "second", "branch": "fixture-second",
+                  "worktree": ".worktrees/fixture-second"}
+        split["prs"].append(second)
+        split["tasks"].append({**copy.deepcopy(split["tasks"][0]), "id": "follow", "pr": "second",
+                               "dependencies": ["change"]})
+        with self.assertRaisesRegex(manifest.ManifestError, "Cross-PR task dependencies"):
+            manifest.validate(split, self.bundle)
+        second["dependencies"].append("first")
+        manifest.validate(split, self.bundle)
+
+    def test_init_rejects_an_approval_for_different_manifest_content(self):
+        self.path.write_bytes(manifest.encode(self.plan))
+        approved = self.cli("validate", self.path)["identity"]
+        self.plan["objective"] = "Changed after approval"
+        self.path.write_bytes(manifest.encode(self.plan))
+        error = self.cli("init", self.path, "--approved", approved,
+                         "--root", self.root, "--store", self.store, ok=False)
+        self.assertIn("Approval must identify this exact manifest", error)
+        self.assertFalse(self.store.exists())
+        self.init()
+        self.assertEqual(self.state["outcome"], "running")
+
+    def test_prepare_rejects_unmerged_prerequisites_and_unrelated_bases_until_corrected(self):
+        second = copy.deepcopy(self.plan["prs"][0])
+        second.update(id="second", branch="second", worktree=".worktrees/second", dependencies=["first"])
+        self.plan["prs"].append(second)
+        task = copy.deepcopy(self.plan["tasks"][0])
+        task.update(id="second", pr="second")
+        self.plan["tasks"].append(task)
+        self.init()
+        self.preflight()
+        self.prepare()
+        while self.next()["role"] != "prepare":
+            self.execute_fixture(self.state["assignment"])
+        assignment = self.state["assignment"]
+        self.assertEqual(assignment["pr"], "second")
+        subprocess.run([sys.executable, str(SCRIPTS / "create-worktree.py"), "-b", second["branch"],
+                        assignment["root"], second["base"]], cwd=self.root,
+                       env=self.env, check=True, capture_output=True)
+        root = Path(assignment["root"])
+        prepared = self.git("rev-parse", "HEAD", root=root)
+        unmerged = self.finish({"base": prepared, "merged_dependencies": []}, ok=False)
+        self.assertIn("Every prerequisite PR must be observed merged", unmerged)
+        # An orphan commit on the PR's own branch passes the branch check but not ancestry.
+        self.git("checkout", "--orphan", "unrelated", root=root)
+        self.git("commit", "--allow-empty", "-m", "Unrelated history", root=root)
+        self.git("branch", "-M", second["branch"], root=root)
+        unrelated = self.git("rev-parse", "HEAD", root=root)
+        diverged = self.finish({"base": unrelated, "merged_dependencies": ["first"]}, ok=False)
+        self.assertIn("merge-base --is-ancestor", diverged)
+        self.git("reset", "--hard", prepared, root=root)
+        self.finish({"base": prepared, "merged_dependencies": ["first"]})
+        self.assertEqual(development.load(self.store)["prs"]["second"]["base"], prepared)
 
     def test_failed_or_missing_results_preserve_attempts_and_require_shutdown(self):
         self.plan["limits"]["attempts"] = 1

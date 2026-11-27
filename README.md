@@ -225,8 +225,17 @@ evidence-based recovery without repeating work. An unchanged reviewed patch can
 recover after a target-branch rebase without spending another review.
 See [skills/autonomous-development/RECOVERY.md](skills/autonomous-development/RECOVERY.md).
 
-The adapter is **not yet live-host qualified**; offline checks do not establish
-unattended permissions, cloud operation, or shared team controls.
+Offline checks establish only the controller and adapter contracts they
+exercise. They do not establish native permissions, worker launch, result
+delivery or cancellation on a given host. Execution establishes those from the
+selected host's evidence, and the launching session reports any the preflight
+record deferred that no later step established; see
+[skills/autonomous-development/WORKERS.md](skills/autonomous-development/WORKERS.md).
+Neither establishes cloud operation or shared team controls, which the consuming
+environment must provide.
+Authorization you already gave needs no separate trial approval or trial budget;
+see Prepare step 6 in
+[skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
 
 The launcher supplies the private store path and a cross-session monitor:
 
@@ -246,6 +255,11 @@ body. The wiki must already be initialized and writable. No audit branch or
 manual upload is used. Private inputs and raw reports stay local. The public narrative
 requires publication review. Set `autonomous-development-audit` to `false` to
 disable this independently. See [skills/autonomous-development/AUDIT.md](skills/autonomous-development/AUDIT.md).
+
+Preparation weighs PR slicing, feature flags and optional child issues with
+[skills/autonomous-development/PLANNING.md](skills/autonomous-development/PLANNING.md).
+Set `autonomous-development-incremental-planning` to `false` to keep the
+baseline planning step instead.
 
 Usage and recovery: [skills/autonomous-development/SKILL.md](skills/autonomous-development/SKILL.md).
 Manifest fields: [skills/autonomous-development/CONTRACT.md](skills/autonomous-development/CONTRACT.md).

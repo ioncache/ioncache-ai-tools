@@ -187,6 +187,7 @@ remain after synchronization finishes.
 | `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts, including Copilot's native message-evidence check |
 | `autonomous-development-explicit-only` | Reject assistant skill-tool calls to autonomous development; direct human invocation and ordinary work remain available |
 | `autonomous-development-follow-ups` | Automatic follow-up issue creation by authorized development PR publishers; separate from run approval, audit publication and reporting |
+| `autonomous-development-incremental-planning` | Incremental delivery planning guidance in autonomous-development Prepare; when disabled, Prepare keeps its baseline planning step |
 | `block_raw_worktree_add` | Worktree creation outside the setup helper |
 | `docs-cache` | Documentation cache, distillation, and diagnostics |
 | `documentation-first` | Documentation-first startup guidance |
@@ -298,6 +299,17 @@ See [../skills/autonomous-development/RECOVERY.md](../skills/autonomous-developm
 an accepted review. It preserves the original review and all consumed allowances;
 changed patches still require a counted review. Disabling it does not change
 normal acceptance, review or read-only inspection.
+
+`autonomous-development-incremental-planning` controls only the Prepare guidance
+for PR slicing, feature-flag decisions, optional child issues, boundary
+contracts, prerequisite evidence and conditional candidates. Prepare reads its
+effective value with a read-only lookup, so a disable on any host applies and
+no settings file is written. Disabling it keeps the baseline planning step
+without disabling the skill, execution, reviews, audits or compatibility
+obligations. Existing manifests and runs are unchanged. An unreadable setting
+is reported as unavailable guidance, not as enabled; Prepare continues with the
+baseline. See
+[../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md).
 
 Do not mix old and new catalog writers while using the new review controls.
 An older cached plugin removes keys it does not recognize; a newer copy then

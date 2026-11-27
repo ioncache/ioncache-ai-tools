@@ -5,6 +5,7 @@
     "autonomous-development-audit": true,
     "autonomous-development-explicit-only": true,
     "autonomous-development-follow-ups": true,
+    "autonomous-development-incremental-planning": true,
     "autonomous-development-model-selection": true,
     "autonomous-development-progress": true,
     "autonomous-development-rebase-review": true,

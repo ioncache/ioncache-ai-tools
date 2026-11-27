@@ -179,8 +179,9 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   `development_executor.py` pins runtime resources outside the reviewed tree;
   `development_jobs.py` generates purpose-only jobs and validates report contracts.
   The Claude template in `workflows/` runs one generated batch with no control
-  models or acceptance authority. Keep offline
-  lifecycle checks distinct from live-host qualification. Forward frozen
+  models or acceptance authority. Describe offline
+  lifecycle checks by what they exercise; native host capabilities come from
+  preflight and execution evidence, not a separate trial gate. Forward frozen
   single-purpose packets, not generic catalogs or the implementation context.
   Final acceptance reuses the shared category checker and pins its full-phase
   evidence to the completed ledger's root, base and snapshot.

@@ -205,17 +205,20 @@ https://git-scm.com/docs/git-hash-object
 https://git-scm.com/docs/git-update-index
 https://git-scm.com/docs/git#_environment_variables
 
-## Visibility and qualification
+## Visibility and coverage limits
 
 Give five-minute user-visible updates during long work and disclose blockers
 immediately. Separate native activity, script checkpoints, report validation,
 semantic acceptance, monitor failure and intentional cancellation. Watch
 inactivity alone never authorizes cancellation or a replacement worker.
 
-Offline checks establish only the exercised local contracts. A later live-host
-qualification uses a separate bounded scenario and explicitly selected resources,
-not a restart of an incident run. Do not claim complete native delivery or
-publication based on schema checks, mocks, dry runs or permission availability.
+Offline checks establish only the exercised local contracts. Execution
+establishes host capabilities as [WORKERS.md](WORKERS.md) preflight defines;
+report any capability still deferred as deferred, not established. An approved
+run needs no separate trial first. A separately requested capability experiment
+is its own bounded, approved scenario, not a restart of an incident run. Do not
+claim complete native delivery or publication based on schema checks, mocks,
+dry runs or permission availability.
 
 Some host limits are observed or unknown rather than documented. The Workflow
 tool's 524,288-byte script limit appears in its tool schema and refusal message,
