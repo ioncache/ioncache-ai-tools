@@ -156,11 +156,13 @@ https://code.claude.com/docs/en/workflows.
 /ioncache-ai-tools:review-code this PR --lead-model LEAD_ID --reviewer-model REVIEW_ID
 ```
 
-Replace model placeholders with identifiers supported by your host. Unspecified
-roles attempt automatic selection where host permissions and capability evidence
-allow it, otherwise configured models are used. Explicit choices are not silently
-replaced. The lead is the review coordinator or adjudicator, not your
-conversation's model.
+Replace model placeholders with identifiers supported by your host. In the
+default `auto` mode, unspecified roles attempt automatic selection only when
+`review-auto-model-selection` is enabled and host permissions and capability
+evidence allow it. Otherwise, they use configured defaults.
+With `--model-selection configured`, automatic selection is off and unspecified
+roles use configured defaults. Explicit choices are not silently replaced.
+The lead is the review coordinator or adjudicator, not your conversation's model.
 
 Reviews provide 12 independently enabled categories across the requested scope:
 security, complexity, comments, JSDoc, unit-test quality, documentation, design
