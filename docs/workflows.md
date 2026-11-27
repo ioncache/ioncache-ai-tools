@@ -5,21 +5,40 @@ Invoke a skill directly using the host syntax in
 [../README.md#invoke-a-skill](../README.md#invoke-a-skill).
 Each skill's file defines its scope, inputs, and stopping conditions.
 
+## Skill discovery
+
+If the host lists same-name skills separately, select this plugin's entry.
+Copilot instead ignores a plugin skill when a project or personal skill has
+the same name. Remove the conflicting skill or exclude its directory using
+`ignoredSkillsLocations` in Copilot's `~/.copilot/settings.json`, then start a
+new session. A skill disabled in plugin settings can still appear in the
+host's menu.
+
+Host skill-invocation references:
+
+- https://code.claude.com/docs/en/skills
+- https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills
+- https://learn.chatgpt.com/docs/build-skills
+
 ## Workflow catalog
 
-| Skill | Purpose |
+Most skills take task context rather than fixed command-line flags. Review and
+plugin-settings options are explicit skill arguments.
+
+| Skill | What to provide |
 | --- | --- |
-| [../skills/investigate/SKILL.md](../skills/investigate/SKILL.md) | Explain existing code without changes |
-| [../skills/review-code/SKILL.md](../skills/review-code/SKILL.md) | Read-only code review |
-| [../skills/review-dependabot-pr/SKILL.md](../skills/review-dependabot-pr/SKILL.md) | Review dependency updates against actual usage, including grouped and indirect dependencies |
-| [../skills/verify-unresolved-pr-comments/SKILL.md](../skills/verify-unresolved-pr-comments/SKILL.md) | Triage outstanding PR feedback without changing it |
-| [../skills/post-pr-review-comments/SKILL.md](../skills/post-pr-review-comments/SKILL.md) | Draft and edit PR comments; prefer pending reviews for new inline threads and post requested replies directly; never submit a review |
-| [../skills/write-pr-descriptions/SKILL.md](../skills/write-pr-descriptions/SKILL.md) | Write and edit human-focused PR titles and descriptions |
-| [../skills/review-triage-loop/SKILL.md](../skills/review-triage-loop/SKILL.md) | Repeated read-only review and evidence-based triage |
-| [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | Review, validate, fix, and re-review within limits |
-| [../skills/triage-errors/SKILL.md](../skills/triage-errors/SKILL.md) | Fix related failures by root cause |
-| [../skills/create-worktree/SKILL.md](../skills/create-worktree/SKILL.md) | Create a worktree with repository setup applied |
-| [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | User-invoked only: prepare approved inputs and coordinate bounded development toward review-ready PRs |
+| [../skills/investigate/SKILL.md](../skills/investigate/SKILL.md) | The feature, workflow, or system to explain without changes |
+| [../skills/review-code/SKILL.md](../skills/review-code/SKILL.md) | A file, directory, repository, branch, or PR; defaults to the active PR or branch changes |
+| [../skills/review-dependabot-pr/SKILL.md](../skills/review-dependabot-pr/SKILL.md) | The dependency-update PR, including grouped updates; a saved run directory when resuming |
+| [../skills/verify-unresolved-pr-comments/SKILL.md](../skills/verify-unresolved-pr-comments/SKILL.md) | Invoke from the branch with the active PR |
+| [../skills/post-pr-review-comments/SKILL.md](../skills/post-pr-review-comments/SKILL.md) | The PR, findings or comments, and whether to draft, edit, reply, or post; new inline comments prefer pending reviews, requested replies post directly, and the skill never submits a review |
+| [../skills/write-pr-descriptions/SKILL.md](../skills/write-pr-descriptions/SKILL.md) | The PR or branch and the requested drafting or editing task |
+| [../skills/review-triage-loop/SKILL.md](../skills/review-triage-loop/SKILL.md) | An explicit target, optional round limit, or saved ledger |
+| [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | A target and optional loop limits, or saved ledger; defaults to active PR or branch changes |
+| [../skills/triage-errors/SKILL.md](../skills/triage-errors/SKILL.md) | The failing command and relevant error context |
+| [../skills/create-worktree/SKILL.md](../skills/create-worktree/SKILL.md) | Worktree arguments, such as `-b feature-name ../feature-name` |
+| [../skills/plugin-settings/SKILL.md](../skills/plugin-settings/SKILL.md) | No arguments to open the pane or list settings; `--<setting-id>=enabled` or `=disabled`; optional `--global` |
+| [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | An idea, artifact references, an approved manifest, or a private run directory |
 
 Writing and implementation guidance lives in [../skills/](../skills/):
 `answer-questions`, `engineering-judgment`, `code-complexity`, `comments`,
@@ -31,11 +50,25 @@ including native doc comments and docstrings.
 
 ## Autonomous development
 
+This skill is user-invoked only, never automatically selected for matching tasks.
+Invoke `/ioncache-ai-tools:autonomous-development` in Claude/Copilot, or
+`$ioncache-ai-tools:autonomous-development` in Codex. Review and approve the plan,
+content snapshots, permissions, and finite limits before execution.
+The execution adapter uses Claude Workflows; Copilot and Codex currently support
+preparation and state inspection only. The skill prepares and claims each
+generated script. Do not invoke the
+`/ioncache-ai-tools:autonomous-development-run` template directly.
+
 Planning, design documentation, and execution are independent settings. Existing
 issues, designs, and plans are supported preparation inputs, not automatic
 approval. The manifest pins reviewed content and separates task boundaries from
 PR boundaries. GitHub issues and Notion pages can be selected without coupling
 either to the execution provider.
+
+Preparation weighs PR slicing, feature flags and optional child issues with
+[../skills/autonomous-development/PLANNING.md](../skills/autonomous-development/PLANNING.md).
+Set `autonomous-development-incremental-planning` to `false` to keep the
+baseline planning step instead.
 
 The Python controller persists assignments before dispatch, rejects stale
 results, retains allowances on interruption, and validates local Git and existing
@@ -66,6 +99,15 @@ with explicit overrides and separately recorded observations under
 Reported null identities remain visibility limitations, not fabricated worker IDs.
 Independent read-only leaves in an owner round run concurrently, while each
 fixer runs alone between reader batches.
+
+Implementers and fixers receive the same applicable standards as reviewers,
+plus surrounding-context and diff self-check guidance. Reports include explicit
+role contracts and a read-only precheck. Exhausted report corrections have one
+evidence-based recovery without repeating work. An unchanged reviewed patch can
+recover after a target-branch rebase without spending another review.
+Recovery preserves work and consumed allowances; stopping a run does not roll
+back its implementation. See
+[../skills/autonomous-development/RECOVERY.md](../skills/autonomous-development/RECOVERY.md).
 
 Use `configuration.execution.provider: "claude-workflows"` for the packaged
 adapter. Validate with `--provider claude-workflows` before approval; initialization
@@ -99,10 +141,56 @@ capabilities are consuming-environment requirements, not provisioned services.
 
 Contracts and recovery:
 [../skills/autonomous-development/CONTRACT.md](../skills/autonomous-development/CONTRACT.md).
+Set `autonomous-development` to `false` in the feature configuration to disable
+execution while retaining status and interruption commands.
 Worker boundaries:
 [../skills/autonomous-development/WORKERS.md](../skills/autonomous-development/WORKERS.md).
 Claude API and packaging reference:
 https://code.claude.com/docs/en/workflows.
+
+## Review options
+
+```text
+/ioncache-ai-tools:review-code --help
+/ioncache-ai-tools:review-code this PR --model-selection configured
+/ioncache-ai-tools:review-code this PR --lead-model LEAD_ID --reviewer-model REVIEW_ID
+```
+
+Replace model placeholders with identifiers supported by your host. Unspecified
+roles attempt automatic selection where host permissions and capability evidence
+allow it, otherwise configured models are used. Explicit choices are not silently
+replaced. The lead is the review coordinator or adjudicator, not your
+conversation's model.
+
+Reviews provide 12 independently enabled categories across the requested scope:
+security, complexity, comments, JSDoc, unit-test quality, documentation, design
+coherence, correctness, integration, privacy, performance and test coverage.
+General categories adapt to the actual stack. JSDoc requires JavaScript source;
+TypeScript-only and other JavaScript-free targets retain general documentation
+and contract review without a JSDoc worker.
+
+Independent `review-<category>` settings control shipped coverage, separately
+from writing-skill settings. With no extra project categories, a default flat
+phase starts with 12 workers without JavaScript or 13 with it, including
+adjudication, before retries, validators or capacity shards.
+See [configuration.md](configuration.md) for opt-outs and the coordination
+section below for project requirements and worker isolation.
+
+Role effort, validator, fallback, strategy, and posting options:
+[../skills/review-code/OPTIONS.md](../skills/review-code/OPTIONS.md).
+The review/fix loop accepts the same review options, except posting options;
+they do not change its fixing model.
+Use `$ioncache-ai-tools:review-code --help` in Codex. Claude can show argument
+hints; `--help` is the portable option list, not a cross-host picker.
+
+### Unresolved findings
+
+Reviews name unresolved material findings under **Known issues not fixed here**,
+including pre-existing and out-of-scope defects. Autonomous development carries
+that list into its final report and PR, and can create or reuse follow-up issues
+when separately approved. Ticket failures do not stop development.
+See [../skills/autonomous-development/FOLLOW_UPS.md](../skills/autonomous-development/FOLLOW_UPS.md)
+for publication and disclosure rules.
 
 ## Review loops
 
@@ -119,14 +207,19 @@ commands. In Codex, replace only the leading `/` with `$`, keeping the
 
 The read-only triage loop defaults to five rounds and stops after two
 consecutive complete rounds without new reportable information. Each round
-uses a fresh reviewer. Its private ledger defaults to
+uses a fresh reviewer. The target can be a file, directory, repository, or
+branch/PR comparison. Resume uses the saved target; an explicit `--max-rounds`
+replaces the total cap, not the remaining allowance. Its private ledger defaults
+to
 `~/.local/state/ioncache-ai-tools/review-triage-loop/`, outside the reviewed
 tree. Counters and checkpoints are skill instructions, not mechanically
 enforced by the review/fix ledger helper.
 
 The review/fix loop defaults to three review loops and three fix cycles per
-loop. It does not authorize commits, pushes, or PR comments. Standalone ledgers
-and objects default to `~/.local/state/ioncache-ai-tools/reviews/`, honoring
+loop. Loop counts are not spending limits. Replace the example resume paths
+with the ledger from your run. It does not authorize commits, pushes, or PR
+comments. Standalone ledgers and objects default to
+`~/.local/state/ioncache-ai-tools/reviews/`, honoring
 `XDG_STATE_HOME`. Development runs use their assigned external storage, normally
 inside their private store. Retain any recovery locations recorded in assignments.
 Keep these artifacts private; they can contain source and survive worktree cleanup.
@@ -277,13 +370,27 @@ Synthetic finding-quality checks and their limits are described in
 
 ## Worktree setup
 
+For Claude/Copilot:
+
+```text
+/ioncache-ai-tools:create-worktree -b feature-name ../feature-name
+```
+
+For Codex:
+
+```text
+$ioncache-ai-tools:create-worktree -b feature-name ../feature-name
+```
+
+Replace the branch name and destination with your own.
+
 The skill requires Node.js 22.12.0 or later. Its Python launcher checks
 availability and version before running the worktree helper. A missing or
 older runtime, or a failed version check, stops without creating a worktree
 or setup files. Install or upgrade Node.js, or correct `PATH`, then retry the
 same skill invocation.
 
-Configure `.worktree-setup.json` at the repository root. The `create-worktree`
+Configure `.worktree-setup.json` at the main worktree's root. The `create-worktree`
 skill creates generic defaults if it is missing: empty `copies`, `afterCopy`,
 and `commands` lists, plus predefined symlinks. Those defaults do not copy a
 cache or run `npm install`.
