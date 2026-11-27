@@ -1,5 +1,5 @@
 const PANE = 'ioncache-plugin-settings';
-const RECOVERY = 'Use /ioncache-ai-tools:plugin-settings --list for the text interface, or run the standalone plugin_settings.py helper.';
+const RECOVERY = 'Use /ioncache-ai-tools:ioncache-ai-tools-settings --list for the text interface, or run the standalone plugin_settings.py helper.';
 
 let snapshot;
 let scope = 'project';
@@ -124,7 +124,7 @@ function catalog(columns) {
   if (busy) return { items, entries, height: layout?.contentRows || 0 };
   if (!snapshot?.uiEnabled) {
     const text = snapshot
-      ? 'Native pane disabled. Re-enable with /ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled.'
+      ? 'Native pane disabled. Re-enable with /ioncache-ai-tools:ioncache-ai-tools-settings --hook:plugin-settings-ui=enabled.'
       : message;
     const lines = linesOf(text, columns);
     return { items: [{ top: 0, height: lines.length, lines, color: snapshot ? 'yellow' : 'red' }],
@@ -268,7 +268,7 @@ function renderPane($, e) {
 }
 
 export function register(on) {
-  on('command.run', { command: 'ioncache-ai-tools:plugin-settings' }, async ($, e) => {
+  on('command.run', { command: 'ioncache-ai-tools:ioncache-ai-tools-settings' }, async ($, e) => {
     if (busy) return { text: 'A settings operation is still running.', isTextDisplayOnly: true };
     if (e.args.trim()) return listOrChange($, e.args);
     project = undefined;

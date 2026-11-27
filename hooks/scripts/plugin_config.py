@@ -14,9 +14,10 @@ DEFAULTS = Path(__file__).resolve().parents[2] / 'config/defaults.json'
 FILENAME = 'ioncache-ai-tools.local.json'
 HOSTS = ('claude', 'copilot', 'codex')
 LOCK_WAIT_SECONDS = 0.25
+RENAMED_FEATURES = {'skill:plugin-settings': 'skill:ioncache-ai-tools-settings'}
 RETIRED_FEATURES = frozenset({
     'approval-recovery', 'claim-evidence', 'display-emdash', 'graphify',
-    'never_kill_without_asking', 'skill:task-authorization', 'task-authorization',
+    'never_kill_without_asking', 'skill:plugin-settings', 'skill:task-authorization', 'task-authorization',
     'verify-state-before-claiming',
 })
 
@@ -63,6 +64,12 @@ def settings(document, catalog, *, preserve_unknown=False):
     if not isinstance(features, dict):
         raise ValueError('features must be an object')
     values.update(features)
+    for old, new in RENAMED_FEATURES.items():
+        if old in values and old not in catalog and new in catalog:
+            value = values.pop(old)
+            if type(value) is not bool:
+                raise ValueError(f'feature {old!r} must be true or false')
+            values.setdefault(new, value)
     retained = {name: value for name, value in values.items()
                 if name in catalog or (preserve_unknown and name not in RETIRED_FEATURES)}
     for name, value in retained.items():

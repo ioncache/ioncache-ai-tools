@@ -256,7 +256,7 @@ class ConfigurationTests(unittest.TestCase):
         for arguments in ('', '--list', '--hook:docs-cache=disabled',
                           '--hook:plugin-settings-ui=disabled', ''):
             result = subprocess.run(
-                [*command, '-p', '/ioncache-ai-tools:plugin-settings ' + arguments],
+                [*command, '-p', '/ioncache-ai-tools:ioncache-ai-tools-settings ' + arguments],
                 cwd=self.project, env=env, text=True, capture_output=True, timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -696,7 +696,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(self.settings_command('--hook:answer-questions=disabled')[0], 0)
 
     def test_settings_skill_metadata_advertises_command_flags(self):
-        source = (ROOT / 'skills/plugin-settings/SKILL.md').read_text()
+        source = (ROOT / 'skills/ioncache-ai-tools-settings/SKILL.md').read_text()
         self.assertTrue(source.startswith('---\n'))
         header, separator, _ = source.partition('\n---\n')
         self.assertTrue(separator, 'Skill frontmatter must have a closing delimiter')
@@ -705,7 +705,7 @@ class ConfigurationTests(unittest.TestCase):
                      '.github/plugin/plugin.json'):
             manifest = json.loads((ROOT / path).read_text())
             self.assertEqual(f'{manifest["name"]}:{metadata["name"]}',
-                             'ioncache-ai-tools:plugin-settings')
+                             'ioncache-ai-tools:ioncache-ai-tools-settings')
         hint = metadata['argument-hint']
         self.assertIsInstance(hint, str)
         flags = set(re.findall(r'--[a-z]+(?:-[a-z]+)*', hint))
@@ -717,7 +717,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_installed_settings_helper_runs_from_an_unrelated_project(self):
         install = self.root / 'plugin with spaces'
         install.symlink_to(ROOT, target_is_directory=True)
-        skill = install / 'skills/plugin-settings'
+        skill = install / 'skills/ioncache-ai-tools-settings'
         helper = skill / '../../hooks/scripts/plugin_settings.py'
         self.assertIn('../../hooks/scripts/plugin_settings.py', (skill / 'SKILL.md').read_text())
         for args in ([], ['--hook:answer-questions=disabled']):
@@ -801,6 +801,69 @@ class ConfigurationTests(unittest.TestCase):
         stamp = path.stat().st_mtime_ns
         config.sync_file(path, new)
         self.assertEqual(path.stat().st_mtime_ns, stamp)
+
+    def test_settings_skill_rename_migrates_all_hosts_and_scopes_without_losing_opt_outs(self):
+        old = 'skill:plugin-settings'
+        new = 'skill:ioncache-ai-tools-settings'
+        paths = config.paths(self.project)
+        for global_path, project_path in paths.values():
+            self.write(global_path, {
+                'features': {old: False, 'docs-cache': False},
+                'projects': {str(self.project): {'features': {old: True}}},
+            })
+            self.write(project_path, {'features': {old: False, 'plugin-settings-ui': False}})
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--list')
+
+        self.assertEqual(code, 0, error)
+        self.assertRegex(output, new + r'\s+disabled')
+        self.assertNotIn(old, output)
+        self.assertEqual(self.tree_state(), before)
+        self.assertEqual(config.synchronize(self.project, strict=True),
+                         {new, 'docs-cache', 'plugin-settings-ui', 'response-validation'})
+        for global_path, project_path in paths.values():
+            stored = json.loads(global_path.read_text())
+            self.assertFalse(stored['features'][new])
+            self.assertFalse(stored['features']['docs-cache'])
+            self.assertNotIn(old, stored['features'])
+            self.assertEqual(stored['projects'][str(self.project)], {'features': {new: True}})
+            self.assertEqual(json.loads(project_path.read_text()),
+                             {'features': {new: False, 'plugin-settings-ui': False}})
+
+        code, output, error = self.settings_command('--skill:ioncache-ai-tools-settings=enabled')
+
+        self.assertEqual(code, 0, error)
+        self.assertRegex(output, new + r'\s+enabled')
+        self.assertEqual(config.synchronize(self.project, persist=False),
+                         {'docs-cache', 'plugin-settings-ui', 'response-validation'})
+
+    def test_settings_skill_rename_respects_new_key_and_legacy_list_precedence(self):
+        old = 'skill:plugin-settings'
+        new = 'skill:ioncache-ai-tools-settings'
+        catalog = config.defaults()
+        for key, enabled in (('disabledRules', False), ('enabledRules', True),
+                             ('disabled_rules', False), ('enabled_rules', True)):
+            with self.subTest(key=key):
+                self.assertEqual(config.reconcile({key: [old]}, catalog, complete=False),
+                                 {'features': {new: enabled}})
+        for old_value, new_value in product((False, True), repeat=2):
+            with self.subTest(old=old_value, new=new_value):
+                document = {'features': {old: old_value, new: new_value}}
+                self.assertEqual(config.reconcile(document, catalog, complete=False),
+                                 {'features': {new: new_value}})
+
+    def test_settings_skill_rename_does_not_discard_invalid_preferences(self):
+        path = config.paths(self.project)['copilot'][1]
+        self.write(path, {'features': {'skill:plugin-settings': 'disabled'}})
+        before = self.tree_state()
+
+        code, output, error = self.settings_command('--skill:ioncache-ai-tools-settings=enabled')
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(output, '')
+        self.assertIn("feature 'skill:plugin-settings' must be true or false", error)
+        self.assertEqual(self.tree_state(), before)
 
     def test_older_catalog_writes_preserve_newer_opt_outs_in_every_scope(self):
         name = 'review-report-json-recovery'
@@ -1221,7 +1284,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual({name.removeprefix('skill:') for name in config.defaults()
                           if name.startswith('skill:')}, skills)
         path = config.paths(self.project)['claude'][0]
-        for skill in ('review-code', 'autonomous-development', 'plugin-settings'):
+        for skill in ('review-code', 'autonomous-development', 'ioncache-ai-tools-settings'):
             self.write(path, {'features': {'skill:' + skill: False}})
             output = guidance.run_hook('UserPromptSubmit', {**self.data, 'prompt': 'Review the code'})
             self.assertIn('Disabled plugin skills: ' + skill, str(output))
