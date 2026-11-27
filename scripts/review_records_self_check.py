@@ -80,18 +80,29 @@ class ReviewRecordTests(unittest.TestCase):
                 "run_id": run["run_id"],
                 "review_options": {"configuration": {"skill_enabled": True, "review_features": features}},
             }
-            packet = review_assignments.prepare(request)["packets"]["correctness"]
-            self.assertEqual(packet["run_id"], run["run_id"])
-            Path(packet["result_file"]).write_text(json.dumps({
-                "run_id": packet["run_id"], "candidates": [{"id": "C1"}],
-            }))
-            saved = records.record(run["directory"], {
-                "role": "reviewer", "assignment": packet["assignment"],
-                "result_file": packet["result_file"], "harness": run["record"]["harness"],
-            })
-            index = json.loads((Path(run["directory"]) / saved["report"]["record"]).read_text())
-            self.assertEqual(index["entries"][0]["run_id"], run["run_id"])
-            self.assertEqual(index["entries"][0]["observation"]["harness"], run["record"]["harness"])
+            phases = [review_assignments.prepare(request) for _ in range(2)]
+            for phase in phases:
+                packet = phase["packets"]["correctness"]
+                self.assertEqual(packet["run_id"], run["run_id"])
+                Path(packet["result_file"]).write_text(json.dumps({
+                    "run_id": packet["run_id"], "candidates": [{"id": "C1"}],
+                }))
+                entry = {
+                    "role": "reviewer", "assignment": packet["assignment"], "phase": phase["phase_id"],
+                    "worker": phase["phase_id"], "harness": run["record"]["harness"],
+                }
+                registered = records.record(run["directory"], entry)
+                self.assertIsNone(registered["report"])
+                saved = records.record(run["directory"], {**entry, "result_file": packet["result_file"]})
+                index = json.loads((Path(run["directory"]) / saved["report"]["record"]).read_text())
+                self.assertEqual(index["entries"][0]["run_id"], run["run_id"])
+                self.assertEqual(index["entries"][0]["phase"], phase["phase_id"])
+                self.assertEqual(index["entries"][0]["observation"]["harness"], run["record"]["harness"])
+                with self.assertRaisesRegex(ValueError, "Worker changed"):
+                    records.record(run["directory"], {**entry, "worker": "different-worker"})
+            _, value = records.load(run["directory"])
+            self.assertEqual(len(value["roles"]), 3)
+            self.assertEqual(len(value["reports"]), 2)
         runs = records.find_runs(self.root, "pr:84")
         self.assertEqual({item["run_id"] for item in runs}, {first["run_id"], second["run_id"]})
         self.assertEqual(records.find_runs(self.root, "pr:85"), [])
@@ -181,6 +192,77 @@ class ReviewRecordTests(unittest.TestCase):
         index = json.loads((Path(run["directory"]) / broken["record"]).read_text())
         self.assertEqual((Path(run["directory"]) / index["original"]).read_bytes(), original)
 
+    def test_ambiguous_json_is_retained_without_silently_dropping_findings(self):
+        run = self.initialize()
+        entry = self.report(run)
+        original = b'{"candidates": [{"id": "lost"}], "candidates": []}'
+        Path(entry["result_file"]).write_bytes(original)
+        saved = records.record(run["directory"], entry)["report"]
+        self.assertIn("duplicate key", saved["error"])
+        index = json.loads((Path(run["directory"]) / saved["record"]).read_text())
+        self.assertEqual(index["entries"], [])
+        self.assertEqual((Path(run["directory"]) / index["original"]).read_bytes(), original)
+        Path(entry["result_file"]).write_text('{"candidates": [{"id": "recovered"}]}')
+        repaired = records.record(run["directory"], entry)["report"]
+        self.assertIsNone(repaired["error"])
+        self.assertEqual(len(records.load(run["directory"])[1]["reports"]), 2)
+
+    def test_index_budget_stops_consuming_entries_before_expanding_the_whole_report(self):
+        run = self.initialize()
+        entry = self.report(run)
+        visited = []
+
+        def expanded(document, provenance, pointer=""):
+            for number in range(1000):
+                visited.append(number)
+                yield {**provenance, "kind": "candidates", "pointer": f"/candidates/{number}",
+                       "record": {"detail": "x" * 2000}}
+
+        with patch.object(records, "MAX_BYTES", 8192), patch.object(records, "entries", expanded):
+            saved = records.record(run["directory"], entry)["report"]
+        self.assertIn("index exceeds the size limit", saved["error"])
+        self.assertLess(len(visited), 10)
+        self.assertEqual(len(records.load(run["directory"])[1]["reports"]), 1)
+
+    def test_run_manifest_growth_is_rejected_without_losing_the_readable_history(self):
+        run = self.initialize()
+        path = Path(run["directory"]) / "RUN.json"
+        with patch.object(records, "MAX_BYTES", 6500):
+            for number in range(2):
+                records.record(run["directory"], {
+                    "role": "reviewer", "assignment": f"role-{number}",
+                    "observation": {"evidence": "x" * 1800},
+                })
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "Run record exceeds the size limit"):
+                records.record(run["directory"], {
+                    "role": "reviewer", "assignment": "role-2",
+                    "observation": {"evidence": "x" * 1800},
+                })
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(len(records.load(run["directory"])[1]["roles"]), 3)
+            records.record(run["directory"], {"role": "reviewer", "assignment": "role-2"})
+            self.assertEqual(len(records.load(run["directory"])[1]["roles"]), 4)
+
+    def test_oversized_initial_observation_creates_no_unreadable_run(self):
+        with patch.object(records, "MAX_BYTES", 8192):
+            with self.assertRaisesRegex(ValueError, "Run record exceeds the size limit"):
+                records.initialize(self.root, "pr:84", {"lead": {"evidence": "x" * 8192}})
+            self.assertEqual(records.find_runs(self.root, "pr:84"), [])
+        self.assertTrue(self.initialize()["enabled"])
+
+    def test_git_instead_of_uses_the_effective_remote_and_keeps_legacy_records_discoverable(self):
+        first = self.initialize()
+        self.git(self.root, "remote", "set-url", "origin", "work:project.git")
+        legacy = self.initialize()
+        self.git(self.root, "config", "url.https://example.invalid/team/.insteadOf", "work:")
+        current = self.initialize()
+        self.assertEqual(Path(first["directory"]).parent, Path(current["directory"]).parent)
+        runs = {row["run_id"]: row for row in records.find_runs(self.root, "pr:84")}
+        self.assertEqual(set(runs), {first["run_id"], legacy["run_id"], current["run_id"]})
+        self.assertTrue(runs[legacy["run_id"]]["legacy_repository_key"])
+        self.assertNotIn("legacy_repository_key", runs[current["run_id"]])
+
     def test_near_limit_report_keeps_a_readable_index_and_can_be_recorded_again(self):
         run = self.initialize()
         entry = self.report(run)
@@ -254,6 +336,51 @@ class ReviewRecordTests(unittest.TestCase):
             records.record(run["directory"], {**entry, "result_file": str(alias)})
         self.assertEqual(outside.read_text(), '{"candidates": []}')
 
+    def test_derived_storage_parent_is_checked_before_any_writes(self):
+        base = records.private_directory(records.storage.state_directory() / "reviews" / "records")
+        repository_path = base / records.repository(self.root)["key"]
+        destination = self.root / "redirected"
+        destination.mkdir(mode=0o755)
+        repository_path.symlink_to(destination, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.initialize()
+        self.assertEqual(list(destination.iterdir()), [])
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
+        repository_path.unlink()
+        repository_path.mkdir()
+        self.git(repository_path, "init", "-q")
+        with self.assertRaisesRegex(ValueError, "outside"):
+            self.initialize()
+        self.assertEqual([item.name for item in repository_path.iterdir()], [".git"])
+        repository_path.rename(self.home / "detached-state-repository")
+        self.assertTrue(self.initialize()["enabled"])
+
+    def test_symlinked_reports_directory_cannot_read_chmod_or_import_into_a_repository(self):
+        run = self.initialize()
+        reports = Path(run["scratch_directory"])
+        reports.rmdir()
+        destination = self.root / "redirected-reports"
+        destination.mkdir()
+        source = destination / "report.json"
+        source.write_text('{"candidates": []}')
+        source.chmod(0o644)
+        reports.symlink_to(destination, target_is_directory=True)
+        external = self.home / "external.json"
+        external.write_text(source.read_text())
+        before = (Path(run["directory"]) / "RUN.json").read_bytes()
+        for path, imported in ((reports / source.name, False), (external, True)):
+            with self.subTest(imported=imported), self.assertRaises(ValueError):
+                records.record(run["directory"], {
+                    "role": "reviewer", "assignment": "symlink",
+                    "result_file": str(path), "external_report": imported,
+                })
+            self.assertEqual((Path(run["directory"]) / "RUN.json").read_bytes(), before)
+        self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o644)
+        self.assertEqual(list(destination.iterdir()), [source])
+        reports.unlink()
+        reports.mkdir(mode=0o700)
+        self.assertIsNone(records.record(run["directory"], self.report(run))["report"]["error"])
+
     def test_opt_out_stops_new_persistence_without_disabling_reviews(self):
         run = self.initialize()
         entry = self.report(run)
@@ -266,10 +393,12 @@ class ReviewRecordTests(unittest.TestCase):
         self.assertIsNone(disabled["directory"])
         nested = self.root / "nested"
         nested.mkdir()
-        self.assertFalse(self.initialize(root=nested)["enabled"])
+        with patch.object(Path, "cwd", return_value=nested):
+            nested_config = review_options.read_configuration("review-code")
+        self.assertEqual(self.initialize(root=nested)["enabled"], nested_config["records_enabled"])
         self.assertFalse(records.record(run["directory"], entry)["enabled"])
         self.assertEqual((Path(run["directory"]) / "RUN.json").read_bytes(), before)
-        self.assertEqual(len(records.find_runs(self.root, "pr:84")), 1)
+        self.assertEqual(len(records.find_runs(self.root, "pr:84")), 2)
         with patch.object(Path, "cwd", return_value=self.root):
             config = review_options.read_configuration("review-code")
         self.assertTrue(config["skill_enabled"])
@@ -278,6 +407,80 @@ class ReviewRecordTests(unittest.TestCase):
         path.unlink()
         self.assertEqual(self.initialize(root=nested)["record"]["root"], str(self.root))
         self.assertTrue(records.record(run["directory"], entry)["enabled"])
+
+    def test_subdirectory_settings_remain_the_project_identity_after_repository_normalization(self):
+        nested = self.root / "package"
+        nested.mkdir()
+        run = self.initialize(root=nested)
+        entry = self.report(run)
+        before = (Path(run["directory"]) / "RUN.json").read_bytes()
+        setting = nested / ".claude/ioncache-ai-tools.local.json"
+        setting.parent.mkdir()
+        setting.write_text('{"features": {"review-records": false}}')
+        with patch.object(Path, "cwd", return_value=nested):
+            self.assertFalse(review_options.read_configuration("review-code")["records_enabled"])
+        self.assertFalse(self.initialize(root=nested)["enabled"])
+        self.assertFalse(records.record(run["directory"], entry)["enabled"])
+        self.assertEqual((Path(run["directory"]) / "RUN.json").read_bytes(), before)
+        setting.unlink()
+        self.assertIsNone(records.record(run["directory"], entry)["report"]["error"])
+        self.assertEqual(run["record"]["root"], str(self.root))
+
+    def test_legacy_runs_without_a_settings_project_keep_root_configuration(self):
+        run = self.initialize()
+        path = Path(run["directory"]) / "RUN.json"
+        legacy = json.loads(path.read_text())
+        del legacy["project"]
+        path.write_bytes(records.storage.encode(legacy))
+        entry = self.report(run)
+        self.assertIsNone(records.record(run["directory"], entry)["report"]["error"])
+        setting = self.root / ".claude/ioncache-ai-tools.local.json"
+        setting.parent.mkdir()
+        setting.write_text('{"features": {"review-records": false}}')
+        self.assertFalse(records.record(run["directory"], entry)["enabled"])
+
+    def test_nested_index_pointers_resolve_to_complete_original_records(self):
+        run = self.initialize()
+        document = {kind: [{"id": kind}] for kind in sorted(records.COLLECTIONS)}
+        document["nested/~"] = [{"candidates": [{"id": "nested"}]}]
+        document["not-a-collection"] = {"duplicates": "not a list"}
+        entry = self.report(run, document=document)
+        saved = records.record(run["directory"], entry)["report"]
+        index = json.loads((Path(run["directory"]) / saved["record"]).read_text())
+        self.assertIsNone(index["error"])
+        expected = {f"/{kind}/0" for kind in records.COLLECTIONS} | {"/nested~1~0/0/candidates/0"}
+        self.assertEqual({item["pointer"] for item in index["entries"]}, expected)
+        for item in index["entries"]:
+            value = document
+            for segment in item["pointer"].split("/")[1:]:
+                key = segment.replace("~1", "/").replace("~0", "~")
+                value = value[int(key)] if isinstance(value, list) else value[key]
+            self.assertEqual(value, item["record"])
+
+    def test_cli_preserves_observed_provenance_and_phase_scoped_registration(self):
+        evidence = "Synthetic offline CLI fixture"
+        flags = ["--harness", "copilot", "--harness-version", "fixture-version",
+                 "--harness-source", "native-context", "--harness-evidence", evidence,
+                 "--model", "fixture-model", "--effort", "fixture-effort",
+                 "--source", "native-context", "--evidence", evidence]
+        started = run_main(records, ["init", "--target", "pr:84", *flags], cwd=self.root, env=self.env)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        run = json.loads(started.stdout)
+        lead = run["record"]["roles"]["lead:lead"]["observations"][0]
+        self.assertEqual((lead["model"], lead["effort"]), ("fixture-model", "fixture-effort"))
+        self.assertEqual(run["record"]["harness"]["version"], "fixture-version")
+        phase = "a" * 32
+        registered = run_main(records, ["record", run["directory"], "--role", "reviewer",
+                             "--assignment", "correctness-initial", "--phase", phase, *flags],
+                             cwd=self.root, env=self.env)
+        self.assertEqual(registered.returncode, 0, registered.stderr)
+        saved = json.loads(registered.stdout)
+        self.assertIsNone(saved["report"])
+        self.assertEqual(saved["role"]["phase"], phase)
+        self.assertEqual(saved["role"]["observations"], [lead])
+        listed = run_main(records, ["list", "--target", "pr:84"], cwd=self.root, env=self.env)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual([row["run_id"] for row in json.loads(listed.stdout)], [run["run_id"]])
 
     def test_pinned_external_reports_are_copied_without_mutating_their_originals(self):
         run = self.initialize()

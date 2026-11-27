@@ -113,7 +113,7 @@ identify additional model calls, repeated review passes, and context overhead.
 
 #### Reviews and PR work
 
-Review reports use shared private storage across CLIs, with observed harness
+`review-code` reports use shared private storage across CLIs, with observed harness
 and model metadata. See [review records](docs/workflows.md#review-records) for
 finding previous runs and disabling archival.
 

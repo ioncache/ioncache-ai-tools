@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import review_ledger as storage
 import review_options
+from report_json import strict_loads
 
 
 FEATURE = "review-records"
@@ -24,6 +25,26 @@ ROLES = ("lead", "coordinator", "reviewer", "adjudicator", "validator")
 SOURCES = ("unavailable", "native-context", "native-transcript")
 COLLECTIONS = {"findings", "candidates", "assessments", "rejected_candidates", "duplicates"}
 MAX_BYTES = 16 * 1024 * 1024
+
+
+def bounded_encode(value, limit=None, message="Review record metadata exceeds the size limit"):
+    limit = MAX_BYTES if limit is None else limit
+    result = bytearray()
+    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=True, indent=2).iterencode(value):
+        encoded = chunk.encode()
+        storage.require(len(result) + len(encoded) + 1 <= limit, message)
+        result.extend(encoded)
+    return bytes(result) + b"\n"
+
+
+def role_key(entry):
+    key = f"{entry['role']}:{identifier(entry['assignment'])}"
+    phase = entry.get("phase")
+    if phase is not None:
+        storage.require(isinstance(phase, str) and re.fullmatch(r"[a-f0-9]{32}", phase),
+                        "Invalid review phase identity")
+        key = f"phase:{phase}:{key}"
+    return key
 
 
 def identifier(value):
@@ -58,8 +79,9 @@ def git_value(root, *args):
     return result.stdout.decode().strip() if result.returncode == 0 else None
 
 
-def repository(root):
-    remote = git_value(root, "config", "--get", "remote.origin.url")
+def repository(root, *, effective=True):
+    command = ("remote", "get-url", "origin") if effective else ("config", "--get", "remote.origin.url")
+    remote = git_value(root, *command)
     canonical = None
     if remote:
         scp = re.fullmatch(r"(?:[^/@:]+@)?([^/:]+):(.+)", remote) if "://" not in remote else None
@@ -105,13 +127,14 @@ def load(run):
                     stat.S_IMODE(run.stat().st_mode) == 0o700,
                     "Run directory must be owner-only; restore its permissions and retry")
     path = storage.safe_path(run, "RUN.json")
-    value = json.loads(private_file(path))
+    value = strict_loads(private_file(path))
     storage.require(isinstance(value, dict), "Run record must be an object")
     storage.require(value.get("schema") == 1 and value.get("run_id") == run.name and
                     re.fullmatch(r"[a-f0-9]{32}", run.name), "Invalid review run identity or schema")
-    storage.require(set(value) == {"schema", "run_id", "root", "repository", "target", "created_at",
-                                  "harness", "roles", "reports"}, "Unknown or missing run fields")
+    fields = {"schema", "run_id", "root", "repository", "target", "created_at", "harness", "roles", "reports"}
+    storage.require(fields <= value.keys() <= fields | {"project"}, "Unknown or missing run fields")
     storage.require(Path(value["root"]).is_absolute(), "Run root must be absolute")
+    storage.require(Path(value.get("project", value["root"])).is_absolute(), "Settings project must be absolute")
     identifier(value["target"])
     identifier(value["created_at"])
     storage.require(isinstance(value["repository"], dict) and
@@ -123,7 +146,7 @@ def load(run):
     storage.external_directory(run, Path(value["root"]))
     observation(value["harness"], ("name", "version"))
     for key, role in value["roles"].items():
-        storage.require(role["role"] in ROLES and key == f"{role['role']}:{role['assignment']}" and
+        storage.require(role["role"] in ROLES and key == role_key(role) and
                         isinstance(role["observations"], list), "Invalid role record")
         identifier(role["assignment"])
         for observed in role["observations"]:
@@ -134,54 +157,63 @@ def load(run):
 
 
 def initialize(root, target, context=None):
-    root = Path(root).resolve()
-    storage.require(root.is_dir(), "Review root must exist")
+    project = root = Path(root).resolve()
+    storage.require(project.is_dir(), "Review root must exist")
+    if not enabled(project):
+        return {"enabled": False, "run_id": None, "directory": None, "scratch_directory": None}
     worktree = git_value(root, "rev-parse", "--show-toplevel")
     root = Path(worktree).resolve() if worktree else root
-    if not enabled(root):
-        return {"enabled": False, "run_id": None, "directory": None, "scratch_directory": None}
     context = context or {}
     storage.require(context.keys() <= {"harness", "lead"}, "Unknown run context fields")
     harness = observation(context.get("harness", {}), ("name", "version"))
     lead = observation(context.get("lead", {}), ("model", "effort"))
     target = identifier(target)
     repo = repository(root)
-    base = storage.external_directory(storage.state_directory() / "reviews" / "records", root)
-    private_directory(base)
+    base = storage.state_directory() / "reviews" / "records"
     target_key = storage.digest(target.encode())
-    parent = private_directory(base / repo["key"] / target_key)
+    parent = storage.external_directory(base / repo["key"] / target_key, root)
     folder = parent / uuid4().hex
-    folder.mkdir(mode=0o700)
-    for name in ("reports", "originals", "records"):
-        (folder / name).mkdir(mode=0o700)
     value = {
-        "schema": 1, "run_id": folder.name, "root": str(root), "repository": repo, "target": target,
+        "schema": 1, "run_id": folder.name, "root": str(root), "project": str(project),
+        "repository": repo, "target": target,
         "created_at": datetime.now(timezone.utc).isoformat(), "harness": harness,
         "roles": {"lead:lead": {"role": "lead", "assignment": "lead", "worker": None,
                                 "observations": [{**lead, "harness": harness}]}}, "reports": [],
     }
-    storage.atomic_write(folder / "RUN.json", storage.encode(value))
+    encoded = bounded_encode(value, message="Run record exceeds the size limit")
+    for directory in (base, base / repo["key"], parent):
+        private_directory(directory)
+    folder.mkdir(mode=0o700)
+    for name in ("reports", "originals", "records"):
+        (folder / name).mkdir(mode=0o700)
+    storage.atomic_write(folder / "RUN.json", encoded)
     return {"enabled": True, "run_id": folder.name, "directory": str(folder),
             "scratch_directory": str(folder / "reports"), "record": value}
 
 
 def find_runs(root, target):
     root = Path(root).resolve()
-    parent = storage.external_directory(
-        storage.state_directory() / "reviews" / "records" / repository(root)["key"] /
-        storage.digest(identifier(target).encode()), root)
+    current = repository(root)["key"]
+    keys = dict.fromkeys((current, repository(root, effective=False)["key"]))
     result = []
-    if not parent.exists():
-        return result
-    for folder in sorted(parent.iterdir()):
-        if not re.fullmatch(r"[a-f0-9]{32}", folder.name):
+    for key in keys:
+        parent = storage.external_directory(
+            storage.state_directory() / "reviews" / "records" / key /
+            storage.digest(identifier(target).encode()), root)
+        if not parent.exists():
             continue
-        try:
-            _, value = load(folder)
-            result.append({"directory": str(folder), **{key: value[key] for key in
-                           ("run_id", "created_at", "target", "harness")}})
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            result.append({"directory": str(folder), "run_id": folder.name, "error": str(error)})
+        for folder in sorted(parent.iterdir()):
+            if not re.fullmatch(r"[a-f0-9]{32}", folder.name):
+                continue
+            row = {"directory": str(folder), "run_id": folder.name}
+            if key != current:
+                row["legacy_repository_key"] = True
+            try:
+                _, value = load(folder)
+                row.update({field: value[field] for field in ("created_at", "target", "harness")})
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                row["error"] = str(error)
+            result.append(row)
     return result
 
 
@@ -197,7 +229,7 @@ def locked(folder):
 
 def source_report(folder, entry):
     candidate = Path(os.path.abspath(entry["result_file"]))
-    reports = folder / "reports"
+    reports = storage.safe_path(folder, "reports")
     if candidate.is_relative_to(reports):
         path = storage.safe_path(reports, str(candidate.relative_to(reports)))
         content = private_file(path)
@@ -217,18 +249,27 @@ def source_report(folder, entry):
 
 
 def entries(document, provenance, pointer=""):
-    result = []
     if isinstance(document, list):
         for index, item in enumerate(document):
-            result.extend(entries(item, provenance, f"{pointer}/{index}"))
+            yield from entries(item, provenance, f"{pointer}/{index}")
     elif isinstance(document, dict):
         for key, value in document.items():
             child = pointer + "/" + key.replace("~", "~0").replace("/", "~1")
             if key in COLLECTIONS and isinstance(value, list):
-                result.extend({**provenance, "kind": key, "pointer": f"{child}/{index}", "record": item}
-                              for index, item in enumerate(value))
-            result.extend(entries(value, provenance, child))
-    return result
+                for index, item in enumerate(value):
+                    yield {**provenance, "kind": key, "pointer": f"{child}/{index}", "record": item}
+            yield from entries(value, provenance, child)
+
+
+def index_entries(record, document, provenance):
+    remaining = MAX_BYTES - len(bounded_encode(record))
+    message = "generated index exceeds the size limit"
+    for item in entries(document, provenance):
+        encoded = bounded_encode(item, remaining, message)
+        cost = len(encoded) + 4 * encoded.count(b"\n") + 4
+        storage.require(cost <= remaining, message)
+        remaining -= cost
+        record["entries"].append(item)
 
 
 def archive(folder, run_id, entry):
@@ -242,21 +283,20 @@ def archive(folder, run_id, entry):
     provenance = {name: entry[name] for name in ("role", "assignment", "observation")}
     provenance["worker"] = entry.get("worker")
     provenance["run_id"] = run_id
+    if entry.get("phase") is not None:
+        provenance["phase"] = entry["phase"]
     record = {**provenance, "source": source,
               "original": str(original.relative_to(folder)), "sha256": key, "entries": [], "error": None}
+    bounded_encode(record)
     try:
-        document = json.loads(content)
+        document = strict_loads(content)
         storage.require(not isinstance(document, dict) or document.get("run_id") in (None, run_id),
                         "Report names another run; retain its original provenance")
-        record["entries"] = entries(document, provenance)
+        index_entries(record, document, provenance)
     except (ValueError, UnicodeError, RecursionError) as error:
-        record["error"] = f"Original retained; report indexing unavailable: {error}"
-    encoded = storage.encode(record)
-    if len(encoded) > MAX_BYTES:
         record["entries"] = []
-        record["error"] = "Original retained; report indexing unavailable: generated index exceeds the size limit"
-        encoded = storage.encode(record)
-    storage.require(len(encoded) <= MAX_BYTES, "Review record metadata exceeds the size limit")
+        record["error"] = f"Original retained; report indexing unavailable: {error}"
+    encoded = bounded_encode(record)
     identity = storage.digest(encoded)
     destination = storage.safe_path(folder, f"records/{identity}.json")
     if destination.exists():
@@ -269,14 +309,15 @@ def archive(folder, run_id, entry):
 
 def record(run, entry):
     folder, value = load(run)
-    if not enabled(value["root"]):
+    if not enabled(value.get("project", value["root"])):
         return {"enabled": False, "run_id": value["run_id"]}
     storage.require(isinstance(entry, dict) and
                     {"role", "assignment"} <= entry.keys() <=
-                    {"role", "assignment", "worker", "observation", "harness", "result_file", "external_report"},
+                    {"role", "assignment", "phase", "worker", "observation", "harness",
+                     "result_file", "external_report"},
                     "Unknown or missing role record fields")
     storage.require(entry["role"] in ROLES, "Unknown review role")
-    identifier(entry["assignment"])
+    key = role_key(entry)
     storage.require(type(entry.get("external_report", False)) is bool, "External import must be a boolean")
     worker = entry.get("worker")
     if worker is not None:
@@ -285,11 +326,12 @@ def record(run, entry):
     observed["harness"] = observation(entry.get("harness", {}), ("name", "version"))
     with locked(folder):
         folder, value = load(folder)
-        key = f"{entry['role']}:{entry['assignment']}"
         role = value["roles"].setdefault(key, {
             "role": entry["role"], "assignment": entry["assignment"],
             "worker": worker, "observations": [],
         })
+        if entry.get("phase") is not None:
+            role["phase"] = entry["phase"]
         storage.require(role["worker"] in (None, worker) or worker is None,
                         "Worker changed; retain the original and use the new launch's assignment ID")
         role["worker"] = worker if worker is not None else role["worker"]
@@ -299,7 +341,7 @@ def record(run, entry):
             "result_file") else None
         if report is not None and report not in value["reports"]:
             value["reports"].append(report)
-        storage.atomic_write(folder / "RUN.json", storage.encode(value))
+        storage.atomic_write(folder / "RUN.json", bounded_encode(value, message="Run record exceeds the size limit"))
     return {"enabled": True, "run_id": value["run_id"], "role": role, "report": report}
 
 
@@ -329,6 +371,7 @@ def main(argv=None):
     save.add_argument("run")
     save.add_argument("--role", required=True, choices=ROLES)
     save.add_argument("--assignment", required=True)
+    save.add_argument("--phase", help="phase_id from the packet plan, keeping assignment IDs unchanged")
     save.add_argument("--worker")
     save.add_argument("--result-file")
     save.add_argument("--external-report", action="store_true",
@@ -354,7 +397,7 @@ def main(argv=None):
                 result = initialize(args.root, args.target, {"harness": harness, "lead": observed})
             else:
                 entry = {name: getattr(args, name) for name in
-                         ("role", "assignment", "worker", "result_file", "external_report")}
+                         ("role", "assignment", "phase", "worker", "result_file", "external_report")}
                 result = record(args.run, {**entry, "observation": observed, "harness": harness})
         print(json.dumps(result, indent=2))
         return 0
