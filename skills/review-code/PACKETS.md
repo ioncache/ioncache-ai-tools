@@ -3,7 +3,8 @@
 The caller resolves `../../scripts/review_assignments.py` relative to this
 installed skill. It reads JSON and writes JSON to stdout, never launches models
 or creates a state store. Keep request, plan and result files in caller-owned
-private storage outside the reviewed tree.
+private storage outside the reviewed tree. Allocate that storage through
+[RECORDS.md](RECORDS.md); this packet helper remains storeless.
 
 Before preparing packets, complete the caller's
 [pre-launch readiness](ORCHESTRATION.md#pre-launch-readiness) for authoritative
@@ -33,6 +34,9 @@ Prepare requires `objective`, `kind` (`full` or `focused`), `target`, `base`
 `root` (absolute consuming worktree), `files` (complete candidate-file list),
 `constraints` (explicit read/tool/check limits), `scratch_directory` (absolute),
 and the normalized `review_options` from OPTIONS.md.
+Include the record helper's `run_id` for new centrally stored phases.
+It is copied into each packet and cannot change during a phase revision.
+Older plans and opted-out or fallback runs may omit it.
 
 Optional fields are:
 

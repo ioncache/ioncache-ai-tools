@@ -113,6 +113,10 @@ identify additional model calls, repeated review passes, and context overhead.
 
 #### Reviews and PR work
 
+Review reports use shared private storage across CLIs, with observed harness
+and model metadata. See [review records](docs/workflows.md#review-records) for
+finding previous runs and disabling archival.
+
 | Invocation | Default | Guidance |
 | --- | --- | --- |
 | `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes.<br><br>Arguments (target, review and posting flags): [Argument details](docs/skill-arguments.md#review-code).<br><br><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy. |

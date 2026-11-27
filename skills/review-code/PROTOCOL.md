@@ -106,6 +106,9 @@ placeholders with the packet values and your actual observations:
 
 `instruction_set` is the identity string, not the packet's instruction object.
 `selection` is an object, not prose; record unknown values without guessing.
+When the packet includes `run_id`, copy it into the result. Omit it for older
+packets without that field. The caller owns archival and run metadata; a leaf
+does not initialize storage or invoke the record helper.
 `coverage.ambient_sources`, `coverage.reference_sources`,
 `coverage.context_conflicts`, and `limitations` are arrays of nonempty strings,
 for example `["AGENTS.md: ignored as review instructions"]`, not arrays of

@@ -94,6 +94,20 @@ class ReviewAssignmentTests(unittest.TestCase):
         self.assertTrue(result["structurally_complete"], result)
         self.assertIn("do not prove", result["evidence_limit"])
 
+    def test_run_identity_survives_packets_and_cannot_be_reassigned(self):
+        self.request["run_id"] = "a" * 32
+        plan = assignments.prepare(self.request)
+        self.assertTrue(all(packet["run_id"] == self.request["run_id"] for packet in plan["packets"].values()))
+        revised = assignments.prepare(self.request, plan)
+        self.assertEqual(revised["packets"], plan["packets"])
+        changed = {**self.request, "run_id": "b" * 32}
+        with self.assertRaisesRegex(ValueError, "run identity"):
+            assignments.prepare(changed, plan)
+        handoff = self.handoff(plan)
+        self.assertTrue(assignments.check(plan, handoff)["structurally_complete"])
+        handoff["attempts"][0]["result"]["run_id"] = "b" * 32
+        self.assertFalse(assignments.check(plan, handoff)["structurally_complete"])
+
     def test_project_requirements_override_only_within_one_registered_purpose(self):
         source = {"category": "unit-tests", "source": ".github/instructions/testing.md",
                   "source_identity": "original-file-id", "content": "API tests belong in apps/api/test",
