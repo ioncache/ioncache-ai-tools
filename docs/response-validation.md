@@ -40,10 +40,11 @@ Responses without text or supported message payloads do not need a model call.
 Ordinary text, including acknowledgements, goes through the reviewer.
 Thinking blocks and unrelated tool arguments are not rewritten.
 
-Malformed or unreadable host settings pause validation. The configuration helper
-warns on stderr without changing the settings, and drafts pass through unchanged,
-including when validation was already off. The next response checks the settings
-again, so repair restores the configured behavior.
+Malformed or unreadable host settings make the configuration query fail, rather
+than report an explicit opt-out. The helper leaves the settings untouched and
+reports details on stderr. The response is delivered with a configuration-failure
+preface, without reading history or calling the reviewer. Each response checks
+settings again; repair restores the configured behavior, including opt-out.
 
 If validation cannot finish, the response is still delivered. A visible preface
 explains why; it never replaces the answer:
@@ -69,7 +70,11 @@ There is no retry loop, approval file or persistent permission state. A technica
 failure adds one preface to the text response and a preface to each supported
 agent-message field. The response body, recipients, control fields, and unrelated
 tool calls remain intact. Each subsequent response attempts validation normally.
-A hook failure reuses the native stream replay without regenerating the answer.
+A hook failure reuses the source buffer held for that exact event. Native catch
+continues the existing cursor; it does not replay chunks already consumed.
+The buffer is weakly keyed by the event, so concurrent responses stay separate
+and abandoned events do not keep response text alive. Recovery never regenerates
+the source answer.
 An interrupted source stream returns the text received so far with an incomplete
 response warning; it cannot recover text never generated or safely execute
 unfinished tool calls. Explicit cancellation discards the held text.
@@ -132,8 +137,10 @@ No representative real-reply cost benchmark has been completed.
 The native offline suite exercises buffering before release, corrected stream
 and result text, agent identity isolation, handback arguments, configuration
 failures, opt-out, same-response failure recovery, missing evidence, ambiguous
-requests, and interrupted source streams. Separate Node checks cover chunk handles,
-edit and reason validation, hook-fallback replay handling, and cancellation. These checks
+requests, interrupted source streams, and registered catch recovery after full
+consumption for thrown errors and native hook timeouts. Separate Node checks cover
+chunk handles, edit and reason validation, configuration repair, and explicit
+cancellation during collection and recovery. These checks
 do not establish live interactive, remote-client or every native agent-delivery
 route's behavior.
 

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { evidencePacket, parseEdits, MAX_DRAFT_CHARACTERS } from './reviewer.mjs';
 import { responseDrafts, rewriteResponse, rewrittenResult } from './response.mjs';
-import { validateResponse, unavailableResponse } from './register.mjs';
+import { register, validateResponse, unavailableResponse } from './register.mjs';
 
 async function collect(stream) {
   const chunks = [];
@@ -19,7 +19,7 @@ async function collect(stream) {
   return { chunks, result: step.value };
 }
 
-test('malformed host settings pass drafts through and repaired opt-ins resume review', async t => {
+test('malformed host settings explain the failure and repaired opt-ins resume review', async t => {
   const root = mkdtempSync(join(tmpdir(), 'response-config-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const env = {
@@ -63,11 +63,12 @@ test('malformed host settings pass drafts through and repaired opt-ins resume re
     return { answer: draft.text, toolUses: [], stopReason: 'end_turn' };
   };
   const paused = validateResponse(api, { turnId: 'turn', index: 0 }, next);
-  assert.deepEqual(await paused.next(), { done: false, value: draft });
-  assert.equal((await paused.next()).value.answer, draft.text);
+  const text = '[Response could not be validated: The configuration query failed (exit code 1).]\n\n' + draft.text;
+  assert.deepEqual(await paused.next(), { done: false, value: { ...draft, text } });
+  assert.equal((await paused.next()).value.answer, text);
   assert.equal(reviews, 0);
   assert.equal(historyReads, 0);
-  assert.match(diagnostics[0], /failed to read\/sync copilot settings/);
+  assert.match(diagnostics[0], /synchronization failed/);
   assert.equal(readFileSync(paths[1], 'utf8'), '{broken');
 
   for (const path of paths) writeFileSync(path, '{"features":{"response-validation":true}}');
@@ -77,6 +78,13 @@ test('malformed host settings pass drafts through and repaired opt-ins resume re
   assert.equal(reviews, 1);
   assert.equal(historyReads, 1);
   assert.equal(diagnostics[1], '');
+
+  writeFileSync(paths[1], '{"features":{"response-validation":false}}');
+  const disabled = await collect(validateResponse(api, { turnId: 'turn', index: 2 }, next));
+  assert.deepEqual(disabled.chunks, [draft]);
+  assert.equal(disabled.result.answer, draft.text);
+  assert.equal(reviews, 1);
+  assert.equal(historyReads, 1);
 });
 
 test('reviewer edits must target each existing draft at most once', () => {
@@ -131,7 +139,47 @@ test('configuration, history and model exceptions preserve answers without expos
   }
 });
 
-test('hook fallback annotates the replayed response and keeps chunk handles and tool metadata', async () => {
+for (const [reason, config] of [
+  ['The configuration query output was truncated.', { stdout: '{"enabled":true}', isStdoutTruncated: true }],
+  ['The configuration query returned invalid JSON.', { stdout: '{broken' }],
+  ['The configuration query returned an invalid setting.', { stdout: '{"enabled":"false"}' }],
+]) {
+  test(`unusable settings preserve the response: ${reason}`, async () => {
+    let historyReads = 0;
+    let reviews = 0;
+    const api = {
+      plugin: { root: '/plugin' },
+      process: { run: async () => ({ exitCode: 0, ...config }) },
+      session: { cwd: async () => '/project', messages: async () => { historyReads++; return []; } },
+      model: { complete: async () => { reviews++; return { isAnswered: true, text: '{"edits":[]}' }; } },
+    };
+    const next = async function* () {
+      yield { kind: 'text', index: 0, text: 'The original answer.' };
+      return { answer: 'The original answer.', toolUses: [], stopReason: 'end_turn' };
+    };
+    const output = await collect(validateResponse(api, { turnId: 'turn', index: 0 }, next));
+    const text = `[Response could not be validated: ${reason}]\n\nThe original answer.`;
+    assert.deepEqual(output.chunks, [{ kind: 'text', index: 0, text }]);
+    assert.equal(output.result.answer, text);
+    assert.equal(historyReads, 0);
+    assert.equal(reviews, 0);
+  });
+}
+
+test('registered catch retains consumed chunk handles and respects explicit cancellation', async () => {
+  let handler;
+  let fallback;
+  register((name, hook) => {
+    assert.equal(name, 'turn.step');
+    handler = hook;
+    return { catch: hook => { fallback = hook; } };
+  });
+  const api = {
+    plugin: { root: '/plugin' },
+    process: { run: async () => ({ exitCode: 0, stdout: '{"enabled":true}' }) },
+    session: { cwd: async () => '/project', messages: async () => [] },
+    model: { complete: async () => ({ isAnswered: true, text: '{"edits":[]}' }) },
+  };
   let reads = 0;
   const input = { message: 'The targeted test passed.', reportPath: '/private/report' };
   const toolUses = [{ name: 'SubagentHandback', input }];
@@ -141,12 +189,17 @@ test('hook fallback annotates the replayed response and keeps chunk handles and 
     { kind: 'input', index: 1, json: JSON.stringify(input), ref: 3 },
     { kind: 'stop', stopReason: 'tool_use', usage: null, ref: 4 },
   ];
-  const next = Object.assign(async function* () {
+  const source = (async function* () {
     reads++;
     yield* chunks;
     return { answer: 'The answer.', toolUses, stopReason: 'tool_use' };
-  }, { called: true, error: { kind: 'timeout' } });
-  const output = await collect(unavailableResponse({}, { turnId: 'turn', index: 0 }, next));
+  })();
+  const next = Object.assign(() => source, { called: true, error: { kind: 'timeout' } });
+  const event = { turnId: 'turn', index: 0 };
+  const held = handler(api, event, next);
+  await held.next();
+  await held.return();
+  const output = await collect(fallback({}, event, next));
   const prefix = '[Response could not be validated: The response validation hook exceeded its execution time limit.]\n\n';
   assert.equal(output.result.answer, prefix + 'The answer.');
   assert.deepEqual(output.result.toolUses, [{ name: 'SubagentHandback', input: { ...input, message: prefix + input.message } }]);
@@ -156,14 +209,51 @@ test('hook fallback annotates the replayed response and keeps chunk handles and 
   assert.equal(reads, 1);
 
   const controller = new AbortController();
+  const cancelSource = (async function* () {
+    yield* chunks;
+    return { answer: 'The answer.', toolUses, stopReason: 'tool_use' };
+  })();
+  const cancelNext = Object.assign(() => cancelSource, { signal: controller.signal });
+  const cancelEvent = { turnId: 'turn', index: 1 };
+  const cancelling = handler(api, cancelEvent, cancelNext);
+  await cancelling.next();
   controller.abort();
-  next.signal = controller.signal;
-  const cancelled = await collect(unavailableResponse({}, { turnId: 'turn', index: 0 }, next));
+  await cancelling.return();
+  const cancelled = await collect(fallback({}, cancelEvent, cancelNext));
   assert.deepEqual(cancelled.chunks, []);
   assert.equal(cancelled.result.answer, '');
   assert.deepEqual(cancelled.result.toolUses, []);
   assert.equal(reads, 1);
 });
+
+for (const handler of [validateResponse, unavailableResponse]) {
+  for (const interrupted of [false, true]) {
+    test(`${handler.name} drops source-time cancellation before ${interrupted ? 'rejection' : 'completion'}`, async () => {
+      const controller = new AbortController();
+      let reviews = 0;
+      const api = {
+        plugin: { root: '/plugin' },
+        process: { run: async () => ({ exitCode: 0, stdout: '{"enabled":true}' }) },
+        session: { cwd: async () => '/project', messages: async () => [] },
+        model: { complete: async () => { reviews++; return { isAnswered: true, text: '{"edits":[]}' }; } },
+      };
+      const next = Object.assign(async function* () {
+        yield { kind: 'text', index: 0, text: 'Held answer.' };
+        yield { kind: 'tool', index: 1, id: 'send', name: 'SendMessage' };
+        yield { kind: 'input', index: 1, json: '{"message":"Held handback."}' };
+        controller.abort();
+        if (interrupted) throw new Error('cancelled source');
+        return { answer: 'Held answer.', toolUses: [{ name: 'SendMessage', input: { message: 'Held handback.' } }] };
+      }, { signal: controller.signal });
+      const output = await collect(handler(api, { turnId: 'turn', index: 0 }, next));
+      assert.deepEqual(output.chunks, []);
+      assert.equal(output.result.answer, '');
+      assert.deepEqual(output.result.toolUses, []);
+      assert.equal(output.result.stopReason, null);
+      assert.equal(reviews, 0);
+    });
+  }
+}
 
 test('bounded history keeps its incompleteness explicit and refuses missing identities', () => {
   assert.throws(() => evidencePacket({ deny: 'unavailable' }));

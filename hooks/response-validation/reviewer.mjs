@@ -208,7 +208,10 @@ function reviewerFailure(result) {
   if (result?.reason === 'api-error') {
     const status = Number.isInteger(result.status) && result.status >= 100 && result.status <= 599
       ? `HTTP ${result.status}` : 'no HTTP response';
-    const kinds = ['rate_limit', 'overloaded', 'invalid_request', 'authentication_failed', 'server_error'];
+    const kinds = [
+      'rate_limit', 'overloaded', 'invalid_request', 'authentication_failed',
+      'billing_error', 'model_not_found', 'server_error',
+    ];
     const kind = kinds.includes(result.error) ? result.error : 'unknown error';
     return `The reviewer API failed (${status}, ${kind}).`;
   }

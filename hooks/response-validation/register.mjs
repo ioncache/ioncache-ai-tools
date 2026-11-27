@@ -4,10 +4,21 @@ import {
 import { readResponse, responseDrafts, rewriteResponse, rewrittenResult, cancelledResult } from './response.mjs';
 
 export function register(on) {
-  on('turn.step', validateResponse).catch(unavailableResponse);
+  const responses = new WeakMap();
+  on('turn.step', async function* ($, event, next) {
+    const buffer = {};
+    responses.set(event, buffer);
+    const result = yield* validateResponse($, event, next, buffer);
+    if (!next.signal?.aborted) responses.delete(event);
+    return result;
+  }).catch(async function* ($, event, next) {
+    const buffer = responses.get(event);
+    responses.delete(event);
+    return yield* unavailableResponse($, event, next, buffer);
+  });
 }
 
-export async function* validateResponse($, event, next) {
+export async function* validateResponse($, event, next, buffer = {}) {
   let enabled;
   let configurationFailure;
   try {
@@ -17,7 +28,7 @@ export async function* validateResponse($, event, next) {
     configurationFailure = failureReason(error, 'The configuration lookup failed unexpectedly.');
   }
   if (enabled === false) return yield* next(event);
-  const source = await readResponse(next(event));
+  const source = await (buffer.source = readResponse(next(event)));
   if (next.signal?.aborted) return cancelledResult(source.result);
   if (source.interrupted) return yield* failedResponse(source, event);
   const { chunks } = source;
@@ -40,9 +51,9 @@ export async function* validateResponse($, event, next) {
   return result;
 }
 
-export async function* unavailableResponse($, event, next) {
+export async function* unavailableResponse($, event, next, buffer = {}) {
   if (next.signal?.aborted) return cancelledResult({ turnId: event.turnId, index: event.index });
-  const source = await readResponse(next(event));
+  const source = await (buffer.source ?? readResponse(next(event)));
   if (next.signal?.aborted) return cancelledResult(source.result);
   const reason = next.error?.kind === 'timeout'
     ? 'The response validation hook exceeded its execution time limit.'
