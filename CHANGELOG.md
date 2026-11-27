@@ -4,6 +4,20 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.14.2 (2026-11-27)
+
+### New
+
+* improve plugin settings discoverability and pane clarity ([#86](https://github.com/ioncache/ioncache-ai-tools/issues/86)) ([c781f10](https://github.com/ioncache/ioncache-ai-tools/commit/c781f10803628000c61d9dc9aaf0ac2c9fa2d20a))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* None.
+
 ## 1.14.1 (2026-11-26)
 
 ### New
