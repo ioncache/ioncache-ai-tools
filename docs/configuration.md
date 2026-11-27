@@ -15,12 +15,17 @@ it. Each toggle saves immediately across all three hosts, using the existing
 settings helper and its readback verification. Opening, switching scopes, and
 refreshing do not write settings.
 
-The pane names `ioncache-ai-tools` and highlights the scope being edited.
+The pane highlights the scope being edited. While it is open, a pinned status
+line names `ioncache-ai-tools`, the current scope, and the scrolling keys.
+That line stays outside the scrolling settings, changes during reads or errors,
+and clears when the pane closes or is disabled.
 Rows show the setting name first, then `[x]` or `[ ]`, with green `enabled`
 or red `disabled` text so state remains readable without colour.
-The setting count, category summary, and scroll-key hints reveal the rest of
-the catalog even when it is below the visible area. The host owns scrolling;
-the pane does not add a custom scrollbar.
+Short or narrow panes use a compact header with scope controls, a shortened
+project path, and the setting count and keyboard hint. Taller, wider panes also
+show the full project path, scope explanation, and category summary.
+Use `--list` to see the full path when the compact view shortens it.
+The host owns scrolling; the pane does not add a custom scrollbar.
 
 Tab moves between controls, Enter activates one, Page Up/Down scrolls, and Esc
 closes the pane. Global mode shows the effective project value wherever an

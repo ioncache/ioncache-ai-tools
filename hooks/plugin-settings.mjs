@@ -5,8 +5,28 @@ let snapshot;
 let scope = 'project';
 let project;
 let busy = false;
+let paneOpen = false;
 let message = '';
 let messageColor = 'green';
+
+function updateStatus($) {
+  const label = scope === 'project' ? 'Project' : 'Global';
+  if (!paneOpen || (snapshot && !snapshot.uiEnabled)) {
+    $.ui.status(undefined);
+  } else if (busy) {
+    $.ui.status(label + ' | Reading settings...');
+  } else if (!snapshot) {
+    $.ui.status('Read failed | Refresh to retry');
+  } else {
+    $.ui.status(label + ' | PgUp/PgDn: scroll');
+  }
+}
+
+async function closePane($) {
+  await $.ui.close({ id: PANE });
+  paneOpen = false;
+  updateStatus($);
+}
 
 async function run($, args) {
   const root = $.plugin.root;
@@ -33,6 +53,7 @@ async function refresh($, options = {}) {
   busy = true;
   message = 'Reading settings...';
   messageColor = 'cyan';
+  updateStatus($);
   $.ui.invalidate('ui.render');
   const requestedScope = options.scope || scope;
   try {
@@ -55,6 +76,7 @@ async function refresh($, options = {}) {
     messageColor = 'red';
   } finally {
     busy = false;
+    updateStatus($);
     $.ui.invalidate('ui.render');
   }
 }
@@ -67,10 +89,10 @@ function settingRows($, elements) {
       'Native pane disabled. Re-enable with /ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled.',
     ] })];
   }
-  return snapshot.groups.map(group => Box({
+  return snapshot.groups.map((group, index) => Box({
     key: 'group:' + group.title,
     flexDirection: 'column',
-    marginTop: 1,
+    marginTop: index ? 1 : 0,
     children: [
       Text({ bold: true, color: 'cyan', children: [group.title + ' (' + group.settings.length + ')'] }),
       ...group.settings.map(setting => Box({
@@ -106,15 +128,50 @@ function settingRows($, elements) {
   }));
 }
 
-function catalogSummary(elements) {
+function catalogSummary(elements, compact) {
   if (!snapshot?.uiEnabled || busy) return [];
   const { Text } = elements;
   const count = snapshot.groups.reduce((total, group) => total + group.settings.length, 0);
   return [
     Text({ color: 'cyan', children: [
-      count + ' settings below. PgUp/PgDn or Home/End to scroll.',
+      count + (compact ? ' settings | Tab: move | Enter: toggle'
+        : ' settings below. PgUp/PgDn or Home/End to scroll.'),
     ] }),
-    Text({ dimColor: true, children: [snapshot.groups.map(group => group.title).join(' | ')] }),
+    ...(!compact ? [
+      Text({ dimColor: true, children: [snapshot.groups.map(group => group.title).join(' | ')] }),
+    ] : []),
+  ];
+}
+
+function paneHeader($, elements, compact) {
+  const { Box, Text, Button } = elements;
+  const scopeButtons = busy ? [] : ['project', 'global'].map(value => Button({
+    key: value,
+    label: (value === 'project' ? 'Project' : 'Global') +
+      (!compact && scope === value ? ' (editing)' : ''),
+    variant: scope === value ? 'primary' : 'secondary',
+    onPress: () => refresh($, { scope: value }),
+  }));
+  const controls = Box({
+    flexDirection: 'row', flexWrap: 'wrap', columnGap: 1,
+    children: [
+      ...scopeButtons,
+      ...(!busy ? [Button({ key: 'refresh', label: 'Refresh', onPress: () => refresh($) })] : []),
+      Button({ key: 'close', label: 'Close', onPress: () => closePane($) }),
+    ],
+  });
+  const location = Text({
+    dimColor: true, wrap: compact ? 'truncate-middle' : 'wrap',
+    children: ['Project: ' + (project || '(current directory)')],
+  });
+  if (compact) return [controls, location];
+  return [
+    Text({ bold: true, color: 'cyan', children: ['ioncache-ai-tools | Settings'] }),
+    location,
+    Text({ bold: true, children: ['Editing: ' + scope + ' settings (Claude, Copilot, Codex)'] }),
+    controls,
+    Text({ children: ['Changes save immediately. Global keeps project overrides.'] }),
+    Text({ dimColor: true, children: ['Tab: move | Enter: toggle | Esc: close'] }),
   ];
 }
 
@@ -130,48 +187,36 @@ export function register(on) {
       const placement = await $.ui.open({
         id: PANE, title: 'ioncache-ai-tools | Settings', rows: 24, focus: true, closeOnEscape: true,
       });
+      paneOpen = placement.isPlaced;
+      updateStatus($);
       if (!placement.isPlaced) return listOrChange($);
     } catch {
+      paneOpen = false;
+      updateStatus($);
       return listOrChange($);
     }
     return {};
   });
 
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const result = await next(e);
+    if (!result.deny) {
+      paneOpen = false;
+      updateStatus($);
+    }
+    return result;
+  });
+
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
-    const { Box, Text, Button } = elements;
-    const scopeButtons = busy ? [] : [
-      Button({
-        key: 'project', label: scope === 'project' ? 'Project (editing)' : 'Project',
-        variant: scope === 'project' ? 'primary' : 'secondary',
-        onPress: () => refresh($, { scope: 'project' }),
-      }),
-      Button({
-        key: 'global', label: scope === 'global' ? 'Global (editing)' : 'Global',
-        variant: scope === 'global' ? 'primary' : 'secondary',
-        onPress: () => refresh($, { scope: 'global' }),
-      }),
-      Button({ key: 'refresh', label: 'Refresh', onPress: () => refresh($) }),
-    ];
+    const { Box, Text } = elements;
+    const compact = e.props.scroll.bodyRows < 12 || e.props.bodyColumns < 60;
     return Box({
       flexDirection: 'column',
       children: [
-        Text({ bold: true, color: 'cyan', children: ['ioncache-ai-tools | Settings'] }),
-        Text({ dimColor: true, children: ['Project: ' + (project || '(current directory)')] }),
-        Text({ bold: true, children: ['Editing: ' + scope + ' settings (Claude, Copilot, Codex)'] }),
-        Box({
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          columnGap: 1,
-          children: [
-            ...scopeButtons,
-            Button({ key: 'close', label: 'Close', onPress: () => $.ui.close({ id: PANE }) }),
-          ],
-        }),
-        Text({ children: ['Changes save immediately. Global keeps project overrides.'] }),
-        Text({ dimColor: true, children: ['Tab: move | Enter: toggle | Esc: close'] }),
-        ...catalogSummary(elements),
+        ...paneHeader($, elements, compact),
+        ...catalogSummary(elements, compact),
         ...(message ? [Text({ color: messageColor, children: [message] })] : []),
         ...settingRows($, elements),
       ],
