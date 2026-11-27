@@ -829,15 +829,36 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(path.stat().st_mtime_ns, stamp)
 
     def test_unknown_settings_are_preserved_but_never_effective(self):
-        name = 'future-feature'
-        path = config.paths(self.project)['claude'][0]
-        self.write(path, {'features': {name: False, 'fix_emdash': False}})
-        self.assertEqual(config.synchronize(str(self.project), 'claude'),
-                         {'fix_emdash', 'response-validation'})
-        self.assertIs(json.loads(path.read_text())['features'].get(name), False)
-        self.write(path, {'features': {name: True}})
-        self.assertFalse(config.enabled(name, self.data))
-        self.assertIs(json.loads(path.read_text())['features'].get(name), True)
+        name = 'skill:future-feature'
+        global_path, project_path = config.paths(self.project)['claude']
+        tool = {**self.data, 'tool_name': 'Skill', 'tool_input': {'skill': 'ioncache-ai-tools:future-feature'}}
+        newer = {**config.defaults(), name: True}
+        for scope, enabled in product(('global', 'embedded', 'project'), (False, True)):
+            with self.subTest(scope=scope, enabled=enabled):
+                self.write(global_path, {'features': {}})
+                project_path.unlink(missing_ok=True)
+                document = {'features': {name: enabled, 'fix_emdash': False}}
+                if scope == 'embedded':
+                    document = {'features': {}, 'projects': {str(self.project): document}}
+                path = project_path if scope == 'project' else global_path
+                self.write(path, document)
+
+                snapshot = config.feature_settings(self.data)
+                self.assertEqual(snapshot.disabled, {'fix_emdash', 'response-validation'})
+                self.assertNotIn(name, snapshot.catalog)
+                self.assertFalse(config.enabled(name, self.data))
+                self.assertIsNone(guidance.run_hook('PreToolUse', tool))
+                stored = json.loads(path.read_text())
+                values = stored['projects'][str(self.project)] if scope == 'embedded' else stored
+                self.assertIs(values['features'].get(name), enabled)
+
+                with mock.patch.object(config, 'defaults', return_value=newer):
+                    self.assertEqual(config.enabled(name, self.data), enabled)
+                    output = guidance.run_hook('PreToolUse', tool)
+                if enabled:
+                    self.assertIsNone(output)
+                else:
+                    self.assertEqual(output['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_embedded_project_overrides_match_aliases_in_hooks_and_commands(self):
         link = self.root / 'project-link'
@@ -875,23 +896,86 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertNotIn('fix_emdash', config.synchronize(str(link), persist=False, strict=True))
                 local.unlink()
 
+    def test_unrelated_project_alias_failure_preserves_effective_settings(self):
+        unrelated = self.root / 'unrelated-loop'
+        unrelated.symlink_to(unrelated.name)
+        path, local = config.paths(self.project)['claude']
+        self.write(path, {'features': {'fix_emdash': False}, 'projects': {
+            str(unrelated): {'features': {'no_broad_process_kill': False}},
+            str(self.project): {'features': {'fix_emdash': True, 'docs-cache': False}},
+        }})
+        self.write(local, {'features': {'fix_emdash': False}})
+        resolve = Path.resolve
+
+        def fail_unrelated(target, *args, **kwargs):
+            if target == unrelated:
+                raise failure
+            return resolve(target, *args, **kwargs)
+
+        for failure in (RuntimeError('Symlink loop'), PermissionError('Alias inaccessible')):
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(Path, 'resolve', autospec=True, side_effect=fail_unrelated), \
+                    mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                before = self.tree_state()
+                expected = {'fix_emdash', 'docs-cache', 'response-validation'}
+                self.assertEqual(config.synchronize(str(self.project), strict=True, persist=False), expected)
+                code, output, error = self.settings_command('--json')
+                self.assertEqual(code, 0, error)
+                rows = {row['name']: row for group in json.loads(output)['groups'] for row in group['settings']}
+                self.assertTrue(rows['hook:no_broad_process_kill']['effective'])
+                self.assertFalse(rows['hook:fix_emdash']['effective'])
+                self.assertEqual(self.tree_state(), before)
+                self.assertEqual(config.feature_settings(self.data).disabled, expected)
+                self.assertIn(str(unrelated), stderr.getvalue())
+                self.assertIn(str(failure), stderr.getvalue())
+                self.assertNotIn('features paused', stderr.getvalue())
+
+    def test_current_project_resolution_failure_is_not_ignored(self):
+        resolve = Path.resolve
+
+        def fail_current(target, *args, **kwargs):
+            if target == self.project:
+                raise RuntimeError('Current project unavailable')
+            return resolve(target, *args, **kwargs)
+
+        with mock.patch.object(Path, 'resolve', autospec=True, side_effect=fail_current), \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            self.assertEqual(config.synchronize(str(self.project), persist=False), set(config.defaults()))
+            self.assertIn('features paused', stderr.getvalue())
+            with self.assertRaisesRegex(RuntimeError, 'Current project unavailable'):
+                config.synchronize(str(self.project), strict=True, persist=False)
+
     def test_legacy_settings_migrate_and_retired_claim_settings_disappear(self):
+        future = {'future-camel-disabled': False, 'future-camel-enabled': True,
+                  'future-snake-disabled': False, 'future-snake-enabled': True}
+        newer = {**config.defaults(), **dict.fromkeys(future, True)}
         for host, (path, project_path) in config.paths(self.project).items():
             with self.subTest(host=host):
-                self.write(path, {'disabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify'],
-                                  'enabledRules': ['verify-state-before-claiming']})
-                self.write(project_path, {'enabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify']})
+                self.write(path, {
+                    'disabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify', 'future-camel-disabled'],
+                    'enabledRules': ['verify-state-before-claiming', 'future-camel-enabled'],
+                    'disabled_rules': ['future-snake-disabled'], 'enabled_rules': ['future-snake-enabled'],
+                })
+                self.write(project_path, {
+                    'enabledRules': ['no_broad_process_kill', 'claim-evidence', 'graphify', 'future-camel-enabled'],
+                    'disabledRules': ['future-camel-disabled'],
+                    'disabled_rules': ['future-snake-disabled'], 'enabled_rules': ['future-snake-enabled'],
+                })
                 config.synchronize(str(self.project), host)
                 stored = json.loads(path.read_text())
-                self.assertEqual(set(stored['features']), set(config.defaults()))
+                self.assertEqual(set(stored['features']), set(config.defaults()) | set(future))
+                self.assertEqual({name: stored['features'][name] for name in future}, future)
                 self.assertFalse(stored['features']['no_broad_process_kill'])
                 self.assertEqual(json.loads(project_path.read_text()), {
-                    'features': {'no_broad_process_kill': True},
+                    'features': {'no_broad_process_kill': True, **future},
                 })
                 self.assertNotIn('disabledRules', stored)
                 self.assertNotIn('claim-evidence', path.read_text())
                 self.assertNotIn('graphify', path.read_text())
                 self.assertNotIn('verify-state-before-claiming', path.read_text())
+                disabled = config.synchronize(str(self.project), host, catalog=newer)
+                for name, enabled in future.items():
+                    self.assertEqual(name in disabled, not enabled)
 
     def test_codex_migrates_once_without_rewriting_host_settings(self):
         global_path, _ = config.paths(self.project)['codex']
@@ -899,16 +983,30 @@ class ConfigurationTests(unittest.TestCase):
         toml.parent.mkdir(parents=True)
         original = (
             'model = "configured-model"\n[ioncache-ai-tools]\n'
-            'disabled_rules = ["no_broad_process_kill", "claim-evidence"]\n'
+            'disabled_rules = ["no_broad_process_kill", "claim-evidence", "future-global-disabled"]\n'
+            'enabled_rules = ["future-global-enabled"]\n'
             f'[projects.{json.dumps(str(self.project))}.ioncache-ai-tools]\n'
-            'enabled_rules = ["no_broad_process_kill"]\n'
+            'enabled_rules = ["no_broad_process_kill", "future-project-enabled"]\n'
+            'disabled_rules = ["future-project-disabled"]\n'
         )
         toml.write_text(original)
         self.assertNotIn('no_broad_process_kill', config.synchronize(str(self.project), 'codex'))
-        self.assertEqual(toml.read_text(), original)
+        self.assertEqual(toml.read_bytes(), original.encode())
         stored = json.loads(global_path.read_text())
         self.assertFalse(stored['features']['no_broad_process_kill'])
+        self.assertIs(stored['features'].get('future-global-disabled'), False)
+        self.assertIs(stored['features'].get('future-global-enabled'), True)
+        embedded = stored['projects'][str(self.project)]['features']
+        self.assertIs(embedded.get('future-project-disabled'), False)
+        self.assertIs(embedded.get('future-project-enabled'), True)
         self.assertNotIn('claim-evidence', global_path.read_text())
+        future = {'future-global-disabled': False, 'future-global-enabled': True,
+                  'future-project-disabled': False, 'future-project-enabled': True}
+        newer = {**config.defaults(), **dict.fromkeys(future, True)}
+        disabled = config.synchronize(str(self.project), 'codex', catalog=newer)
+        for name, enabled in future.items():
+            self.assertEqual(name in disabled, not enabled)
+        self.assertEqual(toml.read_bytes(), original.encode())
         stored['features']['no_broad_process_kill'] = True
         self.write(global_path, stored)
         self.assertNotIn('no_broad_process_kill', config.synchronize(str(self.root), 'codex'))

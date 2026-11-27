@@ -174,6 +174,10 @@ symlinks and `..` segments. Hooks, the settings commands and planning lookups
 use the same matching rule without rewriting stored path spellings. If multiple
 entries resolve to the same project, `false` wins for conflicting embedded
 values. The project file still takes precedence over those embedded values.
+An embedded entry whose path cannot be resolved is reported and skipped without
+disabling other projects' settings or guards. Failure to resolve the current
+project, or to read or validate configuration, still follows the configuration
+error handling described below.
 
 For example, disable the broad-process-termination guard globally:
 

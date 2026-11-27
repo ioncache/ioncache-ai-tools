@@ -92,7 +92,12 @@ def project_settings(document, project, catalog):
     project = Path(project).resolve()
     values = {}
     for root, overrides in document.get('projects', {}).items():
-        if Path(root).resolve() != project:
+        try:
+            resolved = Path(root).resolve()
+        except (OSError, RuntimeError) as error:
+            print(f'plugin-config: skipping unresolved embedded project {root!r}: {error}', file=sys.stderr)
+            continue
+        if resolved != project:
             continue
         for name, enabled in settings(overrides, catalog).items():
             values[name] = values.get(name, True) and enabled
