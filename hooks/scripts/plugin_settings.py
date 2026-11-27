@@ -69,7 +69,8 @@ def states(project, catalog, global_scope, *, updates=None):
             verify_updates(path, stored, expected[path])
             unchecked.discard(path)
         if is_global:
-            global_disabled.update(name for name, enabled in document['features'].items() if not enabled)
+            global_disabled.update(name for name, enabled in config.settings(document, catalog).items()
+                                   if not enabled)
 
     effective = config.synchronize(str(project), catalog=catalog, strict=True, persist=False,
                                    read_observer=observe)

@@ -21,6 +21,7 @@ import codex_adapter
 import docs_cache
 import guidance
 import hook_adapter_common
+import plugin_config
 from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
 from turn_guard_self_check import install_reviewers
 
@@ -101,6 +102,27 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIn('documentation-backed', self.prompt('Implement it'))
         self.env['IONCACHE_DOCS_DISTILLER'] = '1'
         self.assertEqual(self.prompt('Implement it'), '')
+
+    def test_project_alias_opt_out_survives_older_catalog_hooks(self):
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        self.payload['cwd'] = str(link)
+        command = {'command': 'pkill fixture'}
+        self.assertEqual(self.tool('Bash', command)['permissionDecision'], 'deny')
+        path = self.home / '.claude/ioncache-ai-tools.local.json'
+        path.write_text(json.dumps({'features': {}, 'projects': {
+            str(self.project): {'features': {'no_broad_process_kill': False}},
+        }}))
+        self.assertEqual(self.tool('Bash', command), {})
+        older = {name: value for name, value in plugin_config.defaults().items()
+                 if name != 'no_broad_process_kill'}
+        with mock.patch.object(plugin_config, 'defaults', return_value=older):
+            self.assertEqual(self.tool('Bash', {'command': 'printf fixture'}), {})
+        self.assertEqual(self.tool('Bash', command), {})
+        self.assertEqual(self.tool('Bash', {'command': 'git worktree add /tmp/new'})['permissionDecision'], 'deny')
+        path.write_text(json.dumps({'features': {}}))
+        self.assertEqual(self.tool('Bash', command)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('Bash', {'command': 'kill -TERM 12345'}), {})
 
     def prompt(self, text):
         outputs = self.invoke('UserPromptSubmit', prompt=text)

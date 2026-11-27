@@ -22,6 +22,7 @@ import copilot_question
 import docs_cache
 import guidance
 import hook_adapter_common
+import plugin_config
 import plugin_settings
 from classify_question import marker_path
 from pending_question_self_check import CLAUDE_BATCH, QUESTION_FIXTURES, RECORDED_CLAUDE
@@ -116,6 +117,50 @@ class CopilotAdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tool('skill', skill), {})
         self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+
+    def test_project_alias_opt_out_survives_older_catalog_hooks(self):
+        link = self.root / 'project-link'
+        link.symlink_to(self.project, target_is_directory=True)
+        self.payload['cwd'] = str(link)
+        command = {'command': 'pkill fixture'}
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        path = self.home / '.claude/ioncache-ai-tools.local.json'
+        self.write_config(path, {'features': {}, 'projects': {
+            str(self.project.resolve()): {'features': {'no_broad_process_kill': False}},
+        }})
+        self.assertEqual(self.tool('bash', command), {})
+        older = {name: value for name, value in plugin_config.defaults().items()
+                 if name != 'no_broad_process_kill'}
+        with mock.patch.object(plugin_config, 'defaults', return_value=older):
+            self.assertEqual(self.tool('bash', {'command': 'printf fixture'}), {})
+        self.assertEqual(self.tool('bash', command), {})
+        self.assertEqual(self.tool('bash', {'command': 'git worktree add /tmp/new'})['permissionDecision'], 'deny')
+        self.write_config(path, {'features': {}})
+        self.assertEqual(self.tool('bash', command)['permissionDecision'], 'deny')
+        self.assertEqual(self.tool('bash', {'command': 'kill -TERM 12345'}), {})
+
+    def test_unrelated_alias_failure_keeps_guards_and_executable_recovery(self):
+        unrelated = self.root / 'unrelated-loop'
+        self.write_config(self.home / '.claude/ioncache-ai-tools.local.json', {
+            'features': {}, 'projects': {str(unrelated): {'features': {'no_broad_process_kill': False}}},
+        })
+        resolve = Path.resolve
+
+        def fail_unrelated(target, *args, **kwargs):
+            if target == unrelated:
+                raise RuntimeError('Symlink loop')
+            return resolve(target, *args, **kwargs)
+
+        with mock.patch.object(Path, 'resolve', autospec=True, side_effect=fail_unrelated):
+            output, error = self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'pkill fixture'})
+            self.assertEqual(output.get('permissionDecision'), 'deny')
+            self.assertIn(str(unrelated), error + '\n'.join(self.progress))
+            self.assertNotIn('features paused', error)
+            command = 'printf continued > continued.txt'
+            self.assertEqual(self.tool('bash', {'command': command}), {})
+            subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+            self.assertEqual((self.project / 'continued.txt').read_text(), 'continued')
+            self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def native_history(self, *groups):
         events = [event for group in groups for event in NATIVE_QUESTION_EVENTS[group]]

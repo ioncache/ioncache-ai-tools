@@ -14,6 +14,11 @@ DEFAULTS = Path(__file__).resolve().parents[2] / 'config/defaults.json'
 FILENAME = 'ioncache-ai-tools.local.json'
 HOSTS = ('claude', 'copilot', 'codex')
 LOCK_WAIT_SECONDS = 0.25
+RETIRED_FEATURES = frozenset({
+    'approval-recovery', 'claim-evidence', 'display-emdash', 'graphify',
+    'never_kill_without_asking', 'skill:task-authorization', 'task-authorization',
+    'verify-state-before-claiming',
+})
 
 
 @dataclass(frozen=True)
@@ -44,7 +49,7 @@ def paths(project):
     }
 
 
-def settings(document, catalog):
+def settings(document, catalog, *, preserve_unknown=False):
     if not isinstance(document, dict):
         raise ValueError('plugin configuration must be an object')
     values = {}
@@ -53,29 +58,50 @@ def settings(document, catalog):
         names = document.get(key, [])
         if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
             raise ValueError(f'{key} must be a list of setting IDs')
-        values.update({name: enabled for name in names if name in catalog})
+        values.update({name: enabled for name in names})
     features = document.get('features', {})
     if not isinstance(features, dict):
         raise ValueError('features must be an object')
-    for name, value in features.items():
-        if name in catalog:
-            if type(value) is not bool:
-                raise ValueError(f'feature {name!r} must be true or false')
-            values[name] = value
-    return values
+    values.update(features)
+    retained = {name: value for name, value in values.items()
+                if name in catalog or (preserve_unknown and name not in RETIRED_FEATURES)}
+    for name, value in retained.items():
+        if type(value) is not bool:
+            raise ValueError(f'feature {name!r} must be true or false')
+    return retained
 
 
 def reconcile(document, catalog, complete=True):
-    values = {**(catalog if complete else {}), **settings(document, catalog)}
+    values = settings(document, catalog, preserve_unknown=True)
+    if complete:
+        for name, enabled in catalog.items():
+            values.setdefault(name, enabled)
     result = {'features': values}
     projects = document.get('projects', {})
     if not isinstance(projects, dict):
         raise ValueError('projects must be an object')
     if projects:
         result['projects'] = {
-            root: {'features': settings(overrides, catalog)} for root, overrides in projects.items()
+            root: {'features': settings(overrides, catalog, preserve_unknown=True)}
+            for root, overrides in projects.items()
         }
     return result
+
+
+def project_settings(document, project, catalog):
+    project = Path(project).resolve()
+    values = {}
+    for root, overrides in document.get('projects', {}).items():
+        try:
+            resolved = Path(root).resolve()
+        except (OSError, RuntimeError) as error:
+            print(f'plugin-config: skipping unresolved embedded project {root!r}: {error}', file=sys.stderr)
+            continue
+        if resolved != project:
+            continue
+        for name, enabled in settings(overrides, catalog).items():
+            values[name] = values.get(name, True) and enabled
+    return values
 
 
 def legacy_codex(path):
@@ -181,9 +207,9 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                 global_config = {'features': catalog}
                 if not persist and read_observer is not None:
                     read_observer(global_path.resolve(), None, global_config, True)
-            values = dict(global_config['features'])
+            values = settings(global_config, catalog)
             if not global_only:
-                values.update(global_config.get('projects', {}).get(str(project), {}).get('features', {}))
+                values.update(project_settings(global_config, project, catalog))
             if not global_only and project_path.exists():
                 if persist:
                     project_config = sync_file(project_path, catalog, complete=False, strict=strict)
@@ -192,9 +218,9 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                     original, project_config, _ = read_settings(path, catalog, False, None)
                     if read_observer is not None:
                         read_observer(path, original, project_config, False)
-                values.update(project_config['features'])
+                values.update(settings(project_config, catalog))
             disabled.update(name for name, enabled in values.items() if not enabled)
-        except (OSError, ValueError, TypeError) as error:
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
             if strict:
                 raise
             # Never replace unreadable or malformed preferences with defaults.
