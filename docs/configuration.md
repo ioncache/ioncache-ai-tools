@@ -15,20 +15,26 @@ it. Each toggle saves immediately across all three hosts, using the existing
 settings helper and its readback verification. Opening, switching scopes, and
 refreshing do not write settings.
 
-The pane highlights the scope being edited. While it is open, a pinned status
-line names `ioncache-ai-tools`, the current scope, and the scrolling keys.
-That line stays outside the scrolling settings, changes during reads or errors,
-and clears when the pane closes or is disabled.
-Rows show the setting name first, then `[x]` or `[ ]`, with green `enabled`
-or red `disabled` text so state remains readable without colour.
-Short or narrow panes use a compact header with scope controls, a shortened
-project path, and the setting count and keyboard hint. Taller, wider panes also
-show the full project path, scope explanation, and category summary.
-Use `--list` to see the full path when the compact view shortens it.
-The host owns scrolling; the pane does not add a custom scrollbar.
+The pane keeps its plugin heading, scope controls, status and navigation inside
+the pane while only the settings list scrolls. The selected scope is highlighted
+and bracketed. The footer shows the visible setting range and total, and reports
+reads, successful saves and errors. A scrollbar marks the list's position.
+Names, checkboxes and enabled/disabled states use shared columns. States are
+green or red and retain `[x]` or `[ ]` and text labels without relying on colour.
+Long names wrap within the name column rather than pushing their state below it.
 
-Tab moves between controls, Enter activates one, Page Up/Down scrolls, and Esc
-closes the pane. Global mode shows the effective project value wherever an
+The pane requests 24 rows above the prompt, or a sidebar wide enough for the
+longest setting and its state, with a minimum requested width of 64 columns.
+Claude decides placement and available space. Its terminal sidebar is capped at
+45% of the terminal width, and a previously user-resized pane takes precedence.
+Within those limits, the layout adapts to the actual space. Taller panes show a
+shortened project path; use `--list` to see it in full. Panes smaller than 30
+columns or five rows show Close and guidance to enlarge them or use `--list`.
+
+Tab moves between visible controls, Enter activates one, Page Up/Down and the
+mouse wheel scroll, and Home/End reach the first or last settings. Prev/Next
+provide clickable page controls. Esc closes the pane.
+Global mode shows the effective project value wherever an
 override differs. Refresh reloads external changes. During an operation,
 setting controls are unavailable. A failed save clears stale controls and shows
 the error; Refresh inspects any partial update before another toggle.
