@@ -3,6 +3,27 @@ const MESSAGE_FIELDS = {
   SendMessage: ['message', 'content', 'summary'],
 };
 
+export async function readResponse(stream) {
+  const chunks = [];
+  let step;
+  try {
+    step = await stream.next();
+    while (!step.done) {
+      chunks.push(step.value);
+      step = await stream.next();
+    }
+    return { chunks, result: step.value, interrupted: false };
+  } catch {
+    return { chunks, interrupted: true };
+  } finally {
+    if (!step?.done) {
+      try {
+        await stream.return();
+      } catch {}
+    }
+  }
+}
+
 export function responseDrafts(chunks) {
   const text = new Map();
   const tools = new Map();

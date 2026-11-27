@@ -58,7 +58,7 @@ class ResponseValidationSettingsTests(unittest.TestCase):
             self.assertTrue(json.loads(global_path.read_text())['features']['response-validation'])
         self.assertEqual(json.loads(self.invoke()), {'enabled': True})
 
-    def test_bad_settings_pause_feature_queries_without_rewriting_them(self):
+    def test_bad_settings_fail_feature_queries_without_rewriting_them(self):
         for host, paths in config.paths(self.project).items():
             for path in paths:
                 with self.subTest(host=host, path=path):
@@ -68,9 +68,10 @@ class ResponseValidationSettingsTests(unittest.TestCase):
                         mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
                         mock.patch.object(config, 'write_atomic') as writer,
                     ):
-                        self.assertEqual(json.loads(self.invoke()), {'enabled': False})
-                        self.assertIn(f'failed to read/sync {host} settings', stderr.getvalue())
-                        self.assertIn('plugin features paused', stderr.getvalue())
+                        with self.assertRaises(SystemExit) as error:
+                            self.invoke()
+                        self.assertEqual(error.exception.code, 1)
+                        self.assertIn('synchronization failed', stderr.getvalue())
                         writer.assert_not_called()
                     self.assertEqual(path.read_text(), '{broken')
                     with mock.patch.object(sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as error:
@@ -79,7 +80,7 @@ class ResponseValidationSettingsTests(unittest.TestCase):
                     self.assertEqual(path.read_text(), '{broken')
                     path.unlink()
 
-    def test_unreadable_other_host_settings_preserve_an_explicit_opt_out(self):
+    def test_unreadable_settings_fail_queries_and_repair_restores_an_explicit_opt_out(self):
         paths = config.paths(self.project)
         for host in ('claude', 'copilot'):
             path = paths[host][0]
@@ -97,7 +98,9 @@ class ResponseValidationSettingsTests(unittest.TestCase):
             mock.patch.object(config, 'read_settings', side_effect=read),
             mock.patch.object(sys, 'stderr', io.StringIO()) as stderr,
         ):
-            self.assertEqual(json.loads(self.invoke()), {'enabled': False})
+            with self.assertRaises(SystemExit) as error:
+                self.invoke()
+            self.assertEqual(error.exception.code, 1)
             self.assertIn('unreadable settings', stderr.getvalue())
             with self.assertRaises(SystemExit) as error:
                 self.invoke(None)

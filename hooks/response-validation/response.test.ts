@@ -1,5 +1,41 @@
 import { expect, test } from 'claude-code/testing';
-import { UNAVAILABLE } from './reviewer.mjs';
+import { register } from './register.mjs';
+
+function failingValidation(on, failure) {
+  const catches = [];
+  let originalEvent;
+  register((name, handler) => {
+    const registration = on(name, { model: 'claude-test' }, async function* ($, event, next) {
+      originalEvent = event;
+      const api = {
+        plugin: { root: '/fixture' },
+        session: { cwd: async () => '/fixture', messages: async () => [] },
+        process: { run: async () => ({ exitCode: 0, stdout: '{"enabled":true}' }) },
+        model: { complete: async () => ({ isAnswered: true, text: '{"edits":[]}' }) },
+      };
+      const response = handler(api, event, next);
+      try {
+        const first = await response.next();
+        if (event.index === 0) {
+          if (failure === 'timeout') await new Promise(() => {});
+          throw new Error('post-buffer hook failure');
+        }
+        if (!first.done) yield first.value;
+        return first.done ? first.value : yield* response;
+      } finally {
+        await response.return();
+      }
+    });
+    return { catch(fallback) {
+      registration.catch(async function* ($, event, next) {
+        catches.push({ kind: next.error.kind, called: next.called, aborted: next.signal.aborted,
+          sameEvent: originalEvent === event });
+        return yield* fallback($, event, next);
+      });
+    } };
+  });
+  return catches;
+}
 
 function setup(on, options = {}) {
   const calls = { model: [], history: [], source: 0 };
@@ -27,7 +63,8 @@ function setup(on, options = {}) {
     for (const chunk of chunks) yield chunk;
     if (options.streamError) throw new Error('source interrupted');
     return {
-      turnId: event.turnId, index: event.index, answer: 'The deployed key was tested.',
+      turnId: event.turnId, index: event.index,
+      answer: chunks.filter(chunk => chunk.kind === 'text').map(chunk => chunk.text).join(''),
       toolUses: options.toolUses || [], stopReason: options.stopReason || 'end_turn', usage: null,
     };
   });
@@ -134,26 +171,68 @@ for (const malformed of ['{"message":', 'null']) {
   });
 }
 
-test('a reviewer failure replaces the draft without preventing the next response', async ($, on) => {
+test('a reviewer failure explains the failure and preserves the current answer before review resumes', async ($, on) => {
   let attempts = 0;
   setup(on, { review: async () => ++attempts === 1
     ? { isAnswered: false, reason: 'aborted', usage: null }
-    : { isAnswered: true, text: '{"edits":[]}', usage: {} } });
-  expect((await collect(step($))).text).toBe(UNAVAILABLE);
-  expect((await collect(step($, undefined, 1))).text).toBe('The deployed key was tested.');
+    : { isAnswered: true, text: '{"edits":[{"id":"text:0","text":"Only the local key was tested."}]}', usage: {} } });
+  const output = await collect(step($));
+  expect(output.text).toContain('[Response could not be validated:');
+  expect(output.text).toContain('aborted');
+  expect(output.text.endsWith('\n\nThe deployed key was tested.')).toBe(true);
+  expect(output.result.answer).toBe(output.text);
+  expect((await collect(step($, undefined, 1))).text).toBe('Only the local key was tested.');
   expect(attempts).toBe(2);
 });
 
-test('malformed edits never release the unvalidated draft', async ($, on) => {
+for (const failure of ['throw', 'timeout']) {
+  test(`native ${failure} recovery retains a fully consumed response and resumes`, { timeoutMs: 20000 }, async ($, on) => {
+    const catches = failingValidation(on, failure);
+    const input = { to: 'worker', message: 'The original handback.', resume: true };
+    const read = { name: 'Read', input: { file_path: 'file.py' } };
+    const chunks = [
+      { kind: 'text', index: 0, text: 'The original answer.' },
+      { kind: 'tool', index: 1, id: 'send', name: 'SendMessage' },
+      { kind: 'input', index: 1, json: JSON.stringify(input) },
+      { kind: 'tool', index: 2, id: 'read', name: read.name },
+      { kind: 'input', index: 2, json: JSON.stringify(read.input) },
+      { kind: 'stop', stopReason: 'tool_use', usage: null },
+    ];
+    const calls = setup(on, { chunks, toolUses: [{ name: 'SendMessage', input }, read], stopReason: 'tool_use' });
+    const output = await collect(step($, 'child'));
+    const reason = failure === 'timeout'
+      ? 'The response validation hook exceeded its execution time limit.'
+      : 'The response validation hook failed unexpectedly.';
+    const prefix = `[Response could not be validated: ${reason}]\n\n`;
+    expect(catches).toEqual([{ kind: failure, called: true, aborted: false, sameEvent: true }]);
+    expect(output.text).toBe(prefix + 'The original answer.');
+    expect(output.result.answer).toBe(output.text);
+    expect(output.result.toolUses).toEqual([
+      { name: 'SendMessage', input: { ...input, message: prefix + input.message } }, read,
+    ]);
+    expect(JSON.parse(output.chunks[2].json)).toEqual(output.result.toolUses[0].input);
+    expect(output.chunks.slice(3)).toEqual(chunks.slice(3));
+    expect(output.result.stopReason).toBe('tool_use');
+    expect(calls.source).toBe(1);
+    const resumed = await collect(step($, 'child', 1));
+    expect(resumed.text).toBe('The original answer.');
+    expect(catches.length).toBe(1);
+    expect(calls.source).toBe(2);
+  });
+}
+
+test('malformed edits preserve the draft with the actual validation failure', async ($, on) => {
   setup(on, { verdict: '{"edits":[{"id":"not-a-draft","text":"Made up."}]}' });
   const output = await collect(step($));
-  expect(output.text).toBe(UNAVAILABLE);
-  expect(output.result.answer).toBe(UNAVAILABLE);
+  expect(output.text).toBe('[Response could not be validated: The reviewer returned invalid response edits.]\n\nThe deployed key was tested.');
+  expect(output.result.answer).toBe(output.text);
 });
 
 test('unavailable child history does not fall back to the root conversation', async ($, on) => {
   const calls = setup(on, { history: { deny: 'Agent not readable' } });
-  expect((await collect(step($, 'missing'))).text).toBe(UNAVAILABLE);
+  expect((await collect(step($, 'missing'))).text).toBe(
+    '[Response could not be validated: The sending agent\'s history is unavailable.]\n\nThe deployed key was tested.',
+  );
   expect(calls.history.length).toBe(1);
   expect(calls.model.length).toBe(0);
 });
@@ -165,14 +244,15 @@ test('explicit opt-out streams unchanged without history or reviewer calls', asy
   expect(calls.history.length).toBe(0);
 });
 
-test('configuration failure replaces text while leaving a tool call intact', async ($, on) => {
+test('configuration failure explains the error without discarding text or a tool call', async ($, on) => {
   const tool = { kind: 'tool', index: 1, id: 'read', name: 'Read' };
   const input = { kind: 'input', index: 1, json: '{"file_path":"file.py"}' };
   const calls = setup(on, { configError: true, chunks: [
     { kind: 'text', index: 0, text: 'Unsupported draft' }, tool, input,
   ] });
   const output = await collect(step($));
-  expect(output.text).toBe(UNAVAILABLE);
+  expect(output.text).toBe('[Response could not be validated: The configuration query failed (exit code 1).]\n\nUnsupported draft');
+  expect(output.result.answer).toBe(output.text);
   expect(output.chunks.slice(1)).toEqual([tool, input]);
   expect(calls.model.length).toBe(0);
 });
@@ -187,10 +267,41 @@ test('tool-only responses need no model review', async ($, on) => {
   expect(calls.model.length).toBe(0);
 });
 
-test('a broken source stream does not leak buffered text through native hook fallback', async ($, on) => {
-  setup(on, { streamError: true });
+test('a broken source stream preserves received text and identifies it as incomplete', async ($, on) => {
+  const calls = setup(on, { streamError: true, chunks: [
+    { kind: 'text', index: 0, text: 'The deployed key ' },
+    { kind: 'text', index: 0, text: 'was tested.' },
+    { kind: 'tool', index: 1, id: 'send', name: 'SendMessage' },
+    { kind: 'input', index: 1, json: '{"message":"unfinished' },
+  ] });
   const output = await collect(step($));
-  expect(output.text).toBe(UNAVAILABLE);
+  expect(output.text).toContain('[Response could not be validated:');
+  expect(output.text).toContain('source response was interrupted');
+  expect(output.text.endsWith('\n\nThe deployed key was tested.')).toBe(true);
+  expect(output.result.answer).toBe(output.text);
+  expect(output.result.toolUses).toEqual([]);
+  expect(output.chunks.some(chunk => chunk.kind === 'tool' || chunk.kind === 'input')).toBe(false);
+  expect(calls.source).toBe(1);
+  expect(calls.model.length).toBe(0);
+});
+
+test('interruption before nonblank text emits only a warning and terminal stop', async ($, on) => {
+  const calls = setup(on, { streamError: true, chunks: [
+    { kind: 'text', index: 0, text: ' \n' },
+    { kind: 'tool', index: 1, id: 'send', name: 'SendMessage' },
+    { kind: 'input', index: 1, json: '{"message":"unfinished' },
+  ] });
+  const output = await collect(step($));
+  const text = '[Response could not be validated: The source response was interrupted; only received text is available.]';
+  expect(output.chunks).toEqual([
+    { kind: 'text', index: 0, text },
+    { kind: 'stop', stopReason: 'end_turn', usage: null },
+  ]);
+  expect(output.result).toEqual({
+    turnId: 'turn-main', index: 0, answer: text, toolUses: [], stopReason: 'end_turn', usage: null,
+  });
+  expect(calls.model.length).toBe(0);
+  expect(calls.source).toBe(1);
 });
 
 test('concurrent agents have independent buffered responses and evidence', async ($, on) => {
@@ -212,10 +323,125 @@ test('concurrent agents have independent buffered responses and evidence', async
   expect(calls.history.map(call => call.agentId)).toEqual(['child', undefined]);
 });
 
-test('oversized drafts are replaced without sending an unbounded reviewer request', async ($, on) => {
-  const calls = setup(on, { chunks: [{ kind: 'text', index: 0, text: 'x'.repeat(64001) }] });
-  expect((await collect(step($))).text).toBe(UNAVAILABLE);
+test('oversized drafts are preserved with the reason review was skipped', async ($, on) => {
+  const text = 'x'.repeat(64001);
+  const calls = setup(on, { chunks: [{ kind: 'text', index: 0, text }] });
+  const output = await collect(step($));
+  expect(output.text).toBe(`[Response could not be validated: The response exceeds the 64000-character validation limit.]\n\n${text}`);
+  expect(output.result.answer).toBe(output.text);
   expect(calls.model.length).toBe(0);
+});
+
+for (const [reason, verdict] of [
+  ['The reviewer API failed (HTTP 503, server_error).', { isAnswered: false, reason: 'api-error', status: 503, error: 'server_error' }],
+  ['The reviewer API failed (HTTP 402, billing_error).', { isAnswered: false, reason: 'api-error', status: 402, error: 'billing_error' }],
+  ['The reviewer API failed (HTTP 404, model_not_found).', { isAnswered: false, reason: 'api-error', status: 404, error: 'model_not_found' }],
+  ['The reviewer API failed (no HTTP response, server_error).', { isAnswered: false, reason: 'api-error', status: null, error: 'server_error' }],
+  ['The reviewer API failed (HTTP 500, unknown error).', { isAnswered: false, reason: 'api-error', status: 500, error: 'unknown' }],
+  ['The reviewer returned no text.', { isAnswered: false, reason: 'empty-reply' }],
+  ['The reviewer returned invalid JSON.', { isAnswered: true, text: '{broken' }],
+]) {
+  test(`review failure preserves message payloads and explains: ${reason}`, async ($, on) => {
+    const input = { to: 'worker', message: 'The targeted check passed.', resume: true };
+    const read = { name: 'Read', input: { file_path: 'file.py' } };
+    const calls = setup(on, {
+      chunks: [
+        { kind: 'text', index: 0, text: '1. The check was local.\n' },
+        { kind: 'text', index: 1, text: '2. Deployment was not checked.' },
+        { kind: 'tool', index: 2, id: 'send', name: 'SendMessage' },
+        { kind: 'input', index: 2, json: JSON.stringify(input) },
+        { kind: 'tool', index: 3, id: 'read', name: read.name },
+        { kind: 'input', index: 3, json: JSON.stringify(read.input) },
+        { kind: 'stop', stopReason: 'tool_use', usage: null },
+      ],
+      toolUses: [{ name: 'SendMessage', input }, read], stopReason: 'tool_use',
+      review: async () => ({ ...verdict, usage: null }),
+    });
+    const output = await collect(step($, 'child'));
+    const prefix = `[Response could not be validated: ${reason}]\n\n`;
+    expect(output.text).toBe(prefix + '1. The check was local.\n2. Deployment was not checked.');
+    expect(output.result.answer).toBe(output.text);
+    expect(output.result.toolUses).toEqual([
+      { name: 'SendMessage', input: { ...input, message: prefix + input.message } }, read,
+    ]);
+    expect(JSON.parse(output.chunks[3].json)).toEqual(output.result.toolUses[0].input);
+    expect(output.result.stopReason).toBe('tool_use');
+    expect(output.chunks.at(-1).stopReason).toBe('tool_use');
+    expect(calls.model.length).toBe(1);
+    expect(calls.source).toBe(1);
+  });
+}
+
+test('missing documentation and unclear requests retain the reply and any supported corrections', async ($, on) => {
+  setup(on, {
+    chunks: [
+      { kind: 'text', index: 0, text: 'The deployed key was tested.' },
+      { kind: 'text', index: 1, text: 'The requested duration is four months.' },
+    ],
+    verdict: JSON.stringify({
+      edits: [{ id: 'text:0', text: 'Only the local key was tested.' }],
+      unvalidated: [
+        { id: 'text:0', reason: 'missing_evidence', detail: 'Deployment documentation is absent from the supplied history.' },
+        { id: 'text:1', reason: 'ambiguous_request', detail: 'The request does not identify which duration to check.' },
+      ],
+    }),
+  });
+  const output = await collect(step($));
+  expect(output.chunks[0].text).toBe(
+    '[Response could not be validated: Missing evidence: Deployment documentation is absent from the supplied history.]\n\nOnly the local key was tested.',
+  );
+  expect(output.chunks[1].text).toBe(
+    '[Response could not be validated: Unclear request: The request does not identify which duration to check.]\n\nThe requested duration is four months.',
+  );
+  expect(output.result.answer).toBe(output.text);
+});
+
+test('uncertainty notices retain corrected and unchanged agent-message fields', async ($, on) => {
+  const input = {
+    to: 'worker', message: 'The deployed key was tested.',
+    summary: 'The requested duration is four months.', content: 'Unaffected body.', resume: true,
+  };
+  const handback = { message: 'The requested duration is four months.', reportPath: '/private/report' };
+  const read = { name: 'Read', input: { file_path: 'file.py' } };
+  const chunks = [
+    { kind: 'tool', index: 0, id: 'send', name: 'SendMessage' },
+    { kind: 'input', index: 0, json: JSON.stringify(input) },
+    { kind: 'tool', index: 1, id: 'handback', name: 'SubagentHandback' },
+    { kind: 'input', index: 1, json: JSON.stringify(handback) },
+    { kind: 'tool', index: 2, id: 'read', name: read.name },
+    { kind: 'input', index: 2, json: JSON.stringify(read.input) },
+    { kind: 'stop', stopReason: 'tool_use', usage: null },
+  ];
+  const calls = setup(on, {
+    chunks, toolUses: [{ name: 'SendMessage', input }, { name: 'SubagentHandback', input: handback }, read],
+    stopReason: 'tool_use',
+    verdict: JSON.stringify({
+      edits: [{ id: 'tool:0:message', text: 'Only the local key was tested.' }],
+      unvalidated: [
+        { id: 'tool:0:message', reason: 'missing_evidence', detail: 'Deployment documentation is absent.' },
+        { id: 'tool:0:summary', reason: 'ambiguous_request', detail: 'The duration is not identified.' },
+        { id: 'tool:1:message', reason: 'ambiguous_request', detail: 'The duration is not identified.' },
+      ],
+    }),
+  });
+  const output = await collect(step($, 'child'));
+  const duration = '[Response could not be validated: Unclear request: The duration is not identified.]\n\n' + input.summary;
+  const send = {
+    ...input, summary: duration,
+    message: '[Response could not be validated: Missing evidence: Deployment documentation is absent.]\n\nOnly the local key was tested.',
+  };
+  expect(output.result.toolUses).toEqual([
+    { name: 'SendMessage', input: send },
+    { name: 'SubagentHandback', input: { ...handback, message: duration } }, read,
+  ]);
+  expect(JSON.parse(output.chunks[1].json)).toEqual(send);
+  expect(JSON.parse(output.chunks[3].json)).toEqual(output.result.toolUses[1].input);
+  expect(output.chunks[0]).toEqual(chunks[0]);
+  expect(output.chunks[2]).toEqual(chunks[2]);
+  expect(output.chunks.slice(4)).toEqual(chunks.slice(4));
+  expect(output.result.answer).toBe('');
+  expect(output.result.stopReason).toBe('tool_use');
+  expect(calls.history.map(call => call.agentId)).toEqual(['child']);
 });
 
 test('a correction to one block leaves the other block unchanged', async ($, on) => {
