@@ -82,6 +82,9 @@ private; they are not input for automatic PR publication.
 
 Malformed JSON retains its original with an indexing error. Run the existing
 report-repair protocol, then record the repaired file as another version.
+Oversized generated indexes retain the original with an indexing error instead
+of writing an unreadable index. If the metadata alone exceeds the limit, shorten
+the observation evidence and retry; the original report remains retained.
 Never replace retained originals or claim that archiving proves review quality.
 
 ## Find records and handle unavailable storage

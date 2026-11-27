@@ -181,6 +181,47 @@ class ReviewRecordTests(unittest.TestCase):
         index = json.loads((Path(run["directory"]) / broken["record"]).read_text())
         self.assertEqual((Path(run["directory"]) / index["original"]).read_bytes(), original)
 
+    def test_near_limit_report_keeps_a_readable_index_and_can_be_recorded_again(self):
+        run = self.initialize()
+        entry = self.report(run)
+        document = {"candidates": [{"detail": ""}]}
+        overhead = len(json.dumps(document, separators=(",", ":")).encode())
+        document["candidates"][0]["detail"] = "x" * (records.MAX_BYTES - overhead)
+        original = json.dumps(document, separators=(",", ":")).encode()
+        self.assertEqual(len(original), records.MAX_BYTES)
+        Path(entry["result_file"]).write_bytes(original)
+
+        saved = records.record(run["directory"], entry)["report"]
+        repeated = records.record(run["directory"], entry)["report"]
+
+        self.assertEqual(saved, repeated)
+        folder, value = records.load(run["directory"])
+        self.assertEqual(value["reports"], [saved])
+        index = json.loads(records.private_file(folder / saved["record"]))
+        self.assertEqual(index["entries"], [])
+        self.assertIn("index exceeds the size limit", index["error"])
+        self.assertEqual(saved["error"], index["error"])
+        self.assertEqual(records.private_file(folder / index["original"]), original)
+
+    def test_oversized_index_metadata_preserves_original_and_allows_recovery(self):
+        run = self.initialize()
+        entry = self.report(run)
+        folder = Path(run["directory"])
+        before = (folder / "RUN.json").read_bytes()
+        original = Path(entry["result_file"]).read_bytes()
+        with patch.object(records, "MAX_BYTES", 8192):
+            oversized = {**entry, "observation": {"evidence": "x" * records.MAX_BYTES}}
+            with self.assertRaisesRegex(ValueError, "metadata exceeds the size limit"):
+                records.record(run["directory"], oversized)
+
+        self.assertEqual((folder / "RUN.json").read_bytes(), before)
+        self.assertEqual(list((folder / "records").iterdir()), [])
+        originals = list((folder / "originals").iterdir())
+        self.assertEqual(len(originals), 1)
+        self.assertEqual(originals[0].read_bytes(), original)
+        saved = records.record(run["directory"], entry)["report"]
+        self.assertIsNone(saved["error"])
+
     def test_storage_in_any_repository_is_rejected_and_external_recovery_works(self):
         other = self.home / "other-repository"
         other.mkdir()

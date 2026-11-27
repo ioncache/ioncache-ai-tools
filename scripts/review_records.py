@@ -251,12 +251,18 @@ def archive(folder, run_id, entry):
         record["entries"] = entries(document, provenance)
     except (ValueError, UnicodeError, RecursionError) as error:
         record["error"] = f"Original retained; report indexing unavailable: {error}"
-    identity = storage.digest(storage.encode(record))
+    encoded = storage.encode(record)
+    if len(encoded) > MAX_BYTES:
+        record["entries"] = []
+        record["error"] = "Original retained; report indexing unavailable: generated index exceeds the size limit"
+        encoded = storage.encode(record)
+    storage.require(len(encoded) <= MAX_BYTES, "Review record metadata exceeds the size limit")
+    identity = storage.digest(encoded)
     destination = storage.safe_path(folder, f"records/{identity}.json")
     if destination.exists():
-        storage.require(private_file(destination) == storage.encode(record), "Retained report index changed")
+        storage.require(private_file(destination) == encoded, "Retained report index changed")
     else:
-        storage.atomic_write(destination, storage.encode(record))
+        storage.atomic_write(destination, encoded)
     return {**provenance, "record": str(destination.relative_to(folder)), "sha256": key,
             "error": record["error"]}
 
