@@ -9,7 +9,8 @@
     "prepare": "husky",
     "test:settings-ui": "claude plugin test .",
     "release": "node scripts/release.js",
-    "release:check": "node scripts/release.js --check"
+    "release:check": "node scripts/release.js --check",
+    "test:responses": "node --test hooks/response-validation/response.test.mjs && claude plugin test ."
   },
   "devDependencies": {
     "@anthropic-ai/claude-code": "2.1.332",

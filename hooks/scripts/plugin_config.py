@@ -24,8 +24,8 @@ class FeatureSettings:
 
 def defaults():
     values = json.loads(DEFAULTS.read_text(encoding='utf-8'))['features']
-    if not isinstance(values, dict) or not values or any(value is not True for value in values.values()):
-        raise ValueError('shipped feature defaults must all be true')
+    if not isinstance(values, dict) or not values or any(type(value) is not bool for value in values.values()):
+        raise ValueError('shipped feature defaults must be booleans')
     return values
 
 
@@ -179,6 +179,8 @@ def synchronize(project, harness=None, *, strict=False, catalog=None, persist=Tr
                         read_observer(path, original, global_config, True)
             else:
                 global_config = {'features': catalog}
+                if not persist and read_observer is not None:
+                    read_observer(global_path.resolve(), None, global_config, True)
             values = dict(global_config['features'])
             if not global_only:
                 values.update(global_config.get('projects', {}).get(str(project), {}).get('features', {}))
@@ -220,13 +222,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('host', choices=HOSTS)
     parser.add_argument('--project', default=os.getcwd(), help='project root for optional overrides')
+    parser.add_argument('--feature', help='print the effective enabled state of one shipped feature as JSON')
     args = parser.parse_args()
     try:
-        synchronize(str(Path(args.project).resolve()), args.host, strict=True)
+        catalog = defaults()
+        if args.feature and args.feature not in catalog:
+            raise ValueError('unknown feature')
+        disabled = synchronize(
+            str(Path(args.project).resolve()), args.host,
+            strict=not args.feature, catalog=catalog, persist=not args.feature,
+        )
     except (OSError, ValueError, TypeError) as error:
         print(f'plugin-config: synchronization failed: {error}', file=sys.stderr)
         sys.exit(1)
-    print(paths(args.project)[args.host][0])
+    if args.feature:
+        print(json.dumps({'enabled': args.feature not in disabled}))
+    else:
+        print(paths(args.project)[args.host][0])
 
 
 if __name__ == '__main__':
