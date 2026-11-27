@@ -58,12 +58,15 @@ the plugin-add command, and start a fresh thread. To uninstall, run
 
 ### Configuration
 
-Use `plugin-settings` to inspect or change the plugin's settings. Enter these
-commands in your assistant using the invocation syntax described below:
+In Claude Code, `plugin-settings` opens an interactive settings UI for viewing
+and changing settings. Copilot and Codex show a grouped text list instead.
+Claude also uses the text list if the UI is disabled or unavailable.
+
+Enter these commands in your assistant using the invocation syntax described below:
 
 | Invocation | Guidance |
 | --- | --- |
-| `/ioncache-ai-tools:plugin-settings` | Open the settings pane when available, or print the grouped listing |
+| `/ioncache-ai-tools:plugin-settings` | Inspect or change plugin settings |
 | `/ioncache-ai-tools:plugin-settings --list` | List every setting and its effective enabled/disabled state |
 | `/ioncache-ai-tools:plugin-settings --help` | Show all setting flags |
 | `/ioncache-ai-tools:plugin-settings --hook:response-validation=enabled` | Enable response validation |
