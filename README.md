@@ -107,20 +107,20 @@ Append a target or task when needed, for example
 Invoke a skill with the task or files you want it to work on. Related skills
 are grouped below; their detailed options stay in the linked documentation.
 
-#### Reviews and PR work
+Model-driven skills consume normal conversation tokens. The token-usage notes
+identify additional model calls, repeated review passes, and context overhead.
 
-Review workflows can launch multiple specialist agents. Loop counts are not
-spending limits.
+#### Reviews and PR work
 
 | Invocation | Default | Guidance |
 | --- | --- | --- |
-| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes. Options and optional posting: [docs/workflows.md#review-options](docs/workflows.md#review-options) |
-| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them |
-| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests |
-| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review |
+| `/ioncache-ai-tools:review-code` | Enabled | Review files, branches, repositories, or PRs without fixes; defaults to the active PR or branch changes. Options and optional posting: [docs/workflows.md#review-options](docs/workflows.md#review-options). <p><strong>Token usage:</strong> Separate specialist reviewers and adjudication add model calls. Large reviews and additional validation passes can be token-heavy.</p> |
+| `/ioncache-ai-tools:review-dependabot-pr` | Enabled | Check dependency-update PRs against actual usage without changing them. <p><strong>Token usage:</strong> May launch separate package-review workers. Usage grows with the number of dependencies and the analysis each requires.</p> |
+| `/ioncache-ai-tools:verify-unresolved-pr-comments` | Enabled | Evaluate active-PR feedback without editing, posting, resolving threads, or running tests. <p><strong>Token usage:</strong> Using an agent-backed PR integration adds model calls; direct API retrieval does not require a separate reviewer.</p> |
+| `/ioncache-ai-tools:post-pr-review-comments` | Enabled | Draft or edit comments and post requested replies; never submit a review. <p><strong>Token usage:</strong> Separate correctness and clarity reviewers add model calls before presentation or posting. Revised comments can require repeated checks.</p> |
 | `/ioncache-ai-tools:write-pr-descriptions` | Enabled | Draft or edit a PR title and description |
-| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings. Limits and resume: [docs/workflows.md#review-loops](docs/workflows.md#review-loops) |
-| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push. [docs/workflows.md#review-loops](docs/workflows.md#review-loops) |
+| `/ioncache-ai-tools:review-triage-loop` | Enabled | Repeat read-only review and prioritize findings. Limits and resume: [docs/workflows.md#review-loops](docs/workflows.md#review-loops). <p><strong>Token usage:</strong> Each round starts a fresh reviewer and repeats analysis. Round limits are not token or spending caps.</p> |
+| `/ioncache-ai-tools:review-validate-fix-loop` | Enabled | Review, validate, fix, and re-review within limits; never commit or push. [docs/workflows.md#review-loops](docs/workflows.md#review-loops). <p><strong>Token usage:</strong> Repeated specialist reviews, validation, and fix cycles can be token-heavy. Loop limits are not token or spending caps.</p> |
 
 #### Investigation and implementation
 
@@ -130,7 +130,7 @@ spending limits.
 | `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them |
 | `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+. [docs/workflows.md#worktree-setup](docs/workflows.md#worktree-setup) |
 | `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts. [docs/configuration.md](docs/configuration.md) |
-| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection. [docs/workflows.md#autonomous-development](docs/workflows.md#autonomous-development) |
+| `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection. [docs/workflows.md#autonomous-development](docs/workflows.md#autonomous-development). <p><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps.</p> |
 
 Review and approve the autonomous-development plan, content, permissions, and
 limits before execution. PR merging stays under human control.
@@ -174,9 +174,9 @@ The names below are settings, not commands to invoke.
 
 | Setting | Default | Guidance |
 | --- | --- | --- |
-| `hook:docs-cache` | Enabled | Reuse fetched documentation facts; distillation makes extra model calls and consumes host usage. [docs/documentation-cache.md](docs/documentation-cache.md) |
+| `hook:docs-cache` | Enabled | Reuse fetched documentation facts. [docs/documentation-cache.md](docs/documentation-cache.md). <p><strong>Token usage:</strong> Fact distillation runs outside the conversation and makes additional model calls, consuming host tokens.</p> |
 | `hook:plugin-settings-ui` | Enabled | Open the native Claude settings pane when available; keep the text interface available otherwise. [docs/configuration.md#native-claude-settings-pane](docs/configuration.md#native-claude-settings-pane) |
-| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only. Token-heavy because each textual response adds a model review, so it is disabled by default. [docs/response-validation.md](docs/response-validation.md) |
+| `hook:response-validation` | Disabled | Check factual support and rewrite overclaims before delivery in Claude Code 2.1.332+ only. [docs/response-validation.md](docs/response-validation.md). <p><strong>Token usage:</strong> Token-heavy because each textual response adds a model review, so it is disabled by default.</p> |
 
 If response validation cannot finish, the reply is preserved with a preface
 explaining why.
@@ -194,7 +194,7 @@ independent of similarly named skills.
 | `instruction:scope-exactly-what-asked` | Enabled | Keep work within the requested scope without introducing approval gates. [docs/guardrails.md#guidance-and-permission](docs/guardrails.md#guidance-and-permission) |
 | `instruction:documentation-first` | Enabled | Use documentation-backed third-party APIs and behavior. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids) |
 | `instruction:engineering-judgment` | Enabled | Apply coherent engineering decisions and the relevant specialist guidance. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids) |
-| `instruction:writer-quality-guidance` | Enabled | Give autonomous implementers and fixers applicable standards, context reconciliation, and diff self-check guidance. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids) |
+| `instruction:writer-quality-guidance` | Enabled | Give autonomous implementers and fixers applicable standards, context reconciliation, and diff self-check guidance. [docs/configuration.md#feature-ids](docs/configuration.md#feature-ids). <p><strong>Token usage:</strong> Adds standards and context guidance to each applicable worker's prompt, increasing input tokens without launching a separate reviewer.</p> |
 
 ## Known issues and limits
 
