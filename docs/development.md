@@ -108,6 +108,22 @@ and resumed work through the relevant adapters, including failure and lifecycle
 cases. When changing a fixture or bridge, deliberately break the behavior it
 claims to cover and confirm the relevant test fails.
 
+#### Intake instruction scenarios
+
+`scripts/fixtures/development_intake.json` contains semantic examples for the
+autonomous-development intake. They are intended outcomes, not native prompt
+captures or automated proof of model behavior. The configuration self-check
+executes the packaged setting lookup and checks hint metadata and opt-out
+independence; it does not grade an assistant's interpretation of the examples.
+
+For behavioral validation, use isolated, authorized sessions and the host's
+direct skill invocation with each case's arguments. Preserve the listed
+message origins rather than submitting worker or automation text as a human
+request. Record the CLI version, skill discovery path, actual response and
+tool calls, and compare them with the expected outcome and forbidden effects.
+If a provenance case or native invocation cannot be exercised, report that
+gap. Do not count frontmatter parsing or keyword checks as a live invocation.
+
 #### Performance reference
 
 The modernization baseline collected 691 tests and passed in 150.15 seconds

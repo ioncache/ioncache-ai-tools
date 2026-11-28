@@ -1,2 +1,5 @@
+interface:
+  short_description: "Optional: idea, issue, design, plan, or saved run + action"
+
 policy:
   allow_implicit_invocation: false

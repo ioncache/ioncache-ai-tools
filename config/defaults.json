@@ -4,6 +4,7 @@
     "answer-questions-warning-deduplication": true,
     "autonomous-development": true,
     "autonomous-development-audit": true,
+    "autonomous-development-default-intake": true,
     "autonomous-development-explicit-only": true,
     "autonomous-development-follow-ups": true,
     "autonomous-development-incremental-planning": true,

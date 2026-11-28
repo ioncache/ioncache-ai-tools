@@ -1,6 +1,7 @@
 ---
 name: autonomous-development
 description: User-invoked only. Prepares an idea or existing artifacts for bounded implementation and review-ready PRs. Never automatically load this skill based on a matching task.
+argument-hint: "[idea, issue, design, plan, or saved run + action]"
 disable-model-invocation: true
 user-invocable: true
 ---
@@ -16,6 +17,36 @@ Loading this skill does not authorize execution, spending, commits, or publicati
 Humans approve the plan and retain PR approval and merge control. A user question
 makes the questioned controller answer-only for that turn; it does not cancel
 the assignment or stop workers. Hand-backs are not user questions.
+
+## Intake
+
+Use explicit nonempty task text or artifact references as the starting point.
+Preserve explicit run actions and their existing approval and recovery rules;
+there is no skill-level flag parser or implicit resume.
+
+For a direct invocation with no arguments or only whitespace, resolve
+`autonomous-development-default-intake` before choosing an objective. Resolve
+`../../hooks/scripts/plugin_config.py` relative to this installed skill directory.
+Replace `HOST` with `claude`, `codex`, or `copilot` for the current host and pass
+the consuming project root:
+
+```sh
+python3 -I -B "/absolute/plugin/hooks/scripts/plugin_config.py" HOST \
+  --project "/absolute/project" --feature autonomous-development-default-intake
+```
+
+This read-only lookup returns JSON with an `enabled` boolean. It reads all
+hosts' settings, so a disable on any host applies without writing preferences.
+When enabled, follow [INTAKE.md](INTAKE.md). New tasks continue Prepare once the
+objective is known; explicit run actions keep their existing flow. When disabled,
+go directly to baseline Prepare rather than applying the added intake guide.
+The setting does not disable this skill, direct-user-only activation,
+incremental planning, reviews, or execution safeguards.
+
+A failed lookup makes this guidance unavailable, not enabled or forbidden.
+Report the error and continue with baseline Prepare. Do not invent an objective
+or execution approval to work around missing information. After settings are
+repaired, retry the lookup before applying the default intake.
 
 ## Prepare
 

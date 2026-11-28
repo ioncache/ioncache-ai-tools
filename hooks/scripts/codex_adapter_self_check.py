@@ -28,6 +28,7 @@ from turn_guard_self_check import install_reviewers
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests"))
 import pytest
+import yaml
 from self_check_support import inprocess_hooks, run_main, uses_process
 
 EM_DASH = chr(0x2014)
@@ -529,8 +530,8 @@ class CodexAdapterTests(unittest.TestCase):
         frontmatter = (autonomous / 'SKILL.md').read_text().split('---', 2)[1]
         self.assertIn('\ndisable-model-invocation: true\n', frontmatter)
         self.assertIn('\nuser-invocable: true\n', frontmatter)
-        self.assertEqual((autonomous / 'agents/openai.yaml').read_text(),
-                         'policy:\n  allow_implicit_invocation: false\n')
+        metadata = yaml.safe_load((autonomous / 'agents/openai.yaml').read_text())
+        self.assertIs(metadata['policy']['allow_implicit_invocation'], False)
 
     def test_worktree_skill_example_quotes_installed_helper_path(self):
         install = self.root / 'plugin with spaces'

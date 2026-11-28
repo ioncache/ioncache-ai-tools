@@ -35,7 +35,7 @@ jobs:
                    .codex-plugin/plugin.json .agents/plugins/marketplace.json \
                    .github/plugin/plugin.json hooks/hooks.json hooks/codex-hooks.json \
                    hooks/copilot-hooks.json config/defaults.json scripts/fixtures/review_quality.json \
-                   skills/review-code/categories.json; do
+                   skills/review-code/categories.json scripts/fixtures/development_intake.json; do
             python3 -c "import json; json.load(open('$f')); print('$f OK')"
           done
 

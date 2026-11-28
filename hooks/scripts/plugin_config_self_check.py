@@ -1362,6 +1362,98 @@ class ConfigurationTests(unittest.TestCase):
         command = command.replace('/absolute/project', str(project or self.project))
         return subprocess.run(['/bin/sh', '-c', command], cwd=self.root, text=True, capture_output=True)
 
+    def intake_lookup(self, host='claude', project=None):
+        skill = (ROOT / 'skills/autonomous-development/SKILL.md').read_text()
+        blocks = [block.split('```', 1)[0] for block in skill.split('```sh\n')[1:]]
+        commands = [block for block in blocks if 'autonomous-development-default-intake' in block]
+        self.assertEqual(len(commands), 1)
+        command = commands[0].replace('/absolute/plugin', str(ROOT))
+        command = command.replace('/absolute/project', str(project or self.project))
+        command = command.replace(' HOST ', ' ' + shlex.quote(host) + ' ')
+        return subprocess.run(['/bin/sh', '-c', command], cwd=self.root, text=True, capture_output=True)
+
+    def test_default_intake_lookup_is_read_only_and_honors_each_host(self):
+        name = 'autonomous-development-default-intake'
+        paths = config.paths(self.project)
+        for host in paths:
+            with self.subTest(host=host):
+                for expected in (True, False, True):
+                    if not expected:
+                        self.write(paths[host][0], {'features': {name: False}})
+                    elif paths[host][0].exists():
+                        self.write(paths[host][1], {'features': {name: True}})
+                    before = self.tree_state()
+                    result = self.intake_lookup(host)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {'enabled': expected})
+                    self.assertEqual(self.tree_state(), before)
+
+        self.write(paths['codex'][1], {'features': {name: False}})
+        result = self.intake_lookup('copilot')
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {'enabled': False}), result.stderr)
+
+    def test_default_intake_setting_preserves_skill_and_unrelated_guards(self):
+        name = 'autonomous-development-default-intake'
+        before = config.synchronize(str(self.project), persist=False)
+        code, output, error = self.settings_command('--autonomous-development:default-intake=disabled')
+        self.assertEqual(code, 0, error)
+        self.assertRegex(output, r'autonomous-development:default-intake\s+disabled')
+        self.assertEqual(config.synchronize(str(self.project), persist=False), before | {name})
+        self.assertEqual(json.loads(self.intake_lookup().stdout), {'enabled': False})
+        self.assertIn('deny', str(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Skill',
+            'tool_input': {'skill': 'ioncache-ai-tools:autonomous-development'},
+        })))
+        self.assertEqual(run_shared_hooks('PreToolUse', {
+            **self.data, 'tool_name': 'Bash', 'tool_input': {'command': 'git status --short'},
+        }), [])
+        code, _, error = self.settings_command('--autonomous-development:default-intake=enabled')
+        self.assertEqual(code, 0, error)
+        self.assertEqual(json.loads(self.intake_lookup().stdout), {'enabled': True})
+
+    def test_default_intake_lookup_reports_unavailability_and_recovers(self):
+        path = config.paths(self.project)['claude'][0]
+        path.parent.mkdir(parents=True)
+        path.write_text('{bad')
+        before = self.tree_state()
+        result = self.intake_lookup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('synchronization failed', result.stderr)
+        self.assertEqual(self.tree_state(), before)
+        self.write(path, {'features': {}})
+        result = self.intake_lookup()
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {'enabled': True}), result.stderr)
+
+    def test_default_intake_lookup_resolves_spaced_project_symlinks(self):
+        name = 'autonomous-development-default-intake'
+        link = self.root / 'project with spaces'
+        link.symlink_to(self.project, target_is_directory=True)
+        self.write(config.paths(self.project)['claude'][0], {
+            'features': {}, 'projects': {str(self.project): {'features': {name: False}}},
+        })
+        (self.root / 'tomllib.py').write_text('raise SystemExit("planted module executed")\n')
+        result = self.intake_lookup(project=link)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {'enabled': False}), result.stderr)
+
+    def test_autonomous_development_hints_are_packaged_without_implicit_activation(self):
+        for manifest in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json'):
+            with self.subTest(manifest=manifest):
+                plugin = json.loads((ROOT / manifest).read_text())
+                skill_dir = ROOT / plugin.get('skills', './skills') / 'autonomous-development'
+                skill = (skill_dir / 'SKILL.md').read_text()
+                metadata = yaml.safe_load(skill.split('---', 2)[1])
+                hint = metadata['argument-hint']
+                self.assertIsInstance(hint, str)
+                self.assertTrue(hint.startswith('[') and hint.endswith(']'))
+                self.assertIs(metadata['disable-model-invocation'], True)
+                self.assertIs(metadata['user-invocable'], True)
+                codex = yaml.safe_load((skill_dir / 'agents/openai.yaml').read_text())
+                self.assertEqual(codex['interface']['short_description'], 'Optional: ' + hint[1:-1])
+                self.assertIs(codex['policy']['allow_implicit_invocation'], False)
+                for target in re.findall(r'\]\(([^)]+\.md)\)', skill):
+                    self.assertTrue((skill_dir / target).is_file(), target)
+
     def test_incremental_planning_lookup_matches_embedded_project_through_a_symlink(self):
         name = 'autonomous-development-incremental-planning'
         link = self.root / 'project-link'

@@ -351,10 +351,30 @@ execution, model spending, commits, or publication.
 
 | Input | Default | What it does |
 | --- | --- | --- |
-| Idea or existing requirements, issue, design, or plan | Current request; no default project objective | Supply the work to investigate and turn into an approved implementation plan. |
+| No input, or whitespace only | One clear unfinished task from the human conversation; otherwise ask | State the inferred objective and begin preparation, ask for the desired outcome, or ask which task to prepare when the context is ambiguous. |
+| Idea or existing requirements, issue, design, or plan | Supplied input takes precedence | Supply the work to investigate and turn into an approved implementation plan. |
 | Planning, design, and execution preferences | Resolve during preparation | Choose where artifacts live and which supported execution path to use. These choices are independent. |
 | Permissions, model choices, and finite limits | Must be explicitly resolved before execution | Set the permitted work, publication actions, model choices, and work limits. Existing approval is reused only for what it actually covers. |
 | Approved manifest or private run directory | None; prepare a new run unless an existing one is identified | Identify approved inputs or saved state for execution, inspection, continuation, or interruption. State the intended action in the request; there is no skill-level `--resume` flag. |
+
+The empty-input default reuses the human's requirements and delegated planning
+decisions. It does not select a task from reminders, worker reports, quoted
+examples, completed work or an issue tracker. Mentioning a saved run does not
+resume it; an explicit run action keeps its existing meaning. Planning-only
+requests stay planning-only, and a completed plan is not execution approval.
+
+Disable only the added default intake with
+`--autonomous-development:default-intake=disabled` in the settings command.
+This retains baseline Prepare and leaves explicit input, argument hints,
+direct-user-only activation and other safeguards unchanged.
+
+The shared skill metadata advertises
+`[idea, issue, design, plan, or saved run + action]`. Claude Code documents
+`argument-hint` as an autocomplete hint. Copilot receives the same field, though
+its hint display is not currently working. Codex does not document a CLI
+`argument-hint` field; its supported `agents/openai.yaml` UI description lists
+the same optional inputs. These are help text, not positional arguments or
+flags, and do not change the invocation syntax for any host.
 
 Flags shown in implementation-helper commands, such as `--provider`,
 `--approved`, or `--stale-after`, are not skill arguments. Manifest configuration

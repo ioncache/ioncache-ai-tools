@@ -331,6 +331,16 @@ an accepted review. It preserves the original review and all consumed allowances
 changed patches still require a counted review. Disabling it does not change
 normal acceptance, review or read-only inspection.
 
+`autonomous-development-default-intake` is enabled by default. It adds guided
+preparation when a human invokes the skill without arguments: use one clear
+unfinished conversational task, or ask for the outcome or task selection.
+The skill resolves it read-only across all hosts. Disabling it restores baseline
+Prepare without disabling explicit inputs, the skill, direct-user-only
+activation, incremental planning or execution safeguards. A failed lookup
+reports unavailability and retains baseline Prepare; it creates no permission
+state. Change it with `--autonomous-development:default-intake=disabled`.
+See [../skills/autonomous-development/INTAKE.md](../skills/autonomous-development/INTAKE.md).
+
 `autonomous-development-incremental-planning` controls only the Prepare guidance
 for PR slicing, feature-flag decisions, optional child issues, boundary
 contracts, prerequisite evidence and conditional candidates. Prepare reads its
