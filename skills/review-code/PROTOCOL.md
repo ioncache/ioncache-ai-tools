@@ -35,7 +35,11 @@ applicability. A language-specific packet's technical-applicability record
 establishes why it was dispatched, not that every candidate uses that language.
 Inspect actual source, including embedded code; apply language-specific
 instructions only to the matching portions.
-Read applicable files and necessary callers in full. A capacity shard retains
+Read every owned `scope_files` entry in full before completing applicability,
+including READMEs and files judged non-applicable to this category. Read necessary
+callers in full too. Diffs and searches locate evidence; they do not replace
+these reads. Start with the supplied inventory, not a category-based file filter.
+A capacity shard retains
 the same category instructions and traces relevant boundaries end to end.
 Return a reason if nothing applies; do not skip a category based on expected
 effort or finding count.
@@ -74,6 +78,21 @@ source reasoning. An unavailable check or instruction source is a limitation,
 not a clean result or a new tool permission fence.
 Source-supported inference is valid evidence. An unexecuted optional check
 does not by itself make coverage incomplete; honor any expressly required check.
+The packet's `checks: source` prohibits executable tests and probes.
+`checks: targeted` permits only a bounded, claim-directed check in an isolated
+disposable copy, subject to narrower caller limits and native permissions.
+Name the claim and expected discriminating observation first. Never run a
+routine suite or automatically install dependencies. The reviewed tree includes
+ignored files; never write through symlinks/shared dependencies to it.
+External-system access needs explicit scoped permission, not possession of credentials.
+
+Reuse supplied immutable `premises` only for their exact supported claims,
+scope and API/version. Summaries establish only their stated details.
+An unresolved record is reusable evidence of uncertainty, not a settled fact.
+For a missing shared premise, send its exact query/scope/version to the caller;
+the caller assigns one lookup owner and distributes source evidence, never
+sibling findings. Continue independent work while it is unresolved. Do not
+repeat another layer's lookup without a specific gap or contradiction.
 
 Write a JSON object to the assigned result file. Use this shape, replacing the
 placeholders with the packet values and your actual observations:
@@ -93,6 +112,9 @@ placeholders with the packet values and your actual observations:
   },
   "coverage": {
     "files": ["<each packet.scope_files entry>"],
+    "read_log": [
+      {"path": "<exact owned path>", "how": "whole", "evidence": "<actual read reference for this snapshot>"}
+    ],
     "isolation": "unknown",
     "ambient_sources": [],
     "reference_sources": [],
@@ -116,6 +138,14 @@ Coverage includes verified applicability, files read, traced callers/boundaries,
 checks, omissions and an explicit `isolation` value of `uncontaminated`,
 `contaminated`, or `unknown`. Also return `coverage.files` as the exact list of
 owned candidate files examined, even for a justified not-applicable result.
+`read_log` contains one record per owned path and any additional whole files
+relied on. `how` is exactly `whole` or `unreadable`; an unreadable owned file
+requires a partial outcome. `evidence` is a nonempty read/source reference.
+Do not fill a missing record by assumption. A helper cannot prove that text
+was actually read or understood. Before submitting, compare the inventory
+against actual reads and complete omissions within the existing assignment.
+Caller `check-report` detects schema and missing-read problems without waiting
+for other workers or consuming a replacement round.
 
 Use `complete`, `partial`, or `failed` for outcome. Additional assigned category
 or generic-review instructions make isolation contaminated and coverage partial;

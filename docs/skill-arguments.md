@@ -31,6 +31,8 @@ precedence.
 | `--validator-effort LEVEL` | CLI/model default | Set reasoning effort for independent validators. |
 | `--fallback MODE` | Per role: `fail` with an explicit model or effort, otherwise `configured` | `configured` permits one retry using that role's CLI defaults after a launch failure. `fail` does not permit that fallback. This flag does not select the initial model. |
 | `--strategy STRATEGY` | `auto`, which resolves to `specialists` | `specialists` runs independent review categories concurrently where supported. `sweep-first` starts correctness first, then runs the remaining categories. Neither reduces review coverage. |
+| `--checks MODE` | `targeted` | Use bounded claim-directed checks in isolated copies with existing dependencies. `source` disables tests/probes. Neither permits routine suites, automatic installs or unapproved external-system access. |
+| `--run-details` | Off | Add per-agent durations, a timeline and recorded waits. Every review still shows the compact runtime summary; evidence is retained in both display modes. |
 | `--post-comments` | Off | After review, publish eligible findings as one `COMMENT` review on the PR, subject to the posting setting and permissions. |
 | `--post-sensitive POLICY` | `private` | With posting enabled, `none` withholds sensitive findings; `private` includes them on private/internal repositories but only PR-introduced ones on public repositories; `all` permits them under the posting policy on any repository. |
 | `-h`, `--help` | Off | Show options, defaults, and examples without inspecting a target or starting a review. |
@@ -47,6 +49,7 @@ to post; choosing a disclosure policy alone does not request publication.
 ```text
 /ioncache-ai-tools:review-code branch --model-selection configured
 /ioncache-ai-tools:review-code this PR --post-comments --post-sensitive none
+/ioncache-ai-tools:review-code this PR --run-details
 /ioncache-ai-tools:review-code --help
 ```
 
@@ -291,6 +294,7 @@ These switches are independent of similarly named writing skills.
 | `--review:correctness=STATE` | Unchanged | Include the correctness review category. |
 | `--review:design-coherence=STATE` | Unchanged | Include the design-coherence review category. |
 | `--review:documentation=STATE` | Unchanged | Include the documentation review category. |
+| `--review:incremental-adjudication=STATE` | Unchanged | Assess individual reports before all discovery finishes; disabling uses aggregate adjudication. |
 | `--review:integration=STATE` | Unchanged | Include the separate cross-component integration review. |
 | `--review:jsdoc=STATE` | Unchanged | Include JSDoc review when the target contains JavaScript; this does not make it apply to other languages. |
 | `--review:known-issues=STATE` | Unchanged | Display unresolved material findings in reports and PR drafts; disabling display does not discard the inventory. |
@@ -298,7 +302,9 @@ These switches are independent of similarly named writing skills.
 | `--review:post-comments=STATE` | Unchanged | Permit review-code's requested comment-posting step. Enabling this alone does not request posting. |
 | `--review:privacy=STATE` | Unchanged | Include the privacy review category. |
 | `--review:security=STATE` | Unchanged | Include the security review category. |
+| `--review:targeted-checks=STATE` | Unchanged | Permit bounded isolated checks; disabling selects source-only review. |
 | `--review:test-coverage=STATE` | Unchanged | Include review of whether the relevant behavior is covered by tests. |
+| `--review:timing=STATE` | Unchanged | Collect and report runtime measurements; disabling leaves an unavailable total and does not change review coverage. |
 | `--review:unit-tests=STATE` | Unchanged | Include review of unit-test quality using the target project's framework. |
 
 ### Skill setting flags

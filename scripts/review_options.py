@@ -12,7 +12,7 @@ import plugin_config
 
 ROLES = ("lead", "reviewer", "validator")
 SKILLS = ("review-code", "review-validate-fix-loop")
-REVIEW_FIELDS = ("model_selection", "fallback", "strategy") + tuple(
+REVIEW_FIELDS = ("model_selection", "fallback", "strategy", "checks", "run_details") + tuple(
     f"{role}_{setting}" for role in ROLES for setting in ("model", "effort")
 )
 # Posting is a review-code caller action, not a review choice: these fields are
@@ -21,7 +21,8 @@ POSTING_FIELDS = ("post_comments", "post_sensitive")
 SENSITIVE_POLICIES = ("none", "private", "all")
 POSTING_FEATURE = "review-post-comments"
 NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE, "review-known-issues",
-                        "review-report-json-recovery")
+                        "review-report-json-recovery", "review-incremental-adjudication",
+                        "review-targeted-checks", "review-timing")
 
 
 class PostingConflict(ValueError):
@@ -80,6 +81,10 @@ def parser_for(skill):
                         help="launch fallback (default: fail for explicit overrides, configured otherwise)")
     parser.add_argument("--strategy", choices=("auto", "sweep-first", "specialists"), default="auto",
                         action=Once, help="review order; auto uses isolated specialists, sweep-first changes order only")
+    parser.add_argument("--checks", choices=("targeted", "source"), default="targeted", action=Once,
+                        help="claim-directed isolated checks or source-only; never automatic installs or routine suites")
+    parser.add_argument("--run-details", action=OnceFlag,
+                        help="show per-agent timings, timeline and recorded waits after the compact runtime summary")
     for role in ROLES:
         parser.add_argument(f"--{role}-model", type=nonempty, action=Once, metavar="MODEL",
                             help=f"explicit {role} model; omitted roles use the selection policy")
@@ -133,7 +138,8 @@ def validate_posting_choice(name, value):
 
 
 def apply_values(options, values):
-    result = {**options, **{name: values[name] for name in ("model_selection", "fallback", "strategy")}}
+    result = {**options, **{name: values[name] for name in
+                          ("model_selection", "fallback", "strategy", "checks", "run_details")}}
     result["effective_strategy"] = "specialists" if values["strategy"] == "auto" else values["strategy"]
     result["roles"] = {}
     for role in ROLES:
@@ -148,22 +154,34 @@ def apply_values(options, values):
 def review_values(options):
     return {
         **{name: options[name] for name in ("model_selection", "fallback", "strategy")},
+        "checks": options.get("checks", "targeted"),
+        "run_details": options.get("run_details", False),
         **{f"{role}_{setting}": options["roles"][role][setting]
            for role in ROLES for setting in ("model", "effort")},
     }
 
 
-def validate_values(skill, values):
+def option_arguments(values):
     argv = []
     for name, value in values.items():
         if name not in REVIEW_FIELDS:
             raise ValueError(f"unknown review option in context: {name}")
+        if name == "run_details":
+            if type(value) is not bool:
+                raise ValueError("expected a boolean for run_details")
+            if value:
+                argv.append("--run-details")
+            continue
         if value is None and name not in ("model_selection", "strategy"):
             continue
         if not isinstance(value, str):
             raise ValueError(f"expected a string for {name}")
         argv.append(f"--{name.replace('_', '-')}={value}")
-    return review_values(parse_options(skill, argv))
+    return argv
+
+
+def validate_values(skill, values):
+    return review_values(parse_options(skill, option_arguments(values)))
 
 
 def merge_context(options, context):
@@ -226,6 +244,10 @@ def read_configuration(skill):
         ),
         "post_comments_enabled": POSTING_FEATURE in catalog and POSTING_FEATURE not in disabled,
         "known_issues_enabled": "review-known-issues" in catalog and "review-known-issues" not in disabled,
+        "incremental_adjudication_enabled": "review-incremental-adjudication" in catalog and
+        "review-incremental-adjudication" not in disabled,
+        "targeted_checks_enabled": "review-targeted-checks" in catalog and "review-targeted-checks" not in disabled,
+        "timing_enabled": "review-timing" in catalog and "review-timing" not in disabled,
         "review_features": {name: name not in disabled for name in catalog
                             if name.startswith("review-") and name not in NON_CATEGORY_FEATURES},
     }
@@ -255,6 +277,7 @@ def main(argv=None):
               file=sys.stderr)
         return 2
     options["configuration"] = configuration
+    options["effective_checks"] = options["checks"] if configuration["targeted_checks_enabled"] else "source"
     options["effective_model_selection"] = (
         options["model_selection"] if configuration["auto_selection_enabled"] else "configured"
     )

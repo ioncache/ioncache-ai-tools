@@ -165,11 +165,18 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   and audit archives from live acceptance. File hints are not edit allowlists;
   review the actual correction delta while preserving HEAD/index ownership.
 - `review_assignments.py` freezes source-language evidence and all policy
-  resources in schema-3 phase plans with unique report namespaces, separately
+  resources in schema-4 phase plans with unique report namespaces, separately
   from review switches and user exclusions. JSDoc requires
   JavaScript; general categories adapt to the actual stack. Unknown language
   facts leave coverage unresolved, not a permission fence. Retain old evidence
   and consumed work when a corrected contract requires a new phase.
+  `review_progress.py` checks per-report assessment readiness and the final merge,
+  without launching workers. `review_premises.py` seals scoped evidence, not truth.
+  `review_findings.py` owns public category IDs and structured relationships.
+  `review_timing.py` projects caller-owned lifecycle evidence into a compact
+  summary or `--run-details` output without creating review state or gates.
+  Keep whole-file read records and the original discovery provenance through
+  report repair, independent assessment and publication.
 - `scripts/review_comments.py` publishes review-code findings for the
   `--post-comments` caller step in `skills/review-code/POSTING.md`. It checks
   eligibility, anchors comments to the merge-base diff, applies the sensitive

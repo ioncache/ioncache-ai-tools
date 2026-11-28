@@ -102,6 +102,14 @@ Append a target or task when needed, for example
 `/ioncache-ai-tools:review-code branch`. Same-name skill conflicts and discovery:
 [docs/workflows.md#skill-discovery](docs/workflows.md#skill-discovery).
 
+Code reviews assess reports as they arrive, then merge the findings. They do
+not install dependencies or routinely rerun suites; targeted checks use isolated
+copies and existing dependencies. Use `/ioncache-ai-tools:review-code --checks source`
+for source-only review. Configure `review:incremental-adjudication` and
+`review:targeted-checks` independently through the plugin's settings skill.
+Every review shows a compact runtime summary. Add `--run-details` for per-agent
+durations, a timeline, and recorded waits; missing measurements stay explicit.
+
 ### Skills
 
 Invoke a skill with the task or files you want it to work on. Related skills

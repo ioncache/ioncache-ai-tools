@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 
+from review_findings import valid_id
 
 PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/pull/([1-9][0-9]*)/?\Z")
 RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
@@ -473,6 +474,8 @@ def validate_input(document):
         fid = finding.get("id")
         require(isinstance(fid, str) and FINDING_ID.fullmatch(fid) and fid not in seen,
                 f"Finding IDs must be unique report IDs such as COR1: {fid!r}")
+        require(valid_id(fid, finding.get("category")),
+                f"{fid}: ID must use its originating category prefix; use review_findings.py")
         seen.add(fid)
         require(finding.get("severity") in SEVERITIES, f"{fid}: severity must be High, Medium or Low")
         require(finding.get("action") in ACTIONS, f"{fid}: action must be Act, Decide or Investigate")
@@ -491,7 +494,11 @@ def validate_input(document):
         require(all(isinstance(item, str) for item in finding.get("locations", [])),
                 f"{fid}: locations must list path:line text")
         require(type(finding.get("sensitive")) is bool, f"{fid}: sensitive must be true or false")
-        require(all(isinstance(item, str) for item in finding.get("related", [])), f"{fid}: related must list IDs")
+        related = finding.get("related", [])
+        require(isinstance(related, list) and all(isinstance(item, str) and FINDING_ID.fullmatch(item)
+                                                for item in related) and
+                len(related) == len(set(related)) and fid not in related,
+                f"{fid}: related must list distinct other finding IDs")
     return document
 
 
@@ -537,6 +544,7 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
     withheld_ids = {f["id"] for f in findings
                     if f["id"] not in exclude and is_withheld(f, document["policy"], facts.get("visibility"))}
     hidden = withheld_ids | set(exclude)
+    included = {finding["id"] for finding in findings} - hidden
     rejections = []
     for finding in findings:
         if finding["id"] in hidden:
@@ -569,7 +577,7 @@ def build(document, facts, diff_text, read_lines, private, exclude=()):
         if fid in withheld_ids:
             withheld.append(fid)
             continue
-        finding = {**finding, "related": [rid for rid in finding.get("related", []) if rid not in hidden]}
+        finding = {**finding, "related": [rid for rid in finding.get("related", []) if rid in included]}
         thread = open_threads.get(finding.get("prior_thread"))
         if thread is not None:
             raised.append({"id": fid, "url": thread["url"]})

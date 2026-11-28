@@ -53,6 +53,7 @@ APP_LINES = ["import os", "new = 1", "extra = 2", "value = 3", "tail = 4"]
 def finding(fid="COR1", **changes):
     value = {
         "id": fid, "severity": "Medium", "action": "Act", "basis": "inferred",
+        "category": "security" if fid.startswith("SEC") else "correctness",
         "title": "New value drops the old default", "priority": "P2", "effort": "quick",
         "introduced": True, "fix_steps": "Restore the old default in src/app.py.",
         "done_when": "A test reading the default value passes.",
@@ -143,6 +144,17 @@ def thread(tid, body, login="reviewer", resolved=False):
 
 
 class DiffTests(unittest.TestCase):
+    def test_posting_rejects_adjudicator_and_wrong_category_ids(self):
+        for fid, category in (("ADJ1", "correctness"), ("SEC1", "correctness"), ("COR1", None)):
+            with self.subTest(fid=fid, category=category), self.assertRaises(ValueError):
+                build(finding(fid, category=category))
+        result = build(finding("COR2", related=["SEC1", "COR1"]),
+                       finding("SEC1", sensitive=True), policy="none")
+        comment, = result["payload"]["comments"]
+        self.assertIn("**COR2 |", comment["body"])
+        self.assertNotIn("Same fix as", comment["body"])
+        self.assertEqual(result["withheld"], ["SEC1"])
+
     def test_hunk_lines_follow_counts_not_dash_prefixes(self):
         files = rc.parse_diff(DIFF)
         self.assertEqual(set(files), {"src/app.py", "new_name.py"})
@@ -185,12 +197,12 @@ class DiffTests(unittest.TestCase):
         self.assertIn("finding=COR2 -->", body)
 
     def test_outside_diff_label_keeps_anchor_and_locations_for_every_action(self):
-        located = build(finding("INV1", action="Investigate", anchor=None, locations=["src/other.py:42"]),
-                        finding("INV2", action="Investigate", anchor={"path": "README.md", "side": "LEFT",
+        located = build(finding("COR1", action="Investigate", anchor=None, locations=["src/other.py:42"]),
+                        finding("COR2", action="Investigate", anchor={"path": "README.md", "side": "LEFT",
                                                                       "start_line": 3, "line": 5},
                                 locations=["README.md:4", "docs/a.md:1-2"]),
-                        finding("INV3", action="Investigate", anchor=None, locations=[]),
-                        finding("INV4", action="Investigate", anchor={"path": "README.md", "line": "7"}))
+                        finding("COR3", action="Investigate", anchor=None, locations=[]),
+                        finding("COR4", action="Investigate", anchor={"path": "README.md", "line": "7"}))
         body = located["payload"]["body"]
         self.assertIn("\n`src/other.py:42`\n", body)
         self.assertIn("\n`README.md:3-5 (deleted lines)`, `docs/a.md:1-2`\n", body)
@@ -227,7 +239,7 @@ class SuggestionTests(unittest.TestCase):
 
 class FormatTests(unittest.TestCase):
     def test_header_title_notes_and_marker_last(self):
-        result = build(finding("COR1", related=["COR2"], introduced=False),
+        result = build(finding("COR1", related=["SEC1"], introduced=False),
                        finding("SEC1", severity="High", action="Investigate", basis="observed",
                                priority="P1", effort="heavy",
                                anchor={"path": "src/app.py", "side": "RIGHT", "line": 4}),
@@ -235,7 +247,7 @@ class FormatTests(unittest.TestCase):
         first, second = result["payload"]["comments"]
         self.assertTrue(first["body"].startswith(
             "**COR1 | Medium | P2 | Act | Quick fix**\n\n**New value drops the old default**"))
-        self.assertIn("Pre-existing: not introduced by this pull request. Same fix as COR2.", first["body"])
+        self.assertIn("Pre-existing: not introduced by this pull request. Same fix as SEC1.", first["body"])
         self.assertTrue(second["body"].startswith("**SEC1 | High | P1 | Investigate | Heavy lift**"))
         self.assertNotIn("inferred", first["body"].split("<details>")[0])
         for comment in (first, second):

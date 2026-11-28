@@ -12,6 +12,10 @@ Apply the same evidence standard when rejecting a candidate. "Known",
 cause, safety, or acceptance of risk. Preserve legitimate settled decisions;
 reopen them only when relevant new evidence contradicts their premise.
 Missing documentation establishes uncertainty, not that the claim is false.
+Reuse applicable identity-bound source evidence across passes. Rechecking its
+support and relevance does not require fetching it again. A premise record's
+status or a sibling's conclusion cannot extend what its source establishes.
+Name the new contradictory evidence or missing detail before reopening research.
 
 Apply this policy when selecting findings and corrections, not just when
 formatting the report. A valid observation on new code is not automatically

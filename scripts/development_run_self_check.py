@@ -477,13 +477,15 @@ class DevelopmentRunTests(unittest.TestCase):
             review_options, ["review-validate-fix-loop"],
             cwd=root, env=self.env, process=uses_process(self))
         self.assertEqual(options.returncode, 0, options.stderr)
+        review_configuration = json.loads(options.stdout)
+        review_configuration["configuration"]["incremental_adjudication_enabled"] = False
         if files is None:
             files = development.review_files(root, assignment["comparison_base"])
         phase = assignments.prepare({
             "objective": "Fixture review", "kind": "full", "target": "branch",
             "root": str(root), "base": assignment["comparison_base"], "snapshot": snapshot,
             "files": files, "constraints": ["Offline fixture; no model launches"],
-            "scratch_directory": str(scratch), "review_options": json.loads(options.stdout),
+            "scratch_directory": str(scratch), "review_options": review_configuration,
             "language_inventory": {
                 name: {"languages": [], "evidence": "Inspected plain-text fixture content"}
                 for name in files},
@@ -495,7 +497,9 @@ class DevelopmentRunTests(unittest.TestCase):
                 "instruction_set": packet["instruction_set"]["identity"],
                 "packet_identity": packet["identity"], "snapshot": snapshot,
                 "worker": None, "origin": "specialist", "selection": {"actual": "unknown"},
-                "coverage": {"files": packet["scope_files"], "isolation": "unknown"},
+                "coverage": {"files": packet["scope_files"], "isolation": "unknown",
+                             "read_log": [{"path": name, "how": "whole", "evidence": "Offline complete-read fixture"}
+                                          for name in packet["scope_files"]]},
                 "outcome": "complete", "candidates": [], "limitations": [],
             }
             Path(packet["result_file"]).write_bytes(manifest.encode(result))
@@ -6346,13 +6350,19 @@ class DevelopmentRunTests(unittest.TestCase):
             "development-control": {"model": "native-cheap", "effort": "low", "fallback": "fail"},
             "implement": {"model": "native-capable", "effort": "high", "fallback": "fail"},
         }
-        execution["review_options"] = {"reviewer_model": "native-reviewer", "reviewer_effort": "high"}
+        execution["review_options"] = {"reviewer_model": "native-reviewer", "reviewer_effort": "high",
+                                       "run_details": True}
         self.init()
         self.next()
         options = self.state["assignment"]["model_selection"]["review_options"]
         self.assertEqual(options["roles"]["reviewer"]["model"], "native-reviewer")
         self.assertEqual(options["roles"]["reviewer"]["fallback"], "fail")
         self.assertIn("reviewer_model", options["specified"])
+        self.assertTrue(options["run_details"])
+        execution["review_options"]["run_details"] = False
+        compact = models.review_choices(execution)
+        self.assertFalse(compact["run_details"])
+        self.assertEqual(compact["roles"], options["roles"])
         with self.assertRaises(manifest.ManifestError):
             manifest.validate({**self.plan, "configuration": {
                 **self.plan["configuration"], "execution": {**execution, "models": {"unknown": {}}}
@@ -7117,8 +7127,8 @@ class DevelopmentRunTests(unittest.TestCase):
         before = path.read_bytes()
         check = assignments.check
 
-        def change_during_coverage(phase, handoff):
-            result = check(phase, handoff)
+        def change_during_coverage(phase, handoff, adjudication=None):
+            result = check(phase, handoff, adjudication)
             self.assertTrue(result["structurally_complete"])
             (root / "app.txt").write_text("changed during coverage\n")
             return result

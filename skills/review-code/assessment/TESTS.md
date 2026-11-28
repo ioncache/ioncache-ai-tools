@@ -20,3 +20,12 @@ Neither small code nor an immediately visible error is a blanket exemption:
 check whether side effects or damage can precede that error. Conversely, a
 second assertion of already-protected behavior needs a distinct regression
 it would catch, not just another route through the implementation.
+
+Source reasoning can establish a test gap unless the supplied user/project
+rules require mutation proof. Do not impose a universal mutation run.
+When proof is required, use an authorized isolated copy and distinguish the
+baseline from the changed behavior: a surviving meaningful mutation supports
+a gap, while an assertion failure can demonstrate existing protection.
+Missing dependencies, crashes and unavailable execution are not either result.
+Run only the smallest discriminating checks, retain outputs and input identities,
+and never automatically install packages or mutate the reviewed tree.

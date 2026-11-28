@@ -13,7 +13,7 @@ from uuid import uuid4
 
 RESOURCES = Path(__file__).resolve().parent.parent / "skills" / "review-code"
 PROJECT_ID = re.compile(r"project:[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PLAN_SCHEMA = 3
+PLAN_SCHEMA = 4
 
 
 def require(condition, message):
@@ -237,6 +237,13 @@ def freeze_existing(registry, previous, request):
             "A phase revision cannot reset replacement bounds")
     require(request.get("correction") == previous["request"].get("correction"),
             "Changed correction requires a new phase")
+    require(request.get("premises", []) == previous["request"].get("premises", []),
+            "Retain frozen premises; supply new immutable evidence separately to affected assessments")
+    require(check_policy(request) == check_policy(previous["request"]),
+            "Changed check policy requires a new phase")
+    require(request["review_options"]["configuration"].get("incremental_adjudication_enabled", True) ==
+            previous["request"]["review_options"]["configuration"].get("incremental_adjudication_enabled", True),
+            "Changed adjudication topology requires a new phase")
     inventory = language_inventory(request)
     for name, old in language_inventory(previous["request"]).items():
         require(inventory.get(name) == old,
@@ -253,19 +260,35 @@ def freeze_existing(registry, previous, request):
     return copy.deepcopy(previous["packets"])
 
 
+def check_policy(request):
+    options = request["review_options"]
+    config = options["configuration"]
+    for key in ("incremental_adjudication_enabled", "targeted_checks_enabled"):
+        require(type(config.get(key, True)) is bool, f"{key} must be boolean")
+    checks = options.get("effective_checks", "targeted")
+    require(checks in ("targeted", "source"), "Checks must be targeted or source")
+    return checks if config.get("targeted_checks_enabled", True) else "source"
+
+
 def prepare(request, previous=None):
     require(isinstance(request, dict), "Request must be an object")
     request = copy.deepcopy(request)
     required = {"objective", "kind", "target", "base", "snapshot", "root", "files",
                 "constraints", "scratch_directory", "review_options"}
     optional = {"project_categories", "project_sources", "exclusions", "replacement_rounds",
-                "correction", "category_context", "language_inventory"}
+                "correction", "category_context", "language_inventory", "premises"}
     require(required <= request.keys() <= required | optional, "Unknown or missing request fields")
     for key in ("objective", "target", "base", "snapshot", "root", "scratch_directory"):
         text(request[key], key)
     require(request["kind"] in ("full", "focused"), "Review kind must be full or focused")
     strings(request["files"], "Candidate files")
     strings(request["constraints"], "Constraints")
+    checks = check_policy(request)
+    from review_premises import validate as validate_premise
+
+    require(isinstance(request.get("premises", []), list), "Premises must be a list")
+    for premise in request.get("premises", []):
+        validate_premise(premise)
     require(Path(request["root"]).is_absolute() and Path(request["root"]).is_dir(),
             "Review root must be an existing absolute directory")
     require(Path(request["scratch_directory"]).is_absolute(), "Scratch must be absolute")
@@ -301,6 +324,8 @@ def prepare(request, previous=None):
             "correction": request.get("correction"),
             "context": request.get("category_context", {}).get(
                 key, {"history": [], "settled_decisions": []}),
+            "checks": checks,
+            "premises": request.get("premises", []),
             "result_file": private_result(request, filename),
         })
     return seal({"schema": PLAN_SCHEMA, "phase_id": phase_id, "policy_resources": resources,
@@ -402,6 +427,8 @@ def checked_result(attempt, assessed=False):
         require(isinstance(result.get("selection"), dict), "Missing selection observations")
         require(result.get("outcome") in ("complete", "partial", "failed"), "Invalid result outcome")
         require(isinstance(result.get("candidates"), list), "Missing candidate records")
+        require(all(isinstance(item, dict) for item in result["candidates"]), "Candidates must be objects")
+        strings([item.get("key") for item in result["candidates"]], "Candidate keys within a report")
         strings(result.get("limitations"), "Result limitations")
         require(isinstance(result.get("coverage"), dict), "Missing coverage record")
         require(result["coverage"].get("isolation") in
@@ -417,6 +444,36 @@ def checked_result(attempt, assessed=False):
                 "the assigned ruleset. Retain this report rather than silently rewriting it")
         owned = strings(result["coverage"].get("files"), "Coverage files")
         require(set(owned) == set(packet["scope_files"]), "Shard coverage differs from assignment")
+        checked_reads(packet, coverage, complete=result["outcome"] == "complete" or assessed)
+
+
+def checked_reads(packet, coverage, *, complete):
+    records = coverage.get("read_log")
+    require(isinstance(records, list), "coverage.read_log needs one record per owned file")
+    reads = {}
+    for record in records:
+        require(isinstance(record, dict), "Read records must be objects")
+        path = text(record.get("path"), "Read path")
+        require(path not in reads, "Duplicate read path")
+        require(record.get("how") in ("whole", "unreadable"), "Read how must be whole or unreadable")
+        text(record.get("evidence"), "Read evidence")
+        reads[path] = record["how"]
+    missing = [path for path in packet["scope_files"] if reads.get(path) != "whole"]
+    require(not complete or not missing,
+            "Missing whole-file reads: " + ", ".join(missing) +
+            "; read the omitted files, retain the original report and return a same-assignment correction")
+
+
+def check_report(plan, attempt):
+    verify_plan(plan)
+    checked_attempt(plan, attempt)
+    normalized, changes = repair_result(attempt)
+    checked_result({**attempt, "result": normalized})
+    require(normalized is not None, "No report returned; recover the original output")
+    return {"structurally_complete": normalized["outcome"] == "complete" and
+            normalized["coverage"]["isolation"] != "contaminated",
+            "normalized_result": normalized, "changes": changes,
+            "result_identity": digest(attempt["result"])}
 
 
 def report_texts(value):
@@ -558,7 +615,7 @@ def active_coverage(plan, active, indexed, errors, limitations):
     return missing
 
 
-def check(plan, handoff):
+def check(plan, handoff, adjudication=None):
     verify_plan(plan)
     require(isinstance(handoff, dict) and set(handoff) ==
             {"history_complete", "attempts", "active", "other_workers"}, "Invalid handoff fields")
@@ -611,11 +668,21 @@ def check(plan, handoff):
         errors.append("Record the separately completed adjudicator, then check the final handoff; "
                       "do not repeat completed discovery categories")
     missing = active_coverage(plan, handoff["active"], indexed, errors, limitations)
+    progress = None
+    if plan["request"]["review_options"]["configuration"].get("incremental_adjudication_enabled", True):
+        from review_progress import progress as adjudication_progress
+
+        progress = adjudication_progress(plan, handoff, adjudication or {"reports": [], "merge": None})
+        if not progress["complete"]:
+            errors.extend(progress["errors"])
+            errors.append("Incremental adjudication is unfinished; collect report assessments and "
+                          "the final merge, then check with --adjudication; do not repeat discovery")
     return {"structurally_complete": not errors and not missing,
             "missing_categories": missing, "errors": errors, "limitations": limitations,
             "report_repairs": repairs,
             "unresolved_applicability": unresolved,
             "replacement_rounds_used": rounds,
+            "adjudication": progress,
             "evidence_limit": "Record checks do not prove native launches, instruction purity, "
                               "semantic trace completeness, adjudication or evidence truth."}
 
@@ -639,6 +706,10 @@ def main():
     check_parser = commands.add_parser("check")
     check_parser.add_argument("plan")
     check_parser.add_argument("handoff")
+    check_parser.add_argument("--adjudication")
+    report_parser = commands.add_parser("check-report")
+    report_parser.add_argument("plan")
+    report_parser.add_argument("attempt")
     args = parser.parse_args()
     try:
         if args.command == "prepare":
@@ -647,8 +718,11 @@ def main():
         elif args.command == "packet":
             value = derive_packet(read_json(args.plan), args.category, args.assignment,
                                   args.result_file, args.file)
+        elif args.command == "check-report":
+            value = check_report(read_json(args.plan), read_json(args.attempt))
         else:
-            value = check(read_json(args.plan), read_json(args.handoff))
+            value = check(read_json(args.plan), read_json(args.handoff),
+                          read_json(args.adjudication) if args.adjudication else None)
         print(json.dumps(value, indent=2))
         return 1 if value.get("structurally_complete") is False else 0
     except (OSError, KeyError, TypeError, ValueError) as error:

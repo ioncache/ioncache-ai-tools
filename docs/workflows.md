@@ -178,11 +178,20 @@ TypeScript-only and other JavaScript-free targets retain general documentation
 and contract review without a JSDoc worker.
 
 Independent `review-<category>` settings control shipped coverage, separately
-from writing-skill settings. With no extra project categories, a default flat
-phase starts with 12 workers without JavaScript or 13 with it, including
-adjudication, before retries, validators or capacity shards.
+from writing-skill settings. A default flat phase allocates one reviewer and
+one report adjudicator per applicable category, followed by a merge adjudicator.
+Retries, validators and capacity shards add separate assignments.
 See [configuration.md](configuration.md) for opt-outs and the coordination
 section below for project requirements and worker isolation.
+
+Every final review includes total elapsed time and a compact breakdown of setup,
+the longest reviewer, adjudication, final merge and posting. `--run-details`
+adds per-agent durations, an aligned timeline and observed wait reasons.
+Measurements are retained in both display modes; unavailable observations stay
+explicit rather than becoming estimates. Runtime collection has an independent
+`review-timing` opt-out and never changes completion or permissions.
+See [../skills/review-code/TIMING.md](../skills/review-code/TIMING.md) for measurement
+definitions, overlapping phases and missing-evidence handling.
 
 Complete argument tables, including role effort, validator, fallback, strategy,
 and posting options:
@@ -253,6 +262,20 @@ configured standard, integration, and adjudication are separate assignments.
 Nested mode uses a dedicated coordinator; flat mode uses caller-owned
 collection. Both require a separate adjudicator. Missing required independence
 leaves the review incomplete, without blocking other authorized work.
+
+By default, each completed report gets a fresh independent adjudication while
+discovery continues. Only cross-report merging waits for all assessments.
+`review-incremental-adjudication: false` retains aggregate adjudication.
+Actual overlap depends on native result delivery; a batch-only controller
+cannot promise streaming. Extra assessment contexts can increase model usage.
+No fixed elapsed-time improvement has been established.
+
+Whole-file read logs include every owned file, even when used only to establish
+non-applicability. Reports reuse scoped source evidence without inheriting other
+workers' conclusions. Public IDs come from discovery categories, not adjudication.
+`--checks targeted` permits only useful isolated probes with existing dependencies;
+`--checks source` or `review-targeted-checks: false` disables execution.
+Neither mode permits automatic dependency installs or grants DEV/prod access.
 
 Before allocation, inventory repository standards, path applicability, and
 exceptions. Separate code-checking passes from execution constraints such as

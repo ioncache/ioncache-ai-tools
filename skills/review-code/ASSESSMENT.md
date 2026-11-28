@@ -66,6 +66,12 @@ category's findings cannot replace the missing independent assignment.
 
 ## Human report
 
+The caller, not an adjudication worker, appends [TIMING.md](TIMING.md)'s compact
+runtime summary to every final review response, after any requested posting.
+Only normalized `run_details: true` adds the agent table, timeline and recorded
+waits. Capture measurements in both modes; timing gaps do not change findings
+or review completeness. Use `unavailable` rather than fabricating a duration.
+
 The report's main reader is an agent or person deciding what to fix. Report
 `Act`, `Decide`, and `Investigate` items in the main index. Keep supported corrections
 distinct from decisions and investigations.
@@ -75,7 +81,16 @@ Start with an index, ordered by priority level, then severity:
 | ID | Location | Issue | Severity | Priority | Action | Confidence |
 | --- | --- | --- | --- | --- | --- | --- |
 
-Use a short standard prefix plus a number, or `COR<N>` for correctness.
+The caller runs `scripts/review_findings.py` on the final assessments and
+original attempts before rendering this report or posting. Its output owns
+public IDs: `COR<N>` for correctness, `SEC<N>` for security, and the other
+category prefixes defined in that helper. A merged issue retains every
+discovery source; the lexically first originating category owns the prefix.
+Within a category, canonical issue-key order determines numbering, not arrival
+order, severity or publication filtering. Keep the returned map for this run.
+Project categories use a deterministic collision-checked `PRJ` prefix.
+Never label specialist findings `ADJ`. Truly new adjudicator discoveries need
+an independent category validation record before they receive a category ID.
 `Location` is the primary `path:line`; `Issue` is the assessment's `title`.
 
 Then give one block per finding, in the same order:
@@ -94,6 +109,8 @@ Then give one block per finding, in the same order:
 
 Group findings sharing a correction by noting "Same fix as COR2" in each
 block, without losing their IDs or differences in action, severity, or basis.
+Generate that note from `related_keys` through the helper's ID map; assessment
+prose and fix instructions remain self-contained and do not name public IDs.
 The blocks carry the evidence; do not squeeze it into the index.
 
 Apply the caller's `main_min_severity` (default Low) after actionability

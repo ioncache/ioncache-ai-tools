@@ -443,13 +443,13 @@ def review_files(root, base):
 def review_coverage(state, assignment, report, data):
     records = {}
     directory = Path(state["store"]) / "reports"
-    for key in ("plan", "handoff"):
+    for key in ("plan", "handoff", *(("adjudication",) if data.get("adjudication") else ())):
         path = Path(data[key]).resolve()
         plan.require(path.is_relative_to(directory) and path != directory,
                      "Review records must remain in this run's private reports")
         records[key] = assignments.read_json(path)
     phase = records["plan"]
-    checked = assignments.check(phase, records["handoff"])
+    checked = assignments.check(phase, records["handoff"], records.get("adjudication"))
     request = phase["request"]
     plan.require(request["root"] == assignment["root"] and request["base"] == report["base"] and
                  request["snapshot"] == report["snapshot"] and request["kind"] == "full",
@@ -459,6 +459,11 @@ def review_coverage(state, assignment, report, data):
     plan.require(checked["structurally_complete"],
                  "Category review is incomplete: " + json.dumps(checked))
     checked["report_json_repairs"] = jobs.require_collected_review(state, assignment, records["handoff"])
+    if "adjudication" in records:
+        checked["adjudication_evidence"] = {
+            "path": str(Path(data["adjudication"]).resolve()),
+            "identity": assignments.digest(records["adjudication"]), "records": records["adjudication"],
+        }
     return {"plan": str(Path(data["plan"]).resolve()),
             "handoff": str(Path(data["handoff"]).resolve()),
             "identity": phase["identity"], "files": request["files"], **checked}

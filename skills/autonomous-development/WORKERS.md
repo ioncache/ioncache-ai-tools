@@ -192,7 +192,7 @@ Inventory scoped project standards and actual source languages, including
 embedded code. Derive the full phase's file inventory from `comparison_base`
 through the current worktree, including committed changes and non-ignored
 untracked files. Recompute it after fixes.
-Do not use only changes made since the review began. Prepare a schema-3 phase
+Do not use only changes made since the review began. Prepare a schema-4 phase
 plan with `review_assignments.py`.
 Every enabled general category gets its own whole-scope worker; dispatch JSDoc
 only for evidenced JavaScript, not TypeScript. Unknown language facts leave the
@@ -257,6 +257,10 @@ files. A separate adjudicator assesses reviewer findings. Adjudicator-originated
 findings require an independent validator. Preserve all candidates, including
 rejected ones. Missing reports or unresolved assessments cannot authorize fixing.
 Use existing schema-1 handback mapping without duplicate `review_done` events.
+Retain the shared review's private timing sidecar with the handback. Forward
+`run_details` as a presentation choice and include the compact runtime summary
+under review-code/TIMING.md. Reuse observed batch/job timestamps; batch delivery
+alone does not establish when each worker ran. Timing gaps never gate acceptance.
 For failed or partial reports returned as `blocked`, retain the original files
 and attempts. Have the existing adjudicator assess isolation claims before
 replacement. Reading project standards as evidence, including a plan reference
@@ -297,13 +301,19 @@ shared ledger's interrupted-fix reconciliation rules; do not invent a new edit
 or fabricate focused completion to verify an already-applied correction.
 
 After adjudication and required validation, persist the final handoff and run
-`review_assignments.py check`. A pre-adjudication check is not the final check.
+`review_assignments.py check`. With incremental adjudication enabled, pass
+`--adjudication` with PACKETS.md's retained report-assessment and merge records.
+Dispatch report assessment at the earliest collected-report boundary available
+to the approved controller; disclose batch-delivery limits instead of promising
+overlap the native host cannot provide. A pre-adjudication check is not the final check.
 Unknown native identities remain null and disclosed, not invented or treated as
 proven context reuse. Structural success does not prove semantic completeness.
 
 When complete, the owner writes the development report with `data.ledger`,
 `data.plan`, and `data.handoff`: paths to the ledger and the final full phase's
 frozen plan and checked handoff. Keep both JSON files in the run's private reports.
+When incremental adjudication is enabled, include `data.adjudication`, the
+private JSON file used by the final check. Acceptance rechecks its bindings.
 It writes `outcome: complete`, `requests: []`, and that report's path to its assigned
 owner result file, then runs `finish`. Alternatively `submit` accepts those first
 two fields and a `report` development candidate, generating the final path and

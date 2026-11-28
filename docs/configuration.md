@@ -219,6 +219,9 @@ remain after synchronization finishes.
 | `plugin-settings-ui` | Native Claude settings pane; the CLI helper and settings skill remain independent |
 | `response-validation` | Opt-in Claude-only pre-delivery response validation and rewriting, including supported agent-message payloads; adds small-model usage and latency |
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
+| `review-incremental-adjudication` | Assess reports as they arrive, then merge; disabling it retains aggregate adjudication without reducing coverage |
+| `review-targeted-checks` | Permit bounded claim-directed checks in isolated copies; disabling it selects source-only review, not automatic dependency setup |
+| `review-timing` | Collect review timing evidence and render runtime statistics; disabling it leaves an explicit unavailable total without affecting the review |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
 | `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |
 | `review-<category>` | Independent coverage for a shipped review category; all enabled by default |
