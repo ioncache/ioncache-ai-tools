@@ -4,6 +4,23 @@ Release notes are grouped into New, Updated and Fixed, based on Git history
 since the previous version. Historical release boundaries and dates come from
 plugin version changes in Git. Version-only release commits are omitted.
 
+## 1.15.4 (2026-11-28)
+
+### New
+
+* add autonomous development intake and argument hints ([#99](https://github.com/ioncache/ioncache-ai-tools/issues/99)) ([e695642](https://github.com/ioncache/ioncache-ai-tools/commit/e695642aca5e02c6439fbbb064008cdeccaf8bf6))
+
+### Updated
+
+* None.
+
+### Fixed
+
+* clarify and deduplicate question-check warnings ([#98](https://github.com/ioncache/ioncache-ai-tools/issues/98)) ([0bb45fe](https://github.com/ioncache/ioncache-ai-tools/commit/0bb45fe431855ca1b95a8451fc81a4099f92cd20))
+* give the settings skill a plugin-specific name ([#96](https://github.com/ioncache/ioncache-ai-tools/issues/96)) ([4ccfc9c](https://github.com/ioncache/ioncache-ai-tools/commit/4ccfc9c2562f7d3ed9c34efcb9258e5688830ff9))
+* preserve project opt-outs across paths and plugin versions ([#94](https://github.com/ioncache/ioncache-ai-tools/issues/94)) ([454b679](https://github.com/ioncache/ioncache-ai-tools/commit/454b679be3e63ea08d7495b2fd11ce33f3932f7c))
+* preserve review history across coding CLIs ([#95](https://github.com/ioncache/ioncache-ai-tools/issues/95)) ([c7e16ca](https://github.com/ioncache/ioncache-ai-tools/commit/c7e16ca3545409042bbdf9f3446d4b8e22811689))
+
 ## 1.15.3 (2026-11-27)
 
 ### New
