@@ -17,6 +17,7 @@ The caller supplies:
 | `standards`, `constraints` | The CRITERIA.md standards inventory, authoritative requirements/design references, source identities, read/access evidence, essential versus supporting roles, and exceptions; execution constraints, user-supplied exclusions with provenance, read-only authority, allowed checks, and limits. |
 | `phase_plan` | PACKETS.md's phase identity, frozen effective registry, source-language inventory/evidence, technical-applicability decisions, complete policy-resource snapshot, category packets and replacement bounds. Shipped review controls are independent of writing-skill activation. |
 | `settled_decisions` | Decisions already made and their rationale, or an explicit empty list. Do not reopen them without new contradictory evidence. |
+| `premises` | Immutable, identity-bound source facts under the shared evidence contract below; an explicit empty list when none exist. |
 | `history` | Relevant previous findings and evidence-backed dispositions, or an explicit empty history. |
 | `mode`, `capabilities` | `nested` or `flat`, plus current host lifecycle and selection observations and their sources. Include actual collection/cancellation controls, possible synchronous-to-background transitions, and disclosed stopping limitations. No inline execution. |
 | `strategy`, `main_min_severity` | The options helper's `effective_strategy`, `specialists` or `sweep-first`; ordering cannot change required assignments or isolation. Main-table floor `High`, `Medium`, or `Low` (default), applied after actionability assessment. |
@@ -57,6 +58,31 @@ material with the handback and check its identity before reuse and completion.
 Missing, changed, or unreadable references leave affected coverage incomplete.
 This adds no ledger fields, cross-run cache, or reviewer permission to write
 shared records.
+
+### Reusable third-party premises
+
+Each record has `key`, `claim`, `scope`, `version`, `source`, `content`,
+`status` (`supported`, `unresolved`, `contradicted`), `limitations` (string list)
+and `identity`. `scope` identifies the precise operation and conditions;
+`version` identifies the applicable API/package contract or explicit unversioned
+source. Retain the authoritative citation and the source text supporting only
+the stated claim. A copied summary is not the whole document or evidence for
+an unstated detail. Never include credentials or personal data.
+
+The caller seals records with `scripts/review_premises.py seal` and retains
+them in private scratch. `lookup` matches key, scope and version exactly and
+returns uncertainty unchanged. Hashes check identity, not truth or authority.
+Report adjudication independently checks support and applicability, without
+refetching an already adequate source. Final merge reuses that checked evidence.
+Do not impose a fresh-fetch-per-pass rule unless the user actually requires it.
+
+For a new shared query, the caller records one lookup owner before dispatching
+research. Other workers continue unrelated checks or retain the gap, rather
+than duplicate the lookup. Deliver only factual sources, not sibling findings.
+Keep failed-access evidence to avoid identical retries. New or contradictory
+evidence gets a new immutable record; retain earlier versions and revisit only
+dependent assessments. Do not edit frozen packets to distribute new evidence.
+No premise status changes tool permissions or hides an unresolved material risk.
 
 ## Assignment and pass result
 
@@ -146,6 +172,7 @@ present. Match identity by trigger, incorrect behavior, and consequence, not a
 changing line number or a shared symbol. Record consequential premises and their
 source, including whether PR text was corroborated. A test-gap candidate that
 describes production misbehavior must include its reachability investigation.
+Reference reused premise identities in `evidence`, retaining each claim's limits.
 
 `basis` is required: `observed` means the claimed behavior was executed or
 directly seen in an artifact; `inferred` means it was reasoned from source.
@@ -169,6 +196,24 @@ Every assessment records `material: true` for an evidenced defect or credible
 consequential uncertainty, or `false` for a style-only or genuinely immaterial
 observation, with its reason. Record `duplicate_of` only for a true duplicate,
 using its canonical key. Disposition and publication do not change materiality.
+
+Final canonical assessments also retain `sources`, a nonempty list of
+`{attempt, key}` references to original discovery candidates, and `related_keys`,
+a list of other canonical issue keys sharing a correction. Deduplication is
+the adjudicator's semantic decision; the helper assigns IDs from that provenance.
+Do not write `ADJ1`, `COR1` or other public finding IDs into assessment prose,
+`fix_steps` or suggestions. Keep instructions self-contained and relationships
+structured. The caller numbers once before display/disclosure filtering and
+uses the same map for the human report and posting.
+
+For genuinely new adjudicator discoveries, retain the coordinator origin on
+the original candidate and obtain a fresh, single-category validation report.
+Keep that validator's own specialist observations, purpose-specific packet and
+original-candidate reference as a separate provenance attempt in the consolidated
+numbering input. It is not an extra category-coverage attempt or permission to
+reset coverage limits. Never relabel the adjudicator's original report as
+specialist work. Only independently supported category observations can supply
+the public prefix; pending validation is not a numbered finding.
 
 Each reportable assessment (`Act`, `Decide`, or `Investigate`), and each valid
 or uncertain material assessment even with `report_action: None`, also has:
@@ -240,6 +285,10 @@ was independent. Pending is a handback state, not a ledger decision value;
 the caller schedules validation before recording a decision. Adjudicator
 discoveries use the `coordinator` origin for ledger compatibility. Do not
 spawn a verifier per finding by default.
+For a genuinely new adjudicator discovery, obtain an independent single-category
+validation pass with a registered discovery category and specialist-origin
+candidate record. Retain its original adjudicator discovery too. Do not invent
+specialist provenance merely to obtain a public ID.
 
 ## Consolidated handback
 
@@ -249,6 +298,9 @@ Return the human report from [ASSESSMENT.md](ASSESSMENT.md), the original reques
 identity, the assignment map and pass results, all candidates and assessments,
 check evidence, selection limitations, and the final snapshot comparison.
 Give an overall `complete`, `incomplete`, or `blocked` outcome and explain it.
+Include original `attempts`, final `assessments`, the public ID map and the
+incremental adjudication file when enabled. The final mechanical check consumes
+that file under PACKETS.md; an earlier category-only check is insufficient.
 Keep the complete evidence in private result files or the calling loop's
 ledger, separate from the human report. A short report must not erase rejected
 candidates, and a complete handback must not dump them into the human report.

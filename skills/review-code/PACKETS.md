@@ -18,6 +18,7 @@ python3 -B "/absolute/plugin/scripts/review_assignments.py" prepare "/private/re
 python3 -B "/absolute/plugin/scripts/review_assignments.py" packet "/private/plan.json" security \
   --assignment "security-replacement-1" --result-file "/private/security-replacement-1.json"
 python3 -B "/absolute/plugin/scripts/review_assignments.py" check "/private/plan.json" "/private/handoff.json"
+python3 -B "/absolute/plugin/scripts/review_assignments.py" check-report "/private/plan.json" "/private/attempt.json"
 ```
 
 Persist each returned object before using it. Do not use `packet` to create
@@ -56,6 +57,9 @@ Optional fields are:
 - `category_context`: category IDs mapped to `{history, settled_decisions}` lists.
   Supply only that category's relevant prior dispositions and settled requirements,
   never sibling discovery outcomes or the implementation conversation.
+- `premises`: immutable third-party source records from CONTRACTS.md, or an
+  empty list. The helper validates their identities, not truth. Later evidence
+  stays separately retained; it does not rewrite dispatched packets.
 - `correction`: required for a focused request, with `before` and `after` snapshot
   IDs and `delta` containing the complete records from the ledger's correction
   diff. `after` must equal the request snapshot. Full requests omit this field.
@@ -78,9 +82,10 @@ complete evidence for mixed-language content. JSDoc requires JavaScript, not
 TypeScript. A missing language/framework guide is not evidence of language absence.
 The caller records source facts, not a predicted usefulness judgment.
 
-The current phase-plan schema is 3; the catalog and ledger event schemas are
+The current phase-plan schema is 4; the catalog and ledger event schemas are
 unchanged. Schema-1 plans lack the applicability contract; schema-2 plans lack
-the complete policy snapshot and phase namespace. Neither can be silently
+the complete policy snapshot and phase namespace; schema-3 plans lack the
+structured read/check and incremental-assessment contract. None can be silently
 upgraded. Preserve their original evidence and consumed work, then use the
 existing counted reconciliation/new-phase path if authorized and within limits.
 An unavailable new phase leaves coverage incomplete, not a fence on other work.
@@ -103,7 +108,10 @@ Adding a previously unrecorded policy resource requires a counted new phase.
 Each packet carries `assignment`, `review_type`, target/base/snapshot/root,
 objective/kind/constraints, `candidate_files`, `scope_files`, `result_file`,
 `instruction_set`, `technical_applicability`, its category-only `context`, the focused `correction` when
-applicable, and `identity`. Its instruction set includes source contents,
+applicable, and `identity`.
+The packet also carries effective `checks` (`targeted` or `source`) and
+the frozen `premises`. These do not grant broader authority than caller limits.
+Its instruction set includes source contents,
 applicability, scoped project precedence and its own identity.
 Send those contents as the instructions. Do not tell the worker to load the
 writing wrapper, full catalog, composer or a preset general reviewer.
@@ -229,9 +237,97 @@ The report may use `worker: null` when the child cannot observe its own native
 ID, even when the caller has observed that ID. Preserve both observations;
 do not rewrite the original report to manufacture child-side visibility.
 `coverage.files` records every owned candidate considered for applicability;
-record actual full-file reads separately. An inapplicable pass still supplies
-its reason after inspecting applicable context. Extra discovered source evidence
+`coverage.read_log` records `{path, how, evidence}` for each owned file and any
+additional whole files used. `path` exactly matches its candidate spelling.
+`how` is `whole` or `unreadable`, not free-form prose. A complete result requires
+whole reads even for files used only to establish non-applicability. An
+inapplicable pass still supplies its reason. Extra discovered source evidence
 does not expand authority.
+
+Use `check-report` on each attempt as it arrives, without waiting for other
+reports or an adjudicator. It validates a repaired copy, returning the original
+result identity, normalized result and changes without writing files. It
+cannot certify comprehension, permissions or finding validity. Missing reads
+are missing work, not formatting: the same worker completes the omitted reads
+and returns a corrected report to a newly assigned private path. Preserve both
+versions, update the caller's result reference, and invalidate only assessments
+bound to the earlier result. Do not charge a new discovery round for this
+same-assignment completion or claim a previously partial read was whole.
+
+## Incremental adjudication
+
+With `configuration.incremental_adjudication_enabled`, keep a caller-owned
+private `adjudication.json` with exactly `reports` (initially `[]`) and `merge`
+(initially `null`). Each report adjudicator returns:
+
+```json
+{
+  "attempt": "<assessed attempt id>",
+  "worker": null,
+  "packet_identity": "<original packet identity>",
+  "result_identity": "<digest of the original parsed report>",
+  "coverage": "complete",
+  "evidence": ["<actual compliance assessment and limitations>"],
+  "assessments": [
+    {"key": "<original candidate key>", "validation": "valid", "evidence": ["<support>"]}
+  ]
+}
+```
+
+Candidate assessments include the full CONTRACTS.md assessment fields; the
+minimal shape above shows the mechanically checked binding. Include every
+candidate, including rejections. Empty findings still require an independently
+assessed coverage record. Use `coverage: incomplete` for missing work and
+`validation: pending` for required unfinished validation.
+
+Retain observed native identities as `adjudicator` entries in `other_workers`
+too, once per worker, including the final merge worker. Unknown identities
+stay null. One report adjudicator cannot assess another report or become the
+merge worker. Originals and superseded assessments remain private evidence;
+the `reports` list selects only the current assessment for each active attempt.
+When report bytes or evidence change, replace that selected assessment only
+after independent reassessment of the changed portion. The merge receipt binds
+the complete selected assessment records, so changing their evidence also
+requires a new merge receipt.
+
+```sh
+python3 -B "/absolute/plugin/scripts/review_progress.py" \
+  "/private/plan.json" "/private/handoff.json" "/private/adjudication.json"
+```
+
+`ready` lists returned active reports without a current assessment. Dispatch
+them now, even if other categories are missing or running. Track in-flight
+assessment handles in the caller's existing assignment map so repeated
+readiness checks do not launch duplicate work. `merge_ready` requires all
+required coverage and report assessments; only then launch final merge.
+The helper writes nothing and launches no agents. An unfinished result is
+progress, not a new permission fence or grounds to discard completed work.
+
+The merge worker returns the final CONTRACTS.md assessments and this receipt:
+
+```json
+{
+  "worker": null,
+  "snapshot": "<reviewed snapshot>",
+  "plan_identity": "<frozen phase plan identity>",
+  "report_identities": ["<digest of every selected report assessment>"],
+  "evidence": ["<cross-report reconciliation and remaining limitations>"],
+  "outcome": "complete"
+}
+```
+
+Set `merge` to that receipt; use `incomplete` until required validation is done.
+Keep full assessments alongside the receipt, not in place of it. Final checking:
+
+```sh
+python3 -B "/absolute/plugin/scripts/review_assignments.py" check \
+  "/private/plan.json" "/private/handoff.json" --adjudication "/private/adjudication.json"
+```
+
+This checks current report identities, independent observed contexts and merge
+inputs in addition to category coverage. It cannot prove native scheduling,
+semantic judgment or live speedup. The opt-out keeps aggregate adjudication
+and does not need this additional file; read logs remain required.
 
 Check takes a caller-owned handoff object with exactly these fields:
 

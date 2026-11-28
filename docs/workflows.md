@@ -254,6 +254,20 @@ Nested mode uses a dedicated coordinator; flat mode uses caller-owned
 collection. Both require a separate adjudicator. Missing required independence
 leaves the review incomplete, without blocking other authorized work.
 
+By default, each completed report gets a fresh independent adjudication while
+discovery continues. Only cross-report merging waits for all assessments.
+`review-incremental-adjudication: false` retains aggregate adjudication.
+Actual overlap depends on native result delivery; a batch-only controller
+cannot promise streaming. Extra assessment contexts can increase model usage.
+No fixed elapsed-time improvement has been established.
+
+Whole-file read logs include every owned file, even when used only to establish
+non-applicability. Reports reuse scoped source evidence without inheriting other
+workers' conclusions. Public IDs come from discovery categories, not adjudication.
+`--checks targeted` permits only useful isolated probes with existing dependencies;
+`--checks source` or `review-targeted-checks: false` disables execution.
+Neither mode permits automatic dependency installs or grants DEV/prod access.
+
 Before allocation, inventory repository standards, path applicability, and
 exceptions. Separate code-checking passes from execution constraints such as
 conversational guidance. Reuse a pinned inventory, not an assumed instruction

@@ -74,6 +74,30 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(options["roles"]["validator"]["fallback"], "configured")
         self.assertEqual(options["specified"], ["lead_model", "model_selection", "reviewer_effort"])
 
+    def test_targeted_checks_and_incremental_adjudication_have_independent_opt_outs(self):
+        def options(*args):
+            with mock.patch.dict(os.environ, self.env), mock.patch("os.getcwd", return_value=str(self.root)), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(review_options.main(["review-code", *args]), 0)
+                return json.loads(output.getvalue())
+
+        defaults = options()
+        self.assertEqual(defaults["effective_checks"], "targeted")
+        self.assertTrue(defaults["configuration"]["incremental_adjudication_enabled"])
+        self.assertEqual(options("--checks", "source")["effective_checks"], "source")
+        self.write_settings("project/.github/copilot/ioncache-ai-tools.local.json",
+                            {"review-targeted-checks": False})
+        opted_out = options("--checks", "targeted")
+        self.assertEqual(opted_out["effective_checks"], "source")
+        self.assertTrue(opted_out["configuration"]["incremental_adjudication_enabled"])
+        self.write_settings("project/.github/copilot/ioncache-ai-tools.local.json",
+                            {"review-incremental-adjudication": False})
+        aggregate = options()
+        self.assertEqual(aggregate["effective_checks"], "targeted")
+        self.assertFalse(aggregate["configuration"]["incremental_adjudication_enabled"])
+        for name in ("review-targeted-checks", "review-incremental-adjudication"):
+            self.assertNotIn(name, aggregate["configuration"]["review_features"])
+
     def test_explicit_fallback_and_strategy(self):
         options = review_options.parse_options("review-code", [
             "--lead-model=chosen", "--lead-effort=high", "--validator-model=other",

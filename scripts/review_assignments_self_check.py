@@ -18,6 +18,9 @@ import development_handoff
 import development_jobs
 import development_run
 import review_assignments as assignments
+import review_progress
+import review_findings
+import review_premises
 import report_json
 import writing_guidance
 
@@ -45,7 +48,8 @@ class ReviewAssignmentTests(unittest.TestCase):
             },
             "constraints": ["Read-only target; no model launches"],
             "scratch_directory": str(self.scratch),
-            "review_options": {"configuration": {"skill_enabled": True, "review_features": features}},
+            "review_options": {"configuration": {"skill_enabled": True, "review_features": features,
+                                                  "incremental_adjudication_enabled": False}},
         }
 
     def attempt(self, packet, number=0, outcome="complete"):
@@ -59,7 +63,9 @@ class ReviewAssignmentTests(unittest.TestCase):
                 "packet_identity": packet["identity"], "snapshot": packet["snapshot"],
                 "origin": "specialist", "selection": {"actual": "unknown"},
                 "worker": f"fixture-{packet['assignment']}", "outcome": outcome,
-                "coverage": {"files": packet["scope_files"], "isolation": "uncontaminated"},
+                "coverage": {"files": packet["scope_files"], "isolation": "uncontaminated",
+                             "read_log": [{"path": name, "how": "whole", "evidence": "Offline full-read fixture"}
+                                          for name in packet["scope_files"]]},
                 "candidates": [], "limitations": [],
             },
         }
@@ -416,7 +422,7 @@ class ReviewAssignmentTests(unittest.TestCase):
 
     def test_legacy_plans_require_counted_reconciliation_not_silent_reinterpretation(self):
         plan = assignments.prepare(self.request)
-        for schema in (1, 2):
+        for schema in (1, 2, 3):
             with self.subTest(schema=schema):
                 legacy = {**plan, "schema": schema}
                 legacy.pop("identity")
@@ -1243,6 +1249,219 @@ class ReviewAssignmentTests(unittest.TestCase):
                                                 capture_output=True, timeout=30)
                     self.assertEqual(regression.returncode == 0, polarity == "positive",
                                      regression.stdout + regression.stderr)
+
+    def report_assessment(self, attempt):
+        return {"attempt": attempt["id"], "worker": "assessment-" + attempt["id"],
+                "packet_identity": attempt["packet"]["identity"],
+                "result_identity": assignments.digest(attempt["result"]), "coverage": "complete",
+                "assessments": [{"key": candidate["key"], "validation": "valid",
+                                 "evidence": ["Offline candidate assessment fixture"]}
+                                for candidate in attempt["result"]["candidates"]],
+                "evidence": ["Offline assessment of complete coverage"]}
+
+    def adjudication_fixture(self, plan, handoff):
+        reports = [self.report_assessment(attempt) for attempt in handoff["attempts"]]
+        merge = {
+            "worker": "merge-worker", "snapshot": plan["request"]["snapshot"], "plan_identity": plan["identity"],
+            "report_identities": [assignments.digest(item) for item in reports],
+            "evidence": ["Offline merge fixture"], "outcome": "complete",
+        }
+        handoff["other_workers"] = [{"role": "adjudicator", "worker": item["worker"]}
+                                    for item in [*reports, merge]]
+        return {"reports": reports, "merge": merge}
+
+    def test_report_adjudication_starts_before_last_discovery_and_merge_waits(self):
+        self.request["review_options"]["configuration"]["incremental_adjudication_enabled"] = True
+        plan = assignments.prepare(self.request)
+        final = self.handoff(plan)
+        completed = self.adjudication_fixture(plan, final)
+        partial = copy.deepcopy(final)
+        first = partial["attempts"][0]
+        for attempt in partial["attempts"][1:]:
+            attempt["result"] = None
+        state = {"reports": [], "merge": None}
+        progress = review_progress.progress(plan, partial, state)
+        self.assertEqual(progress["ready"], [first["id"]])
+        self.assertFalse(progress["merge_ready"])
+        state["reports"].append(self.report_assessment(first))
+        self.assertEqual(review_progress.progress(plan, partial, state)["ready"], [])
+        self.assertFalse(assignments.check(plan, final)["structurally_complete"])
+        state["reports"] = completed["reports"]
+        self.assertTrue(review_progress.progress(plan, final, state)["merge_ready"])
+        state["merge"] = completed["merge"]
+        self.assertTrue(assignments.check(plan, final, state)["structurally_complete"])
+        for change in ("identity", "worker", "coverage"):
+            broken = copy.deepcopy(state)
+            if change == "identity":
+                broken["reports"][0]["result_identity"] = "stale"
+            elif change == "worker":
+                broken["reports"][0]["worker"] = first["worker"]
+            else:
+                broken["reports"][0]["coverage"] = "incomplete"
+            self.assertFalse(assignments.check(plan, final, broken)["structurally_complete"], change)
+        revised = copy.deepcopy(final)
+        revised["attempts"][0]["result"]["limitations"].append("New evidence")
+        self.assertFalse(assignments.check(plan, revised, state)["structurally_complete"])
+        recovered = self.adjudication_fixture(plan, revised)
+        self.assertTrue(assignments.check(plan, revised, recovered)["structurally_complete"])
+        self.assertEqual(recovered["reports"][1:], state["reports"][1:])
+        self.assertEqual(set(assignments.check(plan, revised, recovered)["replacement_rounds_used"].values()), {0})
+
+    def test_incremental_validation_rejects_missing_candidates_and_reused_contexts(self):
+        self.request["review_options"]["configuration"]["incremental_adjudication_enabled"] = True
+        plan = assignments.prepare(self.request)
+        handoff = self.handoff(plan)
+        handoff["attempts"][0]["result"]["candidates"] = [{"key": "must-assess"}]
+        state = self.adjudication_fixture(plan, handoff)
+        self.assertTrue(assignments.check(plan, handoff, state)["structurally_complete"])
+        for defect in ("omitted", "extra", "pending", "merge-reuse", "unregistered", "evidence-changed"):
+            with self.subTest(defect=defect):
+                broken = copy.deepcopy(state)
+                first = broken["reports"][0]
+                if defect == "omitted":
+                    first["assessments"] = []
+                elif defect == "extra":
+                    first["assessments"][0]["key"] = "not-discovered"
+                elif defect == "pending":
+                    first["assessments"][0]["validation"] = "pending"
+                elif defect == "merge-reuse":
+                    broken["merge"]["worker"] = first["worker"]
+                elif defect == "unregistered":
+                    first["worker"] = "not-in-observed-workers"
+                else:
+                    first["evidence"].append("Changed assessment needs a new merge")
+                self.assertFalse(assignments.check(plan, handoff, broken)["structurally_complete"])
+        malformed = copy.deepcopy(handoff)
+        malformed["attempts"][0]["result"]["coverage"]["read_log"].pop()
+        progress = review_progress.progress(plan, malformed, {"reports": [], "merge": None})
+        self.assertNotIn(malformed["attempts"][0]["id"], progress["ready"])
+        self.assertEqual(len(progress["ready"]), len(malformed["attempts"]) - 1)
+        self.assertFalse(progress["merge_ready"])
+        self.assertIn("Missing whole-file reads", json.dumps(progress["errors"]))
+
+    def test_incremental_development_acceptance_keeps_original_reports_and_assessment_evidence(self):
+        self.request["review_options"]["configuration"]["incremental_adjudication_enabled"] = True
+        assignment, state, data, plan, handoff = self.development_report_fixture("finish")
+        evidence = self.adjudication_fixture(plan, handoff)
+        Path(data["handoff"]).write_text(json.dumps(handoff))
+        data["adjudication"] = str(Path(data["plan"]).with_name("adjudication.json"))
+        Path(data["adjudication"]).write_text(json.dumps(evidence))
+        report = {key: self.request[key] for key in ("base", "snapshot")}
+        with patch.object(development_run, "review_files", return_value=self.request["files"]):
+            accepted = development_run.review_coverage(state, assignment, report, data)
+            self.assertEqual(accepted["adjudication_evidence"]["records"], evidence)
+            self.assertEqual(accepted["adjudication_evidence"]["identity"], assignments.digest(evidence))
+            self.assertTrue(accepted["report_repairs"])
+            original = copy.deepcopy(evidence)
+            evidence["reports"][0]["result_identity"] = "not-the-collected-report"
+            Path(data["adjudication"]).write_text(json.dumps(evidence))
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                development_run.review_coverage(state, assignment, report, data)
+            self.assertEqual(accepted["adjudication_evidence"]["records"], original)
+
+    def test_check_policy_opt_out_and_topology_remain_frozen(self):
+        self.request["review_options"]["configuration"]["targeted_checks_enabled"] = False
+        plan = assignments.prepare(self.request)
+        self.assertTrue(all(packet["checks"] == "source" for packet in plan["packets"].values()))
+        self.assertTrue(assignments.check(plan, self.handoff(plan))["structurally_complete"])
+        for field in ("targeted_checks_enabled", "incremental_adjudication_enabled"):
+            changed = copy.deepcopy(self.request)
+            changed["review_options"]["configuration"][field] = True
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "requires a new phase"):
+                assignments.prepare(changed, plan)
+
+    def test_whole_file_records_are_required_even_for_non_applicability(self):
+        plan = assignments.prepare(self.request)
+        attempt = self.attempt(plan["packets"]["security"])
+        attempt["result"]["coverage"]["applicability"] = "No trust boundary changes"
+        original = copy.deepcopy(attempt)
+        attempt["result"]["coverage"]["read_log"].pop()
+        with self.assertRaisesRegex(ValueError, "Missing whole-file reads"):
+            assignments.check_report(plan, attempt)
+        attempt["result"]["coverage"]["read_log"] = original["result"]["coverage"]["read_log"]
+        self.assertTrue(assignments.check_report(plan, attempt)["structurally_complete"])
+        attempt["result"]["coverage"]["read_log"][0]["how"] = "grep"
+        with self.assertRaisesRegex(ValueError, "whole or unreadable"):
+            assignments.check_report(plan, attempt)
+        attempt["result"]["coverage"]["read_log"][0]["how"] = "unreadable"
+        attempt["result"]["outcome"] = "partial"
+        self.assertFalse(assignments.check_report(plan, attempt)["structurally_complete"])
+        self.assertEqual(attempt["round"], 0)
+
+    def test_category_ids_survive_arrival_order_and_preserve_all_origins(self):
+        plan = assignments.prepare(self.request)
+        attempts = [self.attempt(plan["packets"][category]) for category in ("security", "correctness")]
+        for attempt in attempts:
+            attempt["result"]["candidates"] = [{"key": "same-behavior", "origin": "specialist"}]
+        assessments = [{
+            "key": "canonical-behavior", "validation": "valid", "material": True,
+            "sources": [{"attempt": attempt["id"], "key": "same-behavior"} for attempt in attempts],
+            "priority_level": "P1", "severity": "High", "related_keys": [],
+        }]
+        numbered = review_findings.assign(attempts, assessments)
+        self.assertEqual(numbered, review_findings.assign(list(reversed(attempts)), assessments))
+        retained = [{"id": "failed-inactive", "result": "Original malformed report"}, *attempts]
+        self.assertEqual(numbered, review_findings.assign(retained, assessments))
+        finding = numbered["findings"][0]
+        self.assertEqual(finding["id"], "COR1")
+        self.assertEqual(finding["categories"], ["correctness", "security"])
+        self.assertFalse(review_findings.valid_id("ADJ1", "correctness"))
+        self.assertNotEqual(review_findings.prefix("project:a-b"), review_findings.prefix("project:ab"))
+        unknown = copy.deepcopy(assessments)
+        unknown[0]["sources"][0]["key"] = "not-discovered"
+        with self.assertRaisesRegex(ValueError, "unknown discovery"):
+            review_findings.assign(attempts, unknown)
+        stale = copy.deepcopy(attempts)
+        stale[0]["result"]["packet_identity"] = "another-packet"
+        with self.assertRaisesRegex(ValueError, "differs from its packet"):
+            review_findings.assign(stale, assessments)
+
+    def test_numbering_preserves_relations_and_does_not_count_merged_or_rejected_candidates(self):
+        plan = assignments.prepare(self.request)
+        attempt = self.attempt(plan["packets"]["security"])
+        attempt["result"]["candidates"] = [{"key": key} for key in ("a", "b", "duplicate", "invalid")]
+        assessments = [
+            {"key": key, "sources": [{"attempt": attempt["id"], "key": key}],
+             "validation": "valid", "material": True, "related_keys": related}
+            for key, related in (("b", ["a"]), ("a", ["b"]))
+        ]
+        assessments += [{"key": "duplicate", "duplicate_of": "a"},
+                        {"key": "invalid", "validation": "invalid"}]
+        result = review_findings.assign([attempt], assessments)
+        self.assertEqual(result["ids"], {"a": "SEC1", "b": "SEC2"})
+        self.assertEqual([item["related"] for item in result["findings"]], [["SEC2"], ["SEC1"]])
+        self.assertEqual(result, review_findings.assign([attempt], list(reversed(assessments))))
+        assessments[0]["related_keys"] = ["duplicate"]
+        with self.assertRaisesRegex(ValueError, "canonical issues"):
+            review_findings.assign([attempt], assessments)
+
+    def test_reused_premises_remain_scoped_and_do_not_promote_uncertainty(self):
+        source = assignments.seal({
+            "key": "phase-retention", "claim": "The source leaves retained phases unspecified",
+            "scope": "GET schedule", "version": "documented-version", "source": "https://vendor.invalid/docs",
+            "content": "The documented response includes phases.", "status": "unresolved",
+            "limitations": ["Does not establish completed-phase retention"],
+        })
+        self.request["premises"] = [source]
+        plan = assignments.prepare(self.request)
+        for packet in plan["packets"].values():
+            self.assertEqual(packet["premises"], [source])
+        for _ in range(3):
+            self.assertEqual(review_premises.lookup([source], source["key"], source["scope"],
+                                                    source["version"])["status"], "unresolved")
+        self.assertEqual(review_premises.lookup([source], source["key"], source["scope"], "other")["status"],
+                         "missing")
+        changed = copy.deepcopy(source)
+        changed["claim"] = "Completed phases are always retained"
+        with self.assertRaisesRegex(ValueError, "identity"):
+            review_premises.validate(changed)
+        with self.assertRaisesRegex(ValueError, "Conflicting premise"):
+            review_premises.lookup([source, source], source["key"], source["scope"], source["version"])
+        self.assertEqual(review_premises.lookup([source], source["key"], "POST schedule",
+                                                source["version"])["status"], "missing")
+        self.request["premises"] = []
+        with self.assertRaisesRegex(ValueError, "frozen premises"):
+            assignments.prepare(self.request, plan)
 
 
 if __name__ == "__main__":

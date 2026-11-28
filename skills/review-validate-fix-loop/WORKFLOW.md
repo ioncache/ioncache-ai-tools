@@ -43,8 +43,11 @@ the review coordinator or any worker. Use `review-code` with the recorded
 base and current ledger snapshot; do not create a second run or snapshot.
 Follow the [shared orchestration instructions](../review-code/ORCHESTRATION.md):
 the dedicated review coordinator owns specialist launches in nested mode;
-the loop owns launches and collection in flat mode, then uses a separate
-adjudicator. Every review task uses a fresh single-purpose worker, regardless
+the loop owns launches and collection in flat mode. By default it dispatches
+independent adjudication on each returned report, then a separate final merge.
+Keep PACKETS.md's incremental evidence with the retained handback and pass it
+to the final structural check. Aggregate mode remains available through its
+independent opt-out. Every review task uses a fresh single-purpose worker, regardless
 of change size. Keep integration separate from coordination and adjudication.
 Neither the loop owner nor review coordinator may perform review passes inline.
 Retain every enabled general category across the whole requested scope,

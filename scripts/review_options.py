@@ -12,7 +12,7 @@ import plugin_config
 
 ROLES = ("lead", "reviewer", "validator")
 SKILLS = ("review-code", "review-validate-fix-loop")
-REVIEW_FIELDS = ("model_selection", "fallback", "strategy") + tuple(
+REVIEW_FIELDS = ("model_selection", "fallback", "strategy", "checks") + tuple(
     f"{role}_{setting}" for role in ROLES for setting in ("model", "effort")
 )
 # Posting is a review-code caller action, not a review choice: these fields are
@@ -21,7 +21,8 @@ POSTING_FIELDS = ("post_comments", "post_sensitive")
 SENSITIVE_POLICIES = ("none", "private", "all")
 POSTING_FEATURE = "review-post-comments"
 NON_CATEGORY_FEATURES = ("review-auto-model-selection", POSTING_FEATURE, "review-known-issues",
-                        "review-report-json-recovery")
+                        "review-report-json-recovery", "review-incremental-adjudication",
+                        "review-targeted-checks")
 
 
 class PostingConflict(ValueError):
@@ -80,6 +81,8 @@ def parser_for(skill):
                         help="launch fallback (default: fail for explicit overrides, configured otherwise)")
     parser.add_argument("--strategy", choices=("auto", "sweep-first", "specialists"), default="auto",
                         action=Once, help="review order; auto uses isolated specialists, sweep-first changes order only")
+    parser.add_argument("--checks", choices=("targeted", "source"), default="targeted", action=Once,
+                        help="claim-directed isolated checks or source-only; never automatic installs or routine suites")
     for role in ROLES:
         parser.add_argument(f"--{role}-model", type=nonempty, action=Once, metavar="MODEL",
                             help=f"explicit {role} model; omitted roles use the selection policy")
@@ -133,7 +136,7 @@ def validate_posting_choice(name, value):
 
 
 def apply_values(options, values):
-    result = {**options, **{name: values[name] for name in ("model_selection", "fallback", "strategy")}}
+    result = {**options, **{name: values[name] for name in ("model_selection", "fallback", "strategy", "checks")}}
     result["effective_strategy"] = "specialists" if values["strategy"] == "auto" else values["strategy"]
     result["roles"] = {}
     for role in ROLES:
@@ -148,6 +151,7 @@ def apply_values(options, values):
 def review_values(options):
     return {
         **{name: options[name] for name in ("model_selection", "fallback", "strategy")},
+        "checks": options.get("checks", "targeted"),
         **{f"{role}_{setting}": options["roles"][role][setting]
            for role in ROLES for setting in ("model", "effort")},
     }
@@ -226,6 +230,9 @@ def read_configuration(skill):
         ),
         "post_comments_enabled": POSTING_FEATURE in catalog and POSTING_FEATURE not in disabled,
         "known_issues_enabled": "review-known-issues" in catalog and "review-known-issues" not in disabled,
+        "incremental_adjudication_enabled": "review-incremental-adjudication" in catalog and
+        "review-incremental-adjudication" not in disabled,
+        "targeted_checks_enabled": "review-targeted-checks" in catalog and "review-targeted-checks" not in disabled,
         "review_features": {name: name not in disabled for name in catalog
                             if name.startswith("review-") and name not in NON_CATEGORY_FEATURES},
     }
@@ -255,6 +262,7 @@ def main(argv=None):
               file=sys.stderr)
         return 2
     options["configuration"] = configuration
+    options["effective_checks"] = options["checks"] if configuration["targeted_checks_enabled"] else "source"
     options["effective_model_selection"] = (
         options["model_selection"] if configuration["auto_selection_enabled"] else "configured"
     )

@@ -1,7 +1,7 @@
 ---
 name: review-code
 description: Runs a read-only review of files, branches, pull requests or repositories with independent category workers. Use for an unassigned review request, not an already assigned category, adjudication or validation pass. Reports findings without applying fixes.
-argument-hint: "[target] [--help] [--post-comments] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
+argument-hint: "[target] [--help] [--checks targeted|source] [--post-comments] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
 ---
 
 # Read-only code review
@@ -10,13 +10,20 @@ Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
 The caller/coordinator may write private request, option, instruction, and
-lossless report-repair records; leaf workers may write only assigned result files.
+lossless report-repair records; leaf workers may write assigned result files and
+disposable artifacts of permitted isolated checks.
 All belong in private scratch outside the reviewed tree.
 They never authorize code or ledger edits.
 
 The one exception to not posting is `--post-comments`. After the review
 completes, the top-level caller alone publishes reportable findings by
 following [POSTING.md](POSTING.md). Review workers never post.
+
+Reviewing is not a routine test-suite run. The default permits only bounded,
+claim-directed checks in isolated disposable copies with suitable existing
+dependencies. Never install dependencies automatically or write the reviewed
+tree, including ignored files. `--checks source` disables execution.
+Explicit caller constraints and native permissions still apply.
 
 ## Assigned roles
 
@@ -144,7 +151,12 @@ text rather than target content, and reject submodules and special files.
 Non-Git or required excluded inputs need an explicit alternative identity
 and coverage limitation; never present them as protected by this fingerprint.
 
-Check worker reports promptly. Diagnose and repair formatting errors through
+Check each returned report with `check-report` immediately. In the default
+incremental mode, launch its independent adjudicator while other category
+workers continue; only cross-report merging waits. Follow PACKETS.md's
+incremental record and final-check protocol. Do not add a full validator pass
+after successful independent adjudication.
+Diagnose and repair formatting errors through
 PACKETS.md without discarding completed analysis, rerunning discovery or spending
 a replacement round. Preserve originals and report any unrecoverable failure's
 exact cause and attempted recovery.

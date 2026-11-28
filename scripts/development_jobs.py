@@ -69,6 +69,8 @@ def report_contract(assignment, role):
         "submit generates assignment and approved artifact identities; finish requires the full report. "
         "Required data fields for outcome complete: " + json.dumps(schema) + ". "
         "text means a nonempty string; text-list permits an empty list, nonempty-text-list does not. "
+        "For a complete review with incremental adjudication, also include data.adjudication, "
+        "the absolute private report-assessment/merge JSON path used by the final check. "
         "For blocked/waiting, report existing evidence and the limitation; data may be {}. "
         "waiting is for preparation prerequisites, not a completed assignment. "
         "Passing this schema is not acceptance; collection still checks effects and retained evidence.\n")

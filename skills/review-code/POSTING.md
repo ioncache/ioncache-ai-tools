@@ -52,6 +52,11 @@ findings are never posted.
 Write `post-input.json` from the final assessments, one entry per reportable
 finding ID (`Act`, `Decide` or `Investigate`) in report order:
 
+First run `scripts/review_findings.py "/private/consolidated-handback.json"`.
+Use its numbered findings and saved ID map for both the human report and post
+input. The handback includes original `attempts` and canonical `assessments`
+with `sources` and `related_keys`. Never renumber only the posted subset.
+
 ```json
 {
   "run": "<phase_id>",
@@ -61,6 +66,7 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
   "findings": [
     {
       "id": "COR1",
+      "category": "correctness",
       "severity": "Medium",
       "action": "Act",
       "basis": "inferred",
@@ -83,7 +89,11 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
 }
 ```
 
-- Every field other than `id` and `related` comes from the
+- `id`, `category` and `related` come unchanged from the numbering helper.
+  The posting helper rejects IDs that do not match the originating category.
+  Existing published markers, including older ID schemes, remain readable;
+  this does not authorize editing earlier reviews.
+- Every other field comes from the
   adjudicator's assessment, with `priority` taken from its `priority_level`.
   Do not invent them yourself. If a field is missing, ask the same adjudicator
   for it rather than writing it.
@@ -91,7 +101,9 @@ finding ID (`Act`, `Decide` or `Investigate`) in report order:
   `done_when` go into a collapsed "Agent guidance" section on `Act` and
   `Decide` comments, with a fixed preamble telling agents to verify the
   finding before acting.
-- `related` lists other IDs grouped with this one in the report.
+- `related` lists other IDs grouped with this one in the report. The helper
+  removes relationships to non-reportable or withheld findings without changing
+  the saved ID map. Never embed cross-finding IDs in prose or fix steps.
 - Keep `summary` and `next_step` to what the author needs to act. They are
   public once posted.
 
