@@ -234,6 +234,16 @@ policy check or a policy violation. They do not grant native permissions or
 create a persistent denial. Independent completed decisions remain effective.
 Handler, adapter, and configuration-lock waits are bounded.
 
+Copilot question-check failures use one plain-language progress notice, without
+duplicating it on stderr. Each distinct cause is reported once per root session
+during an uninterrupted failure episode. Checks still run before every tool
+call. A conclusive root check resets the notices; missing evidence, child calls,
+new prompt hooks, compaction, and resume alone do not. Separate hook processes
+share notification tracking with a bounded lock wait. If tracking is unavailable,
+the warning may repeat, but question checks and other rules still run.
+Disable `answer-questions-warning-deduplication` to show every failure instead.
+This setting is independent of `answer-questions` and `docs-cache`.
+
 Malformed settings remain untouched. Plugin features pause while native
 permissions continue to apply, allowing configuration repair or other work.
 An unavailable check is not a reason to repeat the same failing tool loop.
@@ -253,6 +263,17 @@ Copilot's native check instead reads up to 4 MiB from its own session's
 `~/.copilot/session-state` when unset. It requires an owned regular file and
 rejects symlinks. The plugin does not copy or persist that conversation
 history, and it cannot verify a prompt outside the bounded history window.
+
+Copilot warning delivery records notified causes and the latest diagnostic for
+each cause in
+`$XDG_CACHE_HOME/ioncache-ai-tools/question-notices/copilot-<sessionId>.json`,
+using `~/.cache` when `XDG_CACHE_HOME` is unset or relative. Files are private to
+the current account. Diagnostics contain fixed technical descriptions and
+timestamps, not conversation text or transcript paths. Recovery clears the
+notified causes but retains diagnostics. These records never supply question
+or permission verdicts. Disabling warning deduplication stops recording failures;
+conclusive root checks still clear existing notices so re-enabling cannot reuse
+an episode that already recovered.
 
 Documentation-cache distillation is separate and consumes additional model
 usage when enabled. Disable `docs-cache` to prevent those calls. Explicitly

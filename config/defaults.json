@@ -1,6 +1,7 @@
 {
   "features": {
     "answer-questions": true,
+    "answer-questions-warning-deduplication": true,
     "autonomous-development": true,
     "autonomous-development-audit": true,
     "autonomous-development-explicit-only": true,

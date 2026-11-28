@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run all checks, or pass CopilotAdapterTests.test_name for one test."""
 import copy
+import fcntl
 import io
 import json
 import os
@@ -317,19 +318,221 @@ class CopilotAdapterTests(unittest.TestCase):
             self.assertEqual(self.tool('task', {'prompt': 'Change files'}).get('permissionDecision'), 'deny')
             path.write_text(question + filler)
             self.assertEqual(self.tool('task', {'prompt': 'Change files'}), {})
-            self.assertTrue(any('history budget' in message for message in self.progress))
+            self.assertTrue(any("couldn't determine whether your message was a question" in message
+                                for message in self.progress))
         events = [json.loads(line) for line in question.splitlines()]
         events[-1]['data']['content'] = 'Different displayed content'
         path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
         self.assertEqual(self.tool('task', {'prompt': 'Change files'}), {})
-        self.assertTrue(any('do not match' in message for message in self.progress))
+        self.assertEqual(len(self.progress), 2)
+        diagnostics = json.loads(self.question_notice_path().read_text())['diagnostics']
+        self.assertEqual(set(diagnostics), {'history-budget', 'message-mismatch'})
+
+    def question_notice_path(self):
+        return (self.home / '.cache/ioncache-ai-tools/question-notices'
+                / f'copilot-{self.payload["sessionId"]}.json')
+
+    def test_question_warning_episode_keeps_checking_and_preserves_recovery(self):
+        path = self.native_history('question')
+        question = path.read_text()
+        filler = json.dumps({'type': 'assistant.message', 'data': {'content': 'x' * 2000}}) + '\n'
+        with mock.patch.object(copilot_question, 'MAX_HISTORY_BYTES', 1024):
+            path.write_text(question + filler)
+            for command, expected in (('true', None), ('pkill fixture', 'deny'), ('true', None)):
+                output, stderr = self.invoke('preToolUse', toolName='bash', toolArgs={'command': command})
+                self.assertEqual(output.get('permissionDecision'), expected)
+                self.assertEqual(stderr, '')
+            self.assertEqual(len(self.progress), 1)
+            self.assertIn("extra safeguard against taking actions while answering questions wasn't applied",
+                          self.progress[0])
+            self.assertIn('Other safeguards still apply', self.progress[0])
+            self.assertNotIn('history budget', self.progress[0])
+            path.write_text(question)
+            self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+            self.assertEqual(self.tool('bash', {'command': 'cat seed.txt'}), {})
+            path.write_text(question + filler)
+            self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+            self.assertEqual(len(self.progress), 2)
+        self.native_history('instruction')
+        command = 'printf continued > continued.txt'
+        self.assertEqual(self.tool('bash', {'command': command}), {})
+        subprocess.run(command, shell=True, cwd=self.project, env=self.env, check=True, timeout=5)
+        self.assertEqual((self.project / 'continued.txt').read_text(), 'continued')
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+
+    def test_question_warning_unknown_evidence_children_and_lifecycle_do_not_reset(self):
+        path = self.native_history('question')
+        broken = '{incomplete'
+        path.write_text(broken)
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        path.unlink()
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        path.write_text(json.dumps({'type': 'assistant.message', 'data': {'content': 'working'}}) + '\n')
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        path.write_text(broken)
+        for identity in ({'agentId': 'child'}, {'parentAgentId': self.payload['sessionId']},
+                         {'agentType': 'task'}):
+            self.assertEqual(self.invoke('preToolUse', **identity, toolName='create',
+                                         toolArgs={'path': 'child.txt', 'file_text': 'yes'})[0], {})
+        self.prompt('Continue the task')
+        self.invoke('preCompact')
+        self.invoke('sessionStart', source='resume')
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 1)
+        with mock.patch.dict(self.payload, sessionId=self.payload['sessionId'] + '-other'):
+            self.native_history('question').write_text(broken)
+            self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 2)
+
+    def test_question_warning_diagnostics_are_private_and_do_not_copy_history(self):
+        path = self.native_history('question')
+        for text in ('private conversation content\n', 'different private conversation\n'):
+            path.write_text(text)
+            self.assertEqual(self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'true'}),
+                             ({}, ''))
+        self.assertEqual(len(self.progress), 1)
+        notice = self.question_notice_path()
+        self.assertEqual(notice.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(notice.parent.stat().st_mode & 0o777, 0o700)
+        self.assertNotIn('private conversation', notice.read_text())
+        self.assertNotIn(str(path), notice.read_text())
+        self.assertIn('invalid-json', json.loads(notice.read_text())['diagnostics'])
+
+    def test_question_warning_opt_out_is_independent_of_guard_and_docs_cache(self):
+        settings = self.home / '.claude/ioncache-ai-tools.local.json'
+        path = self.native_history('question')
+        question = path.read_text()
+        path.write_text('{incomplete')
+        self.write_config(settings, {'features': {'docs-cache': False}})
+        for _ in range(2):
+            self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 1)
+        self.write_config(settings, {'features': {'answer-questions-warning-deduplication': False}})
+        for _ in range(2):
+            self.assertEqual(self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'true'}),
+                             ({}, ''))
+        self.assertEqual(len(self.progress), 3)
+        path.write_text(question)
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+        self.assertEqual(json.loads(self.question_notice_path().read_text())['notified'], [])
+        self.write_config(settings, {'features': {}})
+        path.write_text('{incomplete')
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 4)
+        self.write_config(settings, {'features': {'answer-questions': False}})
+        path.write_text('{incomplete')
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'}), {})
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.assertEqual(len(self.progress), 4)
+
+    def test_question_warning_storage_failure_does_not_skip_other_checks(self):
+        path = self.native_history('question')
+        question = path.read_text()
+        path.write_text('{incomplete')
+        notice = self.question_notice_path()
+        notice.parent.mkdir(parents=True)
+        target = self.root / 'untouched.json'
+        target.write_text('untouched')
+        notice.symlink_to(target)
+        for command, expected in (('true', None), ('pkill fixture', 'deny')):
+            output, stderr = self.invoke('preToolUse', toolName='bash', toolArgs={'command': command})
+            self.assertEqual(output.get('permissionDecision'), expected)
+            self.assertEqual(stderr, '')
+        self.assertEqual(len(self.progress), 2)
+        self.assertEqual(target.read_text(), 'untouched')
+        path.write_text(question)
+        self.assertEqual(self.tool('create', {'path': 'x', 'file_text': 'y'})['permissionDecision'], 'deny')
+        notice.unlink()
+        notice.write_text('{corrupt')
+        notice.chmod(0o600)
+        path.write_text('{incomplete')
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.assertEqual(notice.read_text(), '{corrupt')
+        self.assertEqual(len(self.progress), 3)
+
+    @pytest.mark.process
+    def test_question_warning_contended_storage_leaves_guards_and_recovery_available(self):
+        self.native_history('question').write_text('{incomplete')
+        notice = self.question_notice_path()
+        notice.parent.mkdir(mode=0o700, parents=True)
+        lock_path = notice.with_suffix('.lock')
+        with lock_path.open('w') as lock:
+            lock_path.chmod(0o600)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            output, stderr = self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'pkill fixture'})
+            self.assertEqual(output['permissionDecision'], 'deny')
+            self.assertEqual(stderr, '')
+            self.assertFalse(notice.exists())
+        for _ in range(2):
+            self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 2)
+        self.assertTrue(notice.exists())
+
+    def test_question_warning_failed_delivery_is_not_consumed(self):
+        self.native_history('question').write_text('{incomplete')
+        warning = copilot_adapter.user_warning
+
+        def failed_delivery(output):
+            if output.get('userNotice'):
+                raise OSError('display unavailable')
+            warning(output)
+
+        with mock.patch.object(copilot_adapter, 'user_warning', side_effect=failed_delivery):
+            self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.assertFalse(self.question_notice_path().exists())
+        for _ in range(2):
+            self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.assertEqual(len(self.progress), 1)
+
+    def test_question_warning_failed_persistence_does_not_duplicate_delivery(self):
+        self.native_history('question').write_text('{incomplete')
+        with mock.patch.object(copilot_adapter.copilot_question_notice, 'write_atomic',
+                               side_effect=OSError('storage unavailable')):
+            self.assertEqual(self.invoke('preToolUse', toolName='bash', toolArgs={'command': 'true'}),
+                             ({}, ''))
+        self.assertEqual(len(self.progress), 1)
+        self.assertFalse(self.question_notice_path().exists())
+        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        self.assertEqual(len(self.progress), 2)
+
+    @pytest.mark.process(helpers=False)
+    def test_question_warning_is_deduplicated_across_concurrent_hook_processes(self):
+        self.assertEqual(self.tool('bash', {'command': 'true'}), {})
+        self.native_history('question').write_text('{incomplete')
+        payload = json.dumps({**self.payload, 'toolName': 'bash', 'toolArgs': {'command': 'true'}})
+        workers = []
+        try:
+            for _ in range(3):
+                worker = subprocess.Popen(
+                    [sys.executable, str(ROOT / 'hooks/scripts/copilot_adapter.py'), 'preToolUse'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, cwd=self.project, env=self.env,
+                )
+                workers.append(worker)
+                worker.stdin.write(payload)
+                worker.stdin.close()
+                worker.stdin = None
+            notices = []
+            for worker in workers:
+                stdout, stderr = worker.communicate(timeout=30)
+                self.assertEqual(worker.returncode, 0, stderr)
+                self.assertEqual(stderr, '')
+                notices.extend(json.loads(line) for line in stdout.splitlines())
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0]['type'], 'progress')
+            self.assertNotIn('permissionDecision', notices[0])
+        finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate(timeout=5)
 
     def assert_available(self, groups, decision):
         self.progress.clear()
         self.native_history(*groups)
         output = self.tool('create', {'path': 'skill.txt', 'file_text': 'yes'})
         self.assertEqual(output.get('permissionDecision'), decision)
-        self.assertFalse([message for message in self.progress if 'unavailable' in message])
+        self.assertEqual(self.progress, [])
 
     def test_native_skill_invocations_correlate_and_preserve_the_question_turn(self):
         for groups in (('question', 'skill_instruction'), ('skill_instruction_bare',),
@@ -371,6 +574,9 @@ class CopilotAdapterTests(unittest.TestCase):
         ]
         for index, (group, change) in enumerate(cases):
             with self.subTest(group=group, case=index):
+                self.native_history('question')
+                self.assertEqual(self.tool('create', {'path': 'skill.txt', 'file_text': 'no'})
+                                 ['permissionDecision'], 'deny')
                 path = self.native_history('question', group)
                 events = [json.loads(line) for line in path.read_text().splitlines()]
                 change(events)
@@ -378,7 +584,10 @@ class CopilotAdapterTests(unittest.TestCase):
                 self.progress.clear()
                 self.marker.write_text('')
                 self.assertEqual(self.tool('create', {'path': 'skill.txt', 'file_text': 'yes'}), {})
-                self.assertTrue(any('do not match' in message for message in self.progress))
+                self.assertEqual(len(self.progress), 1)
+                self.assertIn("couldn't determine whether your message was a question", self.progress[0])
+                diagnostics = json.loads(self.question_notice_path().read_text())['diagnostics']
+                self.assertIn('do not match', diagnostics['message-mismatch']['detail'])
                 self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def test_unverified_prompt_origins_release_existing_question_state(self):
