@@ -8,7 +8,8 @@ import sys
 import plugin_config as config
 
 HOOK_SETTINGS = frozenset({
-    'answer-questions', 'autonomous-development-explicit-only', 'block_raw_worktree_add',
+    'answer-questions', 'answer-questions-warning-deduplication',
+    'autonomous-development-explicit-only', 'block_raw_worktree_add',
     'context-handoff', 'docs-cache', 'fix_emdash', 'no_broad_process_kill', 'no-manual-lockfile-edit',
     'no_manual_lockfile_edit_bash', 'plugin-settings-ui', 'response-validation',
 })

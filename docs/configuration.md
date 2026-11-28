@@ -204,6 +204,7 @@ remain after synchronization finishes.
 | ID | Controls |
 | --- | --- |
 | `answer-questions` | Question guidance and the answer-only guard for verified root-user prompts, including Copilot's native message-evidence check |
+| `answer-questions-warning-deduplication` | Suppress repeated Copilot question-check warnings until a conclusive root check; disabling this shows every failure without disabling the guard |
 | `autonomous-development-explicit-only` | Reject assistant skill-tool calls to autonomous development; direct human invocation and ordinary work remain available |
 | `autonomous-development-follow-ups` | Automatic follow-up issue creation by authorized development PR publishers; separate from run approval, audit publication and reporting |
 | `autonomous-development-incremental-planning` | Incremental delivery planning guidance in autonomous-development Prepare; when disabled, Prepare keeps its baseline planning step |
