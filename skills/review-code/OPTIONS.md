@@ -20,6 +20,7 @@ The posting options are review-code only; the loop rejects them.
 | `--fallback configured\|fail` | Launch-failure recovery only. Omitted: `fail` for a role with an explicit model or effort, `configured` otherwise. `configured` authorizes one retry with that role's configured model and effort. It does not choose the initial model. |
 | `--strategy auto\|sweep-first\|specialists` | `auto`: deterministically use `specialists`. `sweep-first` runs correctness first without changing the remaining required single-purpose assignments. |
 | `--checks targeted\|source` | `targeted`: bounded claim-directed checks in isolated copies with suitable existing dependencies, never routine suites or automatic installs. `source`: no tests/probes. Neither grants external access or overrides narrower caller limits. |
+| `--run-details` | Off. Add per-agent durations, a timeline and recorded waits to the final report. The compact runtime summary is always shown; observations are retained in either display mode. |
 | `--post-comments` | Review-code only. Off by default. After the review, publish reportable findings as one `COMMENT` review on the reviewed PR under [POSTING.md](POSTING.md). |
 | `--post-sensitive none\|private\|all` | Review-code only, with posting. Applies to findings the adjudicator marks sensitive (exploitable weaknesses or personal-data exposure). Default `private`: post them on private or internal repositories; on public ones, post only those the change introduces and withhold pre-existing ones. `none` never posts them; `all` always does. |
 | `--help` | Show help only. |
@@ -146,6 +147,11 @@ When disabled, `effective_checks` is `source` even if `--checks targeted` was
 requested. These are not category switches. Freeze topology and effective
 checks for the phase; changed policy needs a new phase without refunded work.
 An expressly required but unavailable check remains a verification gap.
+`configuration.timing_enabled` reflects the independent `review-timing`
+setting. It is not a category switch. Disabled or unavailable timing still
+produces an explicit unavailable total, never a review-completion gate.
+Follow [TIMING.md](TIMING.md); `run_details` changes presentation, not launches
+or scope, and does not require new review passes. Older saved options default it to false.
 Posting fields are a caller action, not review choices: they are not forwarded
 to review phases. Context `choices` may record an explicit conversational request
 as `post_comments` (JSON boolean) or `post_sensitive`, with its source. There is no category-selection

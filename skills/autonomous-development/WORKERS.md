@@ -257,6 +257,10 @@ files. A separate adjudicator assesses reviewer findings. Adjudicator-originated
 findings require an independent validator. Preserve all candidates, including
 rejected ones. Missing reports or unresolved assessments cannot authorize fixing.
 Use existing schema-1 handback mapping without duplicate `review_done` events.
+Retain the shared review's private timing sidecar with the handback. Forward
+`run_details` as a presentation choice and include the compact runtime summary
+under review-code/TIMING.md. Reuse observed batch/job timestamps; batch delivery
+alone does not establish when each worker ran. Timing gaps never gate acceptance.
 For failed or partial reports returned as `blocked`, retain the original files
 and attempts. Have the existing adjudicator assess isolation claims before
 replacement. Reading project standards as evidence, including a plan reference

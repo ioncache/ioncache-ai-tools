@@ -49,6 +49,10 @@ Keep PACKETS.md's incremental evidence with the retained handback and pass it
 to the final structural check. Aggregate mode remains available through its
 independent opt-out. Every review task uses a fresh single-purpose worker, regardless
 of change size. Keep integration separate from coordination and adjudication.
+Retain the shared review timing sidecar without adding ledger event fields.
+Use [../review-code/TIMING.md](../review-code/TIMING.md) for each review's compact
+summary and forward `run_details` unchanged for expanded output. Do not fold
+fixer execution into review-agent durations or reset clocks to hide pauses.
 Neither the loop owner nor review coordinator may perform review passes inline.
 Retain every enabled general category across the whole requested scope,
 including functional correctness. Use the plan's evidenced language prerequisites

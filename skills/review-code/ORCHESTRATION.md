@@ -124,9 +124,13 @@ independence and evidence requirements.
 Use observed native completion delivery, not a presumed `pipeline()` API.
 A scripted caller's batching can limit overlap; disclose that limitation
 rather than claiming real-time delivery. Never introduce an external runner.
-Record launch, report-ready, assessment-start/end and merge-start/end observations
-when exposed. Compare elapsed time and model usage on equivalent scope and
-host settings; record unknowns, not invented durations or speedup guarantees.
+Collect [TIMING.md](TIMING.md)'s sourced lifecycle observations in the existing
+assignment map and private timing sidecar, regardless of `run_details`.
+Record eligible/queued, execution, report collection and actual wait evidence
+separately. Retain every physical attempt, including failed launches and retries.
+Do not add polling, timing agents or serial timestamp-only model turns.
+Compare equivalent scope and host settings, not summed concurrent durations;
+record unknowns, not invented durations or speedup guarantees.
 
 Before dispatch, allocate one absolute `result_file` per worker under a
 caller-owned private `scratch_directory` outside the reviewed tree. Check
@@ -308,6 +312,10 @@ assessment. After all required report assessments finish, launch the merge adjud
 passing the request's `posting` field to it alone. Never post.
 Return its assessments and complete evidence in one handback to the caller;
 do not replace its judgments with your own.
+Return observed lifecycle records for every owned worker in a separate private
+contribution file. Only the top-level caller merges these into its timing
+sidecar and renders the report. Never rewrite caller-owned timestamps or
+invent hidden events.
 
 ## Specialist
 

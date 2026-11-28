@@ -173,6 +173,8 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   `review_progress.py` checks per-report assessment readiness and the final merge,
   without launching workers. `review_premises.py` seals scoped evidence, not truth.
   `review_findings.py` owns public category IDs and structured relationships.
+  `review_timing.py` projects caller-owned lifecycle evidence into a compact
+  summary or `--run-details` output without creating review state or gates.
   Keep whole-file read records and the original discovery provenance through
   report repair, independent assessment and publication.
 - `scripts/review_comments.py` publishes review-code findings for the

@@ -178,11 +178,20 @@ TypeScript-only and other JavaScript-free targets retain general documentation
 and contract review without a JSDoc worker.
 
 Independent `review-<category>` settings control shipped coverage, separately
-from writing-skill settings. With no extra project categories, a default flat
-phase starts with 12 workers without JavaScript or 13 with it, including
-adjudication, before retries, validators or capacity shards.
+from writing-skill settings. A default flat phase allocates one reviewer and
+one report adjudicator per applicable category, followed by a merge adjudicator.
+Retries, validators and capacity shards add separate assignments.
 See [configuration.md](configuration.md) for opt-outs and the coordination
 section below for project requirements and worker isolation.
+
+Every final review includes total elapsed time and a compact breakdown of setup,
+the longest reviewer, adjudication, final merge and posting. `--run-details`
+adds per-agent durations, an aligned timeline and observed wait reasons.
+Measurements are retained in both display modes; unavailable observations stay
+explicit rather than becoming estimates. Runtime collection has an independent
+`review-timing` opt-out and never changes completion or permissions.
+See [../skills/review-code/TIMING.md](../skills/review-code/TIMING.md) for measurement
+definitions, overlapping phases and missing-evidence handling.
 
 Complete argument tables, including role effort, validator, fallback, strategy,
 and posting options:

@@ -301,6 +301,11 @@ Give an overall `complete`, `incomplete`, or `blocked` outcome and explain it.
 Include original `attempts`, final `assessments`, the public ID map and the
 incremental adjudication file when enabled. The final mechanical check consumes
 that file under PACKETS.md; an earlier category-only check is insufficient.
+Also retain `timing_file`, the caller-owned sidecar under [TIMING.md](TIMING.md),
+or an explicit unavailability reason. This belongs to the consolidated handback,
+not the exact-keyed coverage handoff or schema-1 ledger events. The display flag
+does not discard observations; the caller's final response always includes the
+compact total and breakdown. Timing availability is not an acceptance condition.
 Keep the complete evidence in private result files or the calling loop's
 ledger, separate from the human report. A short report must not erase rejected
 candidates, and a complete handback must not dump them into the human report.

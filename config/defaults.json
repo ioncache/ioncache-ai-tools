@@ -40,6 +40,7 @@
     "review-security": true,
     "review-targeted-checks": true,
     "review-test-coverage": true,
+    "review-timing": true,
     "review-unit-tests": true,
     "scope-exactly-what-asked": true,
     "skill:answer-questions": true,

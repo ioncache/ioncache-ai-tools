@@ -6350,13 +6350,19 @@ class DevelopmentRunTests(unittest.TestCase):
             "development-control": {"model": "native-cheap", "effort": "low", "fallback": "fail"},
             "implement": {"model": "native-capable", "effort": "high", "fallback": "fail"},
         }
-        execution["review_options"] = {"reviewer_model": "native-reviewer", "reviewer_effort": "high"}
+        execution["review_options"] = {"reviewer_model": "native-reviewer", "reviewer_effort": "high",
+                                       "run_details": True}
         self.init()
         self.next()
         options = self.state["assignment"]["model_selection"]["review_options"]
         self.assertEqual(options["roles"]["reviewer"]["model"], "native-reviewer")
         self.assertEqual(options["roles"]["reviewer"]["fallback"], "fail")
         self.assertIn("reviewer_model", options["specified"])
+        self.assertTrue(options["run_details"])
+        execution["review_options"]["run_details"] = False
+        compact = models.review_choices(execution)
+        self.assertFalse(compact["run_details"])
+        self.assertEqual(compact["roles"], options["roles"])
         with self.assertRaises(manifest.ManifestError):
             manifest.validate({**self.plan, "configuration": {
                 **self.plan["configuration"], "execution": {**execution, "models": {"unknown": {}}}

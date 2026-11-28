@@ -155,3 +155,6 @@ changed since the build.
 Add one posting line to the human report: the review URL, or skipped, failed or
 unavailable with the reason. List finding IDs that were withheld, already
 raised, outside the diff or not posted, with the reason for each.
+Finish the caller's posting timing interval and reporting cutoff, then append
+TIMING.md's compact summary or requested `--run-details` output to the local
+response. Do not publish timing records or agent identities in the review.

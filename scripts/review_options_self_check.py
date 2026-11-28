@@ -108,6 +108,27 @@ class ReviewOptionsTests(unittest.TestCase):
         self.assertEqual(options["strategy"], "specialists")
         self.assertIn("fallback", options["specified"])
 
+    def test_run_details_changes_presentation_and_survives_resume_without_changing_roles(self):
+        for skill in review_options.SKILLS:
+            default = review_options.parse_options(skill, [])
+            detailed = review_options.parse_options(skill, ["--run-details"])
+            self.assertFalse(default["run_details"])
+            self.assertTrue(detailed["run_details"])
+            self.assertEqual(default["roles"], detailed["roles"])
+            self.assertEqual(detailed["specified"], ["run_details"])
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                review_options.parse_options(skill, ["--run-details", "--run-details"])
+        saved = review_options.parse_options("review-validate-fix-loop", ["--run-details"])
+        resumed = review_options.parse_options("review-validate-fix-loop", ["--resume", "saved-ledger"])
+        self.assertTrue(review_options.merge_context(resumed, {"saved": saved})["run_details"])
+        changed = review_options.merge_context(resumed, {"saved": saved, "choices": {
+            "run_details": {"value": False, "source": "User requested the compact report"}}})
+        self.assertFalse(changed["run_details"])
+        del saved["run_details"]
+        self.assertFalse(review_options.merge_context(resumed, {"saved": saved})["run_details"])
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            review_options.validate_values("review-code", {"run_details": "true"})
+
     def test_strategy_resolution_is_deterministic_without_losing_requested_values(self):
         for skill in review_options.SKILLS:
             for requested in (None, "auto", "specialists", "sweep-first"):

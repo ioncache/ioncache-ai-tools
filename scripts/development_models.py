@@ -48,8 +48,7 @@ def configuration(execution):
 
 def review_choices(execution):
     values = execution.get("review_options", {})
-    args = [f"--{name.replace('_', '-')}={value}" for name, value in values.items() if value is not None]
-    return review_options.parse_options("review-validate-fix-loop", args)
+    return review_options.parse_options("review-validate-fix-loop", review_options.option_arguments(values))
 
 
 def fallback_policy(execution, role, assignment=None):

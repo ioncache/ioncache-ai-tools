@@ -66,6 +66,12 @@ category's findings cannot replace the missing independent assignment.
 
 ## Human report
 
+The caller, not an adjudication worker, appends [TIMING.md](TIMING.md)'s compact
+runtime summary to every final review response, after any requested posting.
+Only normalized `run_details: true` adds the agent table, timeline and recorded
+waits. Capture measurements in both modes; timing gaps do not change findings
+or review completeness. Use `unavailable` rather than fabricating a duration.
+
 The report's main reader is an agent or person deciding what to fix. Report
 `Act`, `Decide`, and `Investigate` items in the main index. Keep supported corrections
 distinct from decisions and investigations.

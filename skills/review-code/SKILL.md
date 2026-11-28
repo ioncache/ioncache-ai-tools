@@ -1,7 +1,7 @@
 ---
 name: review-code
 description: Runs a read-only review of files, branches, pull requests or repositories with independent category workers. Use for an unassigned review request, not an already assigned category, adjudication or validation pass. Reports findings without applying fixes.
-argument-hint: "[target] [--help] [--checks targeted|source] [--post-comments] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
+argument-hint: "[target] [--help] [--checks targeted|source] [--run-details] [--post-comments] [--lead-model MODEL] [--reviewer-model MODEL] [--validator-model MODEL]"
 ---
 
 # Read-only code review
@@ -9,7 +9,7 @@ argument-hint: "[target] [--help] [--checks targeted|source] [--post-comments] [
 Do not edit code, apply fixes, commit, push, or post review comments. Return
 findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
-The caller/coordinator may write private request, option, instruction, and
+The caller/coordinator may write private request, option, instruction, timing, and
 lossless report-repair records; leaf workers may write assigned result files and
 disposable artifacts of permitted isolated checks.
 All belong in private scratch outside the reviewed tree.
@@ -62,6 +62,12 @@ discovered pre-existing security risks separately without attributing them
 to the change. Out-of-scope does not mean invalid.
 
 ## Before dispatch
+
+After valid option normalization, begin caller-owned timing capture under
+[TIMING.md](TIMING.md). Always end the review with the compact elapsed-time
+summary. `--run-details` adds the per-agent breakdown, timeline and recorded
+waits; it does not control whether measurements are retained or launch more work.
+Unavailable timing never prevents returning the review's findings.
 
 Follow [ORCHESTRATION.md#pre-launch-readiness](ORCHESTRATION.md#pre-launch-readiness)
 before allocating dependent passes or launching a coordinator. Identify and
