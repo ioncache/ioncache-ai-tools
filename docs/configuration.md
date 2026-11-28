@@ -221,6 +221,7 @@ remain after synchronization finishes.
 | `review-auto-model-selection` | Automatic model choice for unspecified review roles; explicit choices still obey host restrictions |
 | `review-post-comments` | Publishing review-code findings to the PR with `--post-comments`; when disabled the review still runs and reports that posting was off |
 | `review-known-issues` | Named unresolved-finding sections in review reports, development final reports and PR drafts; disabling display retains the inventory and does not disable separately authorized tickets |
+| `review-records` | Shared durable review reports and observed harness/model metadata; disabling it retains private scratch handoff and does not disable reviews, ledgers or posting |
 | `review-<category>` | Independent coverage for a shipped review category; all enabled by default |
 | `scope-exactly-what-asked` | Scope guidance, without stored permission or request-freshness checks |
 | `skill:<name>` | A shipped skill, such as `skill:review-code` |

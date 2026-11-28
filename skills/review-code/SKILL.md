@@ -11,7 +11,8 @@ findings to the caller. A coordinating review-and-fix workflow may act on
 them separately; this skill remains read-only toward the reviewed tree.
 The caller/coordinator may write private request, option, instruction, and
 lossless report-repair records; leaf workers may write only assigned result files.
-All belong in private scratch outside the reviewed tree.
+Allocate them through [RECORDS.md](RECORDS.md) in shared private storage outside
+every repository, with explicit opt-out and storage-failure recovery.
 They never authorize code or ledger edits.
 
 The one exception to not posting is `--post-comments`. After the review
@@ -55,6 +56,10 @@ discovered pre-existing security risks separately without attributing them
 to the change. Out-of-scope does not mean invalid.
 
 ## Before dispatch
+
+Follow [RECORDS.md](RECORDS.md) to initialize or reuse the shared run directory
+and record observed harness and per-role model metadata. Record every role's
+complete report there, not just the findings shown to the user.
 
 Follow [ORCHESTRATION.md#pre-launch-readiness](ORCHESTRATION.md#pre-launch-readiness)
 before allocating dependent passes or launching a coordinator. Identify and
@@ -134,7 +139,7 @@ Run from the consuming worktree, including a subdirectory. Pass the returned
 root and snapshot identity to every reviewer. Repeat after adjudication;
 different identities mean incomplete review, not permission to adopt a new
 target. Assign each specialist an absolute result path in private storage
-outside the reviewed tree. Specialists write the complete pass record there
+outside the reviewed tree, using the run's shared scratch directory. Specialists write the complete pass record there
 and return the path; the adjudicator reads the files rather than a retyped
 summary. This command creates neither a ledger nor a snapshot store.
 

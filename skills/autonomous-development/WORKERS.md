@@ -211,6 +211,13 @@ An owner writes a JSON report with `outcome: dispatch`, `result_file: ""`, and `
 bounded `role`, `prompt`, and absolute `result_file` entries. Allowed leaf roles
 are `reviewer`, `adjudicator`, `validator`, and `fixer`. Place reports under
 `<store>/reports/<assignment-id>/`, a private directory outside the worktree.
+The review owner also follows
+[../review-code/RECORDS.md](../review-code/RECORDS.md) for shared review history.
+It may write that helper's private record directory and import each collected
+report with `record --external-report`. Keep generated result paths, packet
+identities and native acceptance receipts unchanged. Record observed provenance
+from each role's native observations; never substitute selected launch models.
+An opt-out or archival failure does not block collection or acceptance.
 Do not use a request to enlarge the approved scope or bypass native permissions.
 Every read-only request between fixer barriers must be independent, with its
 input evidence already present. Put a dependent assessment in the next owner

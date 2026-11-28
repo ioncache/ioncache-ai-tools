@@ -45,7 +45,10 @@ Git worktree. Read its `--help` if invocation details are unclear.
    Pass through normalized review options, their `effective_strategy` (`specialists` or
    `sweep-first`), and main table severity floor. Preserve option
    provenance in existing ledger reason/evidence fields. Allocate private result files outside the reviewed
-   tree; workers write reports, never the loop ledger. A sweep is part of the
+   tree through [../review-code/RECORDS.md](../review-code/RECORDS.md), retaining
+   controller-pinned paths and archiving their reports when necessary.
+   Reuse the record run across loops, phases and resume; keep its reference in
+   existing reason/evidence fields. Workers write reports, never the loop ledger. A sweep is part of the
    counted review, not a free preliminary round.
 3. Check assignment, worker, and instruction-set identities in the evidence
    handback. Adopt the separate adjudicator's assessments rather than repeating

@@ -170,6 +170,12 @@ Use Python 3.11+ for `tomllib`, Node.js 22.12+, and Git in a POSIX environment
   JavaScript; general categories adapt to the actual stack. Unknown language
   facts leave coverage unresolved, not a permission fence. Retain old evidence
   and consumed work when a corrected contract requires a new phase.
+- `review_records.py` owns cross-harness report storage under shared external
+  XDG state, separately from loop ledgers and development acceptance. Keep
+  controller-pinned report paths unchanged and archive byte-identical copies.
+  Run IDs propagate through new phase packets; old phases remain readable.
+  Preserve originals and rejected candidates, record only observed native
+  identities, and keep the `review-records` opt-out independent of review coverage.
 - `scripts/review_comments.py` publishes review-code findings for the
   `--post-comments` caller step in `skills/review-code/POSTING.md`. It checks
   eligibility, anchors comments to the merge-base diff, applies the sensitive

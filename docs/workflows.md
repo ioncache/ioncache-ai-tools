@@ -202,6 +202,25 @@ when separately approved. Ticket failures do not stop development.
 See [../skills/autonomous-development/FOLLOW_UPS.md](../skills/autonomous-development/FOLLOW_UPS.md)
 for publication and disclosure rules.
 
+## Review records
+
+Reviews retain complete reports across Claude, Copilot and Codex in one private
+store under `~/.local/state/ioncache-ai-tools/reviews/records/`, or the equivalent
+`XDG_STATE_HOME` location. Runs are grouped by repository and target, not by
+harness session, and survive worktree cleanup.
+
+Each run records its harness/version and each role's observed model/effort.
+Unavailable values stay `unknown`; requested models are not treated as observed
+ones. Original reports, rejected candidates and assessments remain private.
+Controller-pinned reports are copied without changing their acceptance paths.
+
+The shared helper's `list --target pr:<number>` command finds runs for a PR;
+`status <run-directory>` shows their metadata and report references.
+See [../skills/review-code/RECORDS.md](../skills/review-code/RECORDS.md) for commands,
+the record layout and recovery. Disable `review-records` through plugin settings
+to keep ordinary private scratch handoff without durable archival. This does
+not disable reviews, loop ledgers or separately authorized posting.
+
 ## Review loops
 
 Arguments and defaults:
@@ -280,11 +299,14 @@ The same map includes runtime handoffs, readiness prerequisites, and relevant
 dependency limits. Changed enumeration and batching need checks for successful
 but partial results, not just thrown errors.
 Specialists write complete pass records to assigned files in caller-owned
-private scratch outside the reviewed tree. Adjudicators read those files
+private storage allocated by the shared record helper outside every repository.
+Controller-pinned reports keep their original paths and are also archived there.
+Adjudicators read those files
 directly rather than relying on retyped summaries. Only caller/coordinator-owned
 private request, option, instruction records, and assigned reports may be written; they do not
 authorize code edits or worker ledger writes.
 
+See [Review records](#review-records) for storage, provenance and opt-out behavior.
 If permitted file handoff is unavailable, explicitly agree an in-context
 handoff of complete pass records or report the review as blocked.
 

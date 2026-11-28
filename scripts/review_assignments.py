@@ -233,6 +233,8 @@ def freeze_existing(registry, previous, request):
                 "scratch_directory"):
         require(request[key] == previous["request"][key],
                 f"Changed {key} requires a new phase, not relabeled coverage")
+    require(request.get("run_id") == previous["request"].get("run_id"),
+            "Retain the review run identity when extending a phase")
     require(request.get("replacement_rounds", 1) == previous["replacement_rounds"],
             "A phase revision cannot reset replacement bounds")
     require(request.get("correction") == previous["request"].get("correction"),
@@ -259,7 +261,7 @@ def prepare(request, previous=None):
     required = {"objective", "kind", "target", "base", "snapshot", "root", "files",
                 "constraints", "scratch_directory", "review_options"}
     optional = {"project_categories", "project_sources", "exclusions", "replacement_rounds",
-                "correction", "category_context", "language_inventory"}
+                "correction", "category_context", "language_inventory", "run_id"}
     require(required <= request.keys() <= required | optional, "Unknown or missing request fields")
     for key in ("objective", "target", "base", "snapshot", "root", "scratch_directory"):
         text(request[key], key)
@@ -269,6 +271,9 @@ def prepare(request, previous=None):
     require(Path(request["root"]).is_absolute() and Path(request["root"]).is_dir(),
             "Review root must be an existing absolute directory")
     require(Path(request["scratch_directory"]).is_absolute(), "Scratch must be absolute")
+    if "run_id" in request:
+        require(isinstance(request["run_id"], str) and re.fullmatch(r"[a-f0-9]{32}", request["run_id"]),
+                "Invalid review run identity")
     require(request["review_options"]["configuration"]["skill_enabled"] is True,
             "The requested review workflow is disabled; do not launch it")
     rounds = request.get("replacement_rounds", 1)
@@ -294,6 +299,7 @@ def prepare(request, previous=None):
         filename = Path(request["scratch_directory"]) / f"{key.replace(':', '-')}-{phase_id}-initial.json"
         packets[key] = seal({
             **{k: request[k] for k in required - {"review_options", "scratch_directory", "files"}},
+            **({"run_id": request["run_id"]} if "run_id" in request else {}),
             "candidate_files": request["files"], "scope_files": request["files"],
             "review_type": key, "assignment": f"{key}-initial",
             "instruction_set": instruction_set(entry, resources),
@@ -396,6 +402,8 @@ def checked_result(attempt, assessed=False):
         require(result.get("instruction_set") == packet["instruction_set"]["identity"],
                 "Result instruction identity mismatch")
         require(result.get("packet_identity") == packet["identity"], "Result packet identity mismatch")
+        if "run_id" in result:
+            require(result["run_id"] == packet.get("run_id"), "Result review run identity mismatch")
         require("worker" in result and (result["worker"] is None or result["worker"] == worker),
                 "Result worker contradicts the observed identity")
         require(result.get("origin") == "specialist", "Category results require specialist origin")

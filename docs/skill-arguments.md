@@ -297,6 +297,7 @@ These switches are independent of similarly named writing skills.
 | `--review:performance=STATE` | Unchanged | Include the performance review category. |
 | `--review:post-comments=STATE` | Unchanged | Permit review-code's requested comment-posting step. Enabling this alone does not request posting. |
 | `--review:privacy=STATE` | Unchanged | Include the privacy review category. |
+| `--review:records=STATE` | Unchanged | Retain private review reports and observed provenance in the shared cross-CLI store. |
 | `--review:security=STATE` | Unchanged | Include the security review category. |
 | `--review:test-coverage=STATE` | Unchanged | Include review of whether the relevant behavior is covered by tests. |
 | `--review:unit-tests=STATE` | Unchanged | Include review of unit-test quality using the target project's framework. |
