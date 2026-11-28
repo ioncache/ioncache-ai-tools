@@ -173,7 +173,7 @@ def main(argv=None):
         else:
             display(project, changes or catalog, selected, effective, global_scope=args.global_scope)
     except (OSError, ValueError, TypeError) as error:
-        print(f'plugin-settings: {error}', file=sys.stderr)
+        print(f'ioncache-ai-tools-settings: {error}', file=sys.stderr)
         print('No success confirmed. Writes, if started, may be partial across hosts. '
               'Run without setting flags to inspect; correct the reported problem and retry.',
               file=sys.stderr)

@@ -52,7 +52,7 @@ denial. Other plugins and Claude's own permissions remain in force.
 Disable automatic handoff instructions through the shared settings interface:
 
 ```text
-/ioncache-ai-tools:plugin-settings --hook:context-handoff=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:context-handoff=disabled
 ```
 
 `skill:context-handoff` independently controls the portable-document skill.

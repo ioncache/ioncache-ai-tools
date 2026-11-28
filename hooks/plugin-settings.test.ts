@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing';
 
-const COMMAND = 'ioncache-ai-tools:plugin-settings';
+const COMMAND = 'ioncache-ai-tools:ioncache-ai-tools-settings';
 const PANE = {
   plugin: 'ioncache-ai-tools',
   component: 'Pane',
@@ -540,7 +540,7 @@ test('an unavailable process reports failure and a later command still runs', as
     : { value: { exitCode: 0, stdout: 'Settings listing', stderr: '' } });
   const first = await $.command.run({ command: COMMAND, args: '' });
   expect(first.text).toMatch(/Python could not start/);
-  expect(first.text).toMatch(/\/ioncache-ai-tools:plugin-settings --list/);
+  expect(first.text).toMatch(/\/ioncache-ai-tools:ioncache-ai-tools-settings --list/);
   unavailable = false;
   const next = await $.command.run({ command: COMMAND, args: '--list' });
   expect(next.text).toBe('Settings listing');

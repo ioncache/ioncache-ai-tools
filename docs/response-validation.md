@@ -90,7 +90,7 @@ The feature is off by default because it adds model usage and latency. Enable
 it for the current project through the shared settings command:
 
 ```text
-/ioncache-ai-tools:plugin-settings --hook:response-validation=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:response-validation=enabled
 ```
 
 The command updates all three hosts' settings together. Add `--global` to change

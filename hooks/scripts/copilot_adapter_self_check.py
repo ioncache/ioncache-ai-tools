@@ -102,21 +102,31 @@ class CopilotAdapterTests(unittest.TestCase):
         path.write_text(json.dumps(config))
 
     def test_settings_skill_opt_out_retains_helper_recovery_and_other_guards(self):
-        skill = {'skill': 'ioncache-ai-tools:plugin-settings'}
-        self.assertEqual(self.tool('skill', skill), {})
-        result = run_main(plugin_settings, ['--skill:plugin-settings=disabled'],
-                          cwd=self.project, env=self.env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.tool('skill', skill)['permissionDecision'], 'deny')
-        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+        skills = ({'skill': 'ioncache-ai-tools-settings'},
+                  {'skill': 'ioncache-ai-tools:ioncache-ai-tools-settings'})
         command = shlex.join([sys.executable, str(plugin_settings.__file__),
-                              '--project', str(self.project), '--skill:plugin-settings=enabled'])
-        self.assertEqual(self.tool('bash', {'command': command}), {})
-        result = run_main(plugin_settings, ['--skill:plugin-settings=enabled'],
-                          cwd=self.project, env=self.env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.tool('skill', skill), {})
-        self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+                              '--project', str(self.project), '--skill:ioncache-ai-tools-settings=enabled'])
+        for legacy in (True, False):
+            with self.subTest(legacy=legacy):
+                for skill in skills:
+                    self.assertEqual(self.tool('skill', skill), {})
+                if legacy:
+                    path = plugin_config.paths(self.project)['copilot'][1]
+                    self.write_config(path, {'features': {'skill:plugin-settings': False}})
+                else:
+                    result = run_main(plugin_settings, ['--skill:ioncache-ai-tools-settings=disabled'],
+                                      cwd=self.project, env=self.env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                for skill in skills:
+                    self.assertEqual(self.tool('skill', skill)['permissionDecision'], 'deny')
+                self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
+                self.assertEqual(self.tool('bash', {'command': command}), {})
+                result = run_main(plugin_settings, ['--skill:ioncache-ai-tools-settings=enabled'],
+                                  cwd=self.project, env=self.env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for skill in skills:
+                    self.assertEqual(self.tool('skill', skill), {})
+                self.assertEqual(self.tool('bash', {'command': 'pkill fixture'})['permissionDecision'], 'deny')
 
     def test_project_alias_opt_out_survives_older_catalog_hooks(self):
         link = self.root / 'project-link'

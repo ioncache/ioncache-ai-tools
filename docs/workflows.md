@@ -23,7 +23,7 @@ Host skill-invocation references:
 ## Workflow catalog
 
 Most skills take task context rather than fixed command-line flags. Review and
-plugin-settings options are explicit skill arguments.
+ioncache-ai-tools-settings options are explicit skill arguments.
 Every skill's inputs, supported flags, defaults, and meanings are listed in
 [skill-arguments.md](skill-arguments.md).
 
@@ -39,7 +39,7 @@ Every skill's inputs, supported flags, defaults, and meanings are listed in
 | [../skills/review-validate-fix-loop/SKILL.md](../skills/review-validate-fix-loop/SKILL.md) | A target and optional loop limits, or saved ledger; defaults to active PR or branch changes |
 | [../skills/triage-errors/SKILL.md](../skills/triage-errors/SKILL.md) | The failing command and relevant error context |
 | [../skills/create-worktree/SKILL.md](../skills/create-worktree/SKILL.md) | Worktree arguments, such as `-b feature-name ../feature-name` |
-| [../skills/plugin-settings/SKILL.md](../skills/plugin-settings/SKILL.md) | No arguments to open the pane or list settings; `--<setting-id>=enabled` or `=disabled`; optional `--global` |
+| [../skills/ioncache-ai-tools-settings/SKILL.md](../skills/ioncache-ai-tools-settings/SKILL.md) | No arguments to open the pane or list settings; `--<setting-id>=enabled` or `=disabled`; optional `--global` |
 | [../skills/autonomous-development/SKILL.md](../skills/autonomous-development/SKILL.md) | An idea, artifact references, an approved manifest, or a private run directory |
 
 Writing and implementation guidance lives in [../skills/](../skills/):

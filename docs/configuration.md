@@ -9,7 +9,7 @@ latency unless enabled.
 
 ## Native Claude settings pane
 
-In Claude Code with mods enabled, `/ioncache-ai-tools:plugin-settings` opens an
+In Claude Code with mods enabled, `/ioncache-ai-tools:ioncache-ai-tools-settings` opens an
 interactive pane when available, or prints the grouped listing otherwise.
 It groups the complete catalog under the same headings and typed names
 as the CLI. Select Project or Global, then select a setting to enable or disable
@@ -41,9 +41,9 @@ override differs. Refresh reloads external changes. During an operation,
 setting controls are unavailable. A failed save clears stale controls and shows
 the error; Refresh inspects any partial update before another toggle.
 
-`/ioncache-ai-tools:plugin-settings --list` always prints the grouped listing.
+`/ioncache-ai-tools:ioncache-ai-tools-settings --list` always prints the grouped listing.
 Arguments such as
-`/ioncache-ai-tools:plugin-settings --global --hook:docs-cache=disabled` run the existing CLI
+`/ioncache-ai-tools:ioncache-ai-tools-settings --global --hook:docs-cache=disabled` run the existing CLI
 operation without opening the pane. Arguments are parsed as data, never
 executed by a shell. Native commands and controls do not call a model.
 This pane is separate from Claude's built-in `/config`; there is no second
@@ -53,11 +53,11 @@ another command. Without mods, the same invocation runs the skill's text
 interface. No unnamespaced alias is registered.
 
 `hook:plugin-settings-ui` (JSON key `plugin-settings-ui`) controls the pane
-independently of `skill:plugin-settings`. Disable either without disabling the
+independently of `skill:ioncache-ai-tools-settings`. Disable either without disabling the
 other. A disabled pane can be re-enabled with:
 
 ```text
-/ioncache-ai-tools:plugin-settings --hook:plugin-settings-ui=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:plugin-settings-ui=enabled
 ```
 
 When the pane is disabled or cannot be displayed, the command automatically
@@ -73,10 +73,10 @@ paths for native callers without duplicating the catalog or persistence rules.
 ## Settings command
 
 Every supported skill argument, its default, and its effect:
-[skill-arguments.md#plugin-settings](skill-arguments.md#plugin-settings).
+[skill-arguments.md#ioncache-ai-tools-settings](skill-arguments.md#ioncache-ai-tools-settings).
 
-Invoke `/ioncache-ai-tools:plugin-settings` in Claude or Copilot, or
-`$ioncache-ai-tools:plugin-settings` in Codex. With no arguments it opens the
+Invoke `/ioncache-ai-tools:ioncache-ai-tools-settings` in Claude or Copilot, or
+`$ioncache-ai-tools:ioncache-ai-tools-settings` in Codex. With no arguments it opens the
 Claude pane where available; otherwise it lists every shipped setting and its
 effective `enabled` or `disabled` state in separate groups. `--list` requests
 the listing on every host. Opening or listing does not write settings or lock
@@ -87,12 +87,12 @@ Claude's autocomplete also shows an argument hint for `--list`, `--help`,
 `--global`, `--project PATH`, and `--<setting>=enabled|disabled`.
 
 ```text
-/ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
-/ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
-/ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
-/ioncache-ai-tools:plugin-settings --instruction:documentation-first=enabled
-/ioncache-ai-tools:plugin-settings --autonomous-development:audit=disabled
-/ioncache-ai-tools:plugin-settings --global --review:comments=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:answer-questions=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:answer-questions=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --skill:review-code=disabled --hook:docs-cache=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --instruction:documentation-first=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --autonomous-development:audit=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --global --review:comments=enabled
 ```
 
 | Group | CLI names | Controls |
@@ -112,7 +112,7 @@ CLI names map to the existing JSON feature IDs documented below. For example,
 `hook:answer-questions` updates `answer-questions`, `instruction:documentation-first`
 updates `documentation-first`, and `autonomous-development:audit` updates
 `autonomous-development-audit`. Skill IDs already have their `skill:` prefix.
-The CLI does not accept unprefixed storage IDs or rename keys in settings files.
+The CLI does not accept unprefixed storage IDs.
 
 `autonomous-development:execution` maps to `autonomous-development`; it controls
 execution rather than skill availability. The separate invocation guard belongs
@@ -142,15 +142,21 @@ value makes the command exit nonzero and report that the update may be partial.
 Inspect the listing and correct the reported problem before retrying. Malformed
 preferences are never replaced with defaults.
 
-`skill:plugin-settings` controls the skill itself. The standalone helper remains
+`skill:ioncache-ai-tools-settings` controls the skill itself. The standalone helper remains
 available for explicitly requested settings management when the skill is off:
 
 ```sh
-python3 "/absolute/plugin root/hooks/scripts/plugin_settings.py" --skill:plugin-settings=enabled
+python3 "/absolute/plugin root/hooks/scripts/plugin_settings.py" --skill:ioncache-ai-tools-settings=enabled
 ```
 
 Resolve that path from the installed plugin, and run it from the target project
 or supply `--project`. No reinstall is needed for settings changes.
+
+Existing `skill:plugin-settings` preferences migrate to
+`skill:ioncache-ai-tools-settings` during configuration synchronization, including
+global, embedded project, and project-file overrides. If both keys exist in the
+same layer, the new key takes precedence. Read-only listing resolves the old key
+without rewriting files. The old skill command is not retained as an alias.
 
 ## Settings files and precedence
 

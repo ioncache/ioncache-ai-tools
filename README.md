@@ -58,7 +58,7 @@ the plugin-add command, and start a fresh thread. To uninstall, run
 
 ### Configuration
 
-In Claude Code, `plugin-settings` opens an interactive settings UI for viewing
+In Claude Code, `ioncache-ai-tools-settings` opens an interactive settings UI for viewing
 and changing settings. Copilot and Codex show a grouped text list instead.
 Claude also uses the text list if the UI is disabled or unavailable.
 
@@ -66,16 +66,16 @@ Enter these commands in your assistant using the invocation syntax described bel
 
 | Invocation | Guidance |
 | --- | --- |
-| `/ioncache-ai-tools:plugin-settings` | Inspect or change plugin settings |
-| `/ioncache-ai-tools:plugin-settings --list` | List every setting and its effective enabled/disabled state |
-| `/ioncache-ai-tools:plugin-settings --help` | Show all setting flags |
-| `/ioncache-ai-tools:plugin-settings --hook:response-validation=enabled` | Enable response validation |
-| `/ioncache-ai-tools:plugin-settings --hook:docs-cache=disabled` | Disable documentation caching |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings` | Inspect or change plugin settings |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings --list` | List every setting and its effective enabled/disabled state |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings --help` | Show all setting flags |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings --hook:response-validation=enabled` | Enable response validation |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings --hook:docs-cache=disabled` | Disable documentation caching |
 
 Changes default to the current project and apply across all three hosts.
 Add `--global` for global settings, preserving project overrides. Hook and
 instruction names in the tables below are setting IDs: pass
-`--<setting-id>=enabled` or `--<setting-id>=disabled` to `plugin-settings`.
+`--<setting-id>=enabled` or `--<setting-id>=disabled` to `ioncache-ai-tools-settings`.
 
 The **Default** column shows shipped defaults, not your current settings.
 Enabled means available on supported hosts, not that every skill runs
@@ -130,7 +130,7 @@ identify additional model calls, repeated review passes, and context overhead.
 | `/ioncache-ai-tools:investigate` | Enabled | Explain an existing feature or workflow without editing files.<br><br>Task argument (topic to trace): [Argument details](docs/skill-arguments.md#investigate). |
 | `/ioncache-ai-tools:triage-errors` | Enabled | Group failing checks by root cause and fix them.<br><br>Task arguments (failing command and errors): [Argument details](docs/skill-arguments.md#triage-errors). |
 | `/ioncache-ai-tools:create-worktree` | Enabled | Create a git worktree with repository setup applied; requires Node.js 22.12.0+.<br><br>Arguments (destination and Git worktree options): [Argument details](docs/skill-arguments.md#create-worktree). |
-| `/ioncache-ai-tools:plugin-settings` | Enabled | Inspect or change plugin settings across all three hosts.<br><br>Arguments (listing, scope, and setting flags): [Argument details](docs/skill-arguments.md#plugin-settings). |
+| `/ioncache-ai-tools:ioncache-ai-tools-settings` | Enabled | Inspect or change plugin settings across all three hosts.<br><br>Arguments (listing, scope, and setting flags): [Argument details](docs/skill-arguments.md#ioncache-ai-tools-settings). |
 | `/ioncache-ai-tools:context-handoff` | Enabled | Write a portable handoff with the current task, decisions, and user instructions without stopping workers.<br><br>Task argument (optional destination): [Argument details](docs/context-handoff.md#use). |
 | `/ioncache-ai-tools:autonomous-development` | Enabled | User-invoked only: plan approved work and coordinate bounded implementation toward review-ready PRs. Execution requires Claude Workflows; other hosts support preparation and inspection.<br><br>Task arguments (idea, artifacts, or saved run): [Argument details](docs/skill-arguments.md#autonomous-development).<br><br><strong>Token usage:</strong> Execution launches multiple workers and review rounds and can be token-heavy. Approved task and review limits are not spending caps. |
 

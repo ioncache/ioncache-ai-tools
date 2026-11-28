@@ -1,15 +1,17 @@
 ---
-name: plugin-settings
+name: ioncache-ai-tools-settings
 description: "Configure ioncache-ai-tools: open settings, --list, --help, or --hook:answer-questions=enabled|disabled. Use to inspect or toggle plugin features; --global changes global defaults."
 argument-hint: "[--list] [--help] [--global] [--project PATH] [--<setting>=enabled|disabled ...]"
 ---
 
-# Plugin settings
+# ioncache-ai-tools settings
 
 Use a command interface, not a conversational configuration interview.
 
-There is one command: `/ioncache-ai-tools:plugin-settings`. Claude Code with
-mods enabled handles this existing namespaced command natively: no arguments
+The skill is named `ioncache-ai-tools-settings`, so its bare name identifies
+the plugin too. Its namespaced command is
+`/ioncache-ai-tools:ioncache-ai-tools-settings`. Claude Code with
+mods enabled handles this namespaced command natively: no arguments
 opens a pane when available, otherwise it prints the grouped listing.
 `--list` and setting flags use the text interface without an assistant turn.
 No second slash command or unnamespaced alias is registered.
@@ -22,14 +24,14 @@ imitate the native pane with conversational questions.
 Claude and Copilot:
 
 ```text
-/ioncache-ai-tools:plugin-settings
-/ioncache-ai-tools:plugin-settings --list
-/ioncache-ai-tools:plugin-settings --hook:answer-questions=disabled
-/ioncache-ai-tools:plugin-settings --hook:answer-questions=enabled
-/ioncache-ai-tools:plugin-settings --skill:review-code=disabled --hook:docs-cache=disabled
-/ioncache-ai-tools:plugin-settings --instruction:documentation-first=enabled
-/ioncache-ai-tools:plugin-settings --autonomous-development:audit=disabled
-/ioncache-ai-tools:plugin-settings --global --review:comments=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings
+/ioncache-ai-tools:ioncache-ai-tools-settings --list
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:answer-questions=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --hook:answer-questions=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --skill:review-code=disabled --hook:docs-cache=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --instruction:documentation-first=enabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --autonomous-development:audit=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --global --review:comments=enabled
 ```
 
 In Codex, replace the leading `/` with `$`, retaining the plugin namespace.
@@ -77,7 +79,7 @@ Do not claim success on a nonzero exit. Validation precedes writes, but a write
 failure can leave a partial cross-host update; inspect and resolve the cause
 before retrying. Never claim the files form one atomic transaction.
 
-`skill:plugin-settings` disables this skill like any other. The standalone
+`skill:ioncache-ai-tools-settings` disables this skill like any other. The standalone
 helper remains available for explicitly requested settings management, including
 re-enabling the skill. Do not re-enable it without a user request.
 `hook:plugin-settings-ui` independently controls Claude's interactive pane.

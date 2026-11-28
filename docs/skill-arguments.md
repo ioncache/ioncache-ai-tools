@@ -220,7 +220,7 @@ Runtime requirements and setup configuration:
 Git option semantics: https://git-scm.com/docs/git-worktree and
 https://git-scm.com/docs/git-branch.
 
-## plugin-settings
+## ioncache-ai-tools-settings
 
 With no arguments, open Claude's native settings pane when available; otherwise
 show the grouped text listing. Arguments use the text interface.
@@ -316,7 +316,7 @@ These flags control skill use, not whether the CLI displays the skill in its men
 | `--skill:engineering-judgment=STATE` | Unchanged | Control the engineering-judgment skill and its load reminder. |
 | `--skill:investigate=STATE` | Unchanged | Control the read-only investigation skill. |
 | `--skill:jsdoc=STATE` | Unchanged | Control the JavaScript JSDoc guidance skill. |
-| `--skill:plugin-settings=STATE` | Unchanged | Control the settings skill; the standalone settings helper remains available. |
+| `--skill:ioncache-ai-tools-settings=STATE` | Unchanged | Control the settings skill; the standalone settings helper remains available. |
 | `--skill:post-pr-review-comments=STATE` | Unchanged | Control the PR comment-writing and posting skill. |
 | `--skill:prompt-output=STATE` | Unchanged | Control the prompt-output formatting skill. |
 | `--skill:review-code=STATE` | Unchanged | Control the standalone read-only review workflow. |
@@ -337,9 +337,9 @@ The native pane's internal `--ui` and `--command` helper switches are not part
 of the user-facing skill interface.
 
 ```text
-/ioncache-ai-tools:plugin-settings --list
-/ioncache-ai-tools:plugin-settings --global --review:performance=disabled
-/ioncache-ai-tools:plugin-settings --project /absolute/project --hook:docs-cache=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --list
+/ioncache-ai-tools:ioncache-ai-tools-settings --global --review:performance=disabled
+/ioncache-ai-tools:ioncache-ai-tools-settings --project /absolute/project --hook:docs-cache=disabled
 ```
 
 ## autonomous-development
